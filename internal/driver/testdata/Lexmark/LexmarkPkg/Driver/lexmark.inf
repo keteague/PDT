@@ -1,0 +1,29 @@
+; Synthetic test fixture - not a real vendor INF, but trimmed down from and
+; structurally faithful to the real Lexmark Universal v2 INF confirmed
+; against the real local package during development (dozens of duplicate
+; hardware-ID entries all mapping to the one friendly name "Lexmark
+; Universal v2", condensed here to just two - already enough to exercise
+; DriverNamesFromInf's own dedup).
+
+[Version]
+Signature="$Windows NT$"
+Provider="Lexmark International"
+ClassGUID={4D36E979-E325-11CE-BFC1-08002BE10318}
+Class=Printer
+CatalogFile=LMUD1O40.cat
+DriverVer=01/08/2016,3.1.0.0
+PnpLockdown=1
+
+[Manufacturer]
+%LEXMARK%=LEXMARK_PRINTERS,NTx86.6.0,NTamd64.6.0
+
+[LEXMARK_PRINTERS.NTx86.6.0]
+"Lexmark Universal v2" = LMUD1O40.GPD.NTx86.6.0,USBPRINT\LexmarkLexmark_Unive1A7D
+"Lexmark Universal v2" = LMUD1O40.GPD.NTx86.6.0,LPTENUM\LexmarkLexmark_Unive1A7D
+
+[LEXMARK_PRINTERS.NTamd64.6.0]
+"Lexmark Universal v2" = LMUD1O40.GPD.NTamd64.6.0,USBPRINT\LexmarkLexmark_Unive1A7D
+"Lexmark Universal v2" = LMUD1O40.GPD.NTamd64.6.0,LPTENUM\LexmarkLexmark_Unive1A7D
+
+[Strings]
+LEXMARK = "Lexmark"

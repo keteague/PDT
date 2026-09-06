@@ -75,16 +75,36 @@ Drivers/
     11/                          <- any name; every folder under Windows/ is scanned and merged
       Canon/...
       HP/...
+      Konica Minolta/...         <- or "KonicaMinolta" - see naming below
       Kyocera/...
       Ricoh/...
       Sharp/...
+      Toshiba/...
+      Xerox/...
 ```
 
 Every folder found directly under `Drivers/Windows/` is scanned and merged into one catalog - a
 printer driver is rarely genuinely Windows-version-specific the way it can be for macOS (see below),
 so there's no attempt to detect/match the running Windows version to a specific folder. Each
 manufacturer folder's own internal structure (multi-version, multi-arch, `Archive` subfolders
-excluded) is unchanged from before this layout existed.
+excluded) has no required layout beyond that - `BuildCatalog` recursively walks every subfolder
+looking for `.inf` files, wherever they end up nested.
+
+**Manufacturer folder naming**: matched against `driver.Manufacturers` case-insensitively *and*
+space-insensitively (`foldMatchIgnoringSpaces`) - confirmed necessary against the real Drivers
+folder, where "Konica Minolta" (this app's own display name, spaced for readability everywhere it
+shows up in the UI) sits on disk as `KonicaMinolta`, no space. Either spelling works; a folder name
+that doesn't fold-match any entry in `driver.Manufacturers` at all is silently skipped, not an error -
+useful if you keep other, unsupported manufacturers' packages in the same Drivers tree.
+
+**A manufacturer with no drivers present locally is not offered as a deployment option.** The
+Defaults panel's Manufacturer dropdown (and each grid row's) only ever lists a manufacturer once its
+folder actually has at least one usable `.inf`-declared driver in it; not every PDT install needs
+every manufacturer's drivers, and there's no reason to offer one as a choice before its files are
+actually there. This is `App.Manufacturers()` / `driver.ManufacturersWithDrivers` - **Settings >
+External Sites is deliberately the one exception**: it lists every manufacturer in
+`driver.Manufacturers` regardless (`App.AllManufacturers()`), so a manufacturer's update-check URL
+can be configured before its drivers are ever added.
 
 **Back-compat**: if `driversRoot` has no `Windows` subfolder at all, it's treated as the older flat
 layout (`Drivers/<Manufacturer>/...` directly) - this is what the unit tests under
@@ -100,15 +120,171 @@ folder already exists (however it got there - this, or a manual extraction), it'
 re-extracted. A zip that fails to extract (corrupt, or an entry that would land outside the
 destination folder) is skipped rather than failing the whole catalog scan, and any partial output is
 cleaned up so a later run - once whatever's wrong is fixed - retries instead of mistaking a partial
-extraction for a complete one.
+extraction for a complete one. **Kyocera no longer ships `.zip` packages at all (as of roughly
+2026)** - see "Kyocera: self-extracting .exe packages" below for how to get an equivalent already-
+extracted folder onto disk by hand, since there's nothing here that can extract a self-extracting
+`.exe` automatically.
+
+**Two drivers, one entry - preferring the descriptive/versioned name over a generic alias**: several
+vendors' INFs register the exact same underlying driver under more than one friendly name - a vague,
+manufacturer-less alias alongside a properly branded one (Ricoh: `"PCL6 Driver for Universal Print"`
+next to `"RICOH PCL6 UniversalDriver V4.45"`), or a generic branded name alongside a version-numbered
+one (Xerox: `"Xerox Global Print Driver PCL6"` next to `"Xerox GPD PCL6 V5.1076.4.0"`; Konica
+Minolta: `"KONICA MINOLTA Universal PCL"` next to `"...Universal PCL v3.9.13"`). PDT always prefers
+whichever name is more descriptive - the one carrying the manufacturer's own brand and/or an actual
+version number - the same way you'd pick it by hand from the list Windows' own driver-install dialog
+shows for that INF:
+- A name with **no manufacturer identification at all** (Ricoh's vague alias) is filtered out of the
+  catalog entirely - `isUsableDriverName`/`vagueNameFilterBrand` in `catalog.go` - it never appears as
+  a selectable option at all, since nothing about it identifies which vendor's driver it even is.
+- Between two **branded** names that are otherwise the same driver, the Defaults panel's own
+  pre-selected default (`DefaultDriverNameFor` in `default.go`) prefers the one carrying a version
+  number, and - when there genuinely are multiple different versions on disk at once - the newest one.
+  Both names stay selectable in the Driver dropdown either way; this only decides which one is
+  pre-filled.
+- **This preference is not a one-time snapshot.** `DefaultDriverTokens` matches by token, not exact
+  string, deliberately excluding the version number itself - so "Xerox GPD PCL6 V5.1076.4.0" today
+  keeps resolving correctly once a newer `V5.1078.x.x` (or whatever the next one is called) replaces
+  it on disk, with no code change needed. The same holds for Ricoh and any other manufacturer whose
+  preferred driver's own name embeds a version number.
 
 **Default driver per manufacturer** (`internal/driver/default.go`, `DefaultDriverNameFor`): the
-Defaults panel pre-selects a specific driver name when a manufacturer is chosen (Canon -> its UFR II
-driver, HP/Ricoh -> PCL 6, Sharp -> PCL 6 UD3), matched by token presence (case- and
-whitespace-insensitive, order-independent) against the real catalog rather than an exact string -
-confirmed necessary since vendors aren't consistent about it even within this one Drivers folder
-("PCL 6" vs "PCL6", and Sharp's own driver is literally named "SHARP UD3 PCL6", tokens reversed from
-how "PCL 6 UD3" reads out loud).
+Defaults panel pre-selects a specific driver name when a manufacturer is chosen, matched by token
+presence (case- and whitespace-insensitive, order-independent) against the real catalog rather than
+an exact string - confirmed necessary since vendors aren't consistent about it even within this one
+Drivers folder ("PCL 6" vs "PCL6", and Sharp's own driver is literally named "SHARP UD3 PCL6", tokens
+reversed from how "PCL 6 UD3" reads out loud). Today's rules:
+
+| Manufacturer | Preferred driver | Token match |
+|---|---|---|
+| Canon | Canon Generic Plus UFR II | UFR, II |
+| HP | HP Universal Printing PCL 6 | PCL, 6 |
+| Ricoh | RICOH PCL6 UniversalDriver V*x.xx* | PCL, 6 |
+| Sharp | SHARP UD3 PCL6 | PCL, 6, UD3 |
+| Toshiba | TOSHIBA Universal Printer 2 | Universal, Printer, 2 |
+| Xerox | Xerox GPD PCL6 V*x.xxxx.x.x* | GPD, PCL, 6 |
+| Konica Minolta | KONICA MINOLTA Universal PCL v*x.x.xx* | Universal, PCL |
+| Lexmark | Lexmark Universal v2 | Universal, v2 |
+| Kyocera | *(no rule - pick per model instead; see below)* | - |
+
+Kyocera has no manufacturer-wide default: its driver *names* are per-model (`"Kyocera <model> KX"`),
+so the Defaults panel's Model field narrows the Driver dropdown instead of pre-filling one fixed name.
+
+**Am I missing any major brands?** These eight cover the large majority of enterprise MFP fleets.
+**Brother** was considered and deliberately left out: it lacks a universal print driver compatible
+with most of its larger models, and its lineup skews home/small-office rather than the fleet-deployment
+scale this tool is for. Beyond that, there isn't an obvious major brand still missing - if one comes
+up, add a `Drivers/Windows/<version>/<Manufacturer>/...` folder with a real package and ask for it to
+be wired up (a `driver.Manufacturers` entry, a `defaultDriverTokens` rule once you know the real
+driver name, and a default URL in `settings.go`) the same way Toshiba/Xerox/Konica Minolta/Lexmark
+were.
+
+### Lexmark: known limitation - driver package doesn't install via PDT's mechanism yet
+
+Lexmark's manufacturer metadata (catalog matching, default driver, update-check URL) is wired up like
+every other manufacturer above, but **actually deploying a Lexmark driver through PDT has not been
+gotten working yet** - confirmed against the real `Lexmark_Universal_v2_UD1_Installation_Package_*.exe`
+package:
+
+- The package itself is a **self-extracting RAR archive** (confirmed by its `Rar!` signature, not a
+  ZIP or 7z), so it can't be auto-extracted the way `.zip` packages are - see "Getting drivers out of
+  it" below for the manual path.
+- Its driver files ship inside `.msi` installers, and extracting one directly (7-Zip, or any generic
+  archive tool) produces mangled output: filenames with no extension separator (`LMUD1o40inf` instead
+  of `LMUD1o40.inf`) and sibling files still in Microsoft's legacy single-file-compressed form
+  (`LMUD1o40.dl_`, decompresses to `LMUD1o40.dll`) - `msiexec /a` (an MSI *administrative install*,
+  which only unpacks files to their real names/paths rather than actually installing anything) fixes
+  the naming, and Windows' own `expand.exe` decompresses the `.dl_`-style siblings; both were confirmed
+  necessary and sufficient to get a `driver.BuildCatalog`/`DriverNamesFromInf`-parseable `.inf` with
+  correctly-named companion files. **This part works** - `internal/driver`'s existing code correctly
+  finds and catalogs the result with no changes needed.
+- **Actually installing it does not work yet**, even outside PDT: Windows' own `pnputil /add-driver`
+  rejects the resulting INF with `"The style of the INF is different than what was requested"`, and
+  PDT's own `SetupCopyOEMInf`-based install path (`driverinstall_windows.go`, the same mechanism that
+  already installs Canon/HP/Kyocera/Ricoh/Sharp drivers successfully) fails on it too. The INF's own
+  `[Version]` section carries non-standard `LM_DRV_OS=MERGED`/`LM_DRV_MERGED_OS=2000,V32,X64,V64` keys
+  that aren't part of the documented INF schema at all - a strong hint this particular INF is an
+  internal multi-OS *template* Lexmark's own installer tooling (`PackagingUtility.exe`,
+  `LMConfigMan.exe` - both present in the package) preprocesses into something installable before real
+  use, not something meant to be handed directly to Windows' driver-staging APIs. Resolving this would
+  need either finding/producing a de-merged, single-OS variant of the INF, or accepting that Lexmark
+  needs a different install mechanism entirely (shelling out to its own installer) rather than the
+  `.inf`-based approach every other manufacturer here uses - a real design question, not attempted yet.
+
+**Getting the driver files out of the self-extracting `.exe`, for when the install-mechanism question
+above gets resolved:**
+1. Extract the `.exe` with 7-Zip (it recognizes the embedded RAR archive directly, despite the file
+   having a `.exe` extension and no visible RAR structure at a glance).
+2. Find the manufacturer/model's `.msi` under `InstallationPackage\Drivers\<x64 or x86>\` (e.g.
+   `print64PCL.msi` for the x64 PCL driver).
+3. Run an administrative install to unpack it with real filenames/paths intact - **this does not
+   install anything**, it only extracts:
+   ```
+   msiexec /a "print64PCL.msi" /qn TARGETDIR="C:\some\empty\folder"
+   ```
+4. The result lands under `<TARGETDIR>\Lexmark\Lexmark Universal v2\Drivers\Print\GDI\` - a real
+   `LMUD1o40.inf` alongside its `.dl_`/`.gd_`/`.gp_`/`.tx_`/`.in_` compressed siblings and `amd64`/`i386`
+   subfolders of compiled binaries the INF references.
+5. Decompress the compressed siblings with Windows' own `expand.exe` (one call per file, since it
+   doesn't batch-process a whole folder):
+   ```
+   expand LMUD1o40.dl_ LMUD1o40.dll
+   ```
+   (map each `.??_`/`.??_64` extension to its real one: `.dl_`/`.dl_64` -> `.dll`, `.ex_` -> `.exe`,
+   `.gd_`/`.gp_` -> `.gpd`, `.tx_` -> `.txt`, `.in_` -> `.inf`, `.pn_` -> `.png`.)
+6. Move the resulting folder into `Drivers\Windows\<version>\Lexmark\`, renamed to something
+   version-identifying.
+
+This gets you a folder `BuildCatalog` correctly recognizes as `"Lexmark Universal v2"` - confirmed - but
+until the INF-style install question above is resolved, PDT will offer it as a Manufacturer/Driver
+option and then fail to actually install it.
+
+### Kyocera: self-extracting `.exe` packages
+
+Kyocera stopped shipping `.zip`-packaged drivers roughly 8 months before this was written; current
+downloads are a self-extracting `.exe` that launches Kyocera's own installer UI instead of just
+unpacking to a folder - `BuildCatalog` has no way to run that `.exe` for you, so getting an
+already-extracted folder onto disk under `Drivers\Windows\<version>\Kyocera\` is a manual, one-time
+step per driver version. Two ways to get there, both ending at the same result - a folder full of
+`.inf` files and friends, exactly like every other manufacturer's already-extracted package:
+
+**Method 1 - extract with 7-Zip, no installer run at all.** A Kyocera "self-extracting" `.exe` is
+actually a normal PE executable with a large embedded archive resource; 7-Zip can pull that resource
+out directly without ever launching the installer:
+
+1. Make a scratch folder (e.g. `Downloads\temp`) and copy the downloaded `.exe` into it (e.g.
+   `KXDRIVER 8.6A.1412.exe`).
+2. Right-click it -> 7-Zip -> Extract to "*foldername*\". This produces a handful of files, one of
+   which - always named `.text` - is many times larger than the rest (hundreds of MB): that's the
+   embedded archive itself, and everything else in that first extraction is installer scaffolding to
+   discard.
+3. Move just the `.text` file into a second, empty scratch folder (keeps its contents from mixing
+   with the first extraction's leftovers) and 7-Zip-extract it too. This second extraction is the
+   real driver data - `Setup.exe`, `KmInstall.exe`, a `32bit`/`64bit`/`arm64` split, `Document`,
+   `MetaData`, etc.
+4. Rename that folder to something version-identifying (e.g. `KXDRIVER_8.6A.1412`) and move it into
+   `Drivers\Windows\<version>\Kyocera\`.
+
+**Method 2 - let the installer extract, then take its temp copy before it does anything else.**
+
+1. Run the downloaded `.exe`. When Kyocera's "Product Library" installer window appears, **stop -
+   don't proceed with the install.**
+2. Open File Explorer and go to `%LocalAppData%`. Find a `KX Driver` folder, and inside it an
+   `originalfiles` folder (there's also an `originalfiles.zip` alongside it - the folder, already
+   extracted, is the one you want).
+3. Copy `originalfiles` into `Drivers\Windows\<version>\Kyocera\` and rename it to something
+   version-identifying (e.g. `KXDRIVER_8.6A.1412`).
+4. Exit the Product Library installer without installing anything.
+
+A few things worth knowing before relying on either method:
+- The installer's own temp extraction (Method 2) has been observed to survive under `%LocalAppData%`
+  even after exiting the installer without installing - useful, since it means you can grab a copy
+  after the fact if you forgot to before closing it, but not guaranteed to hold true for every
+  Kyocera installer version; if `KX Driver` isn't there, you'll need Method 1 instead, or to retry
+  Method 2 and copy the folder out *before* exiting the installer.
+- Installers generally extract to `%LocalAppData%\Temp`, not `%LocalAppData%` itself, so if a future
+  Kyocera installer version relocates this, checking under `Temp` first (or using Sysinternals'
+  Process Monitor to watch what the installer actually writes and where) is the way to re-find it.
 
 **macOS is not read by this function at all yet.** The real macOS side of the Drivers tree (being
 built out alongside the Windows side) nests the *other* way - `Drivers/macOS/<Manufacturer>/<macOS
@@ -236,16 +412,41 @@ user might be editing while a multi-minute deploy is still running elsewhere in 
 
 ### Settings (gear icon, top-right)
 
-A modal with three tabs: **General** (Save File Base Path - where Open/Save Configuration's dialogs
-start from), **External Sites** (one URL per manufacturer, seeded from `defaultManufacturerURLs`
-in `settings.go`, editable and persisted to `%AppData%\PDT\settings.json`), and **About** (version,
-author, a clickable GitHub link, and **Check for Updates** - see below). The Defaults panel's own
+A modal with three tabs: **General** (Save File Base Path, plus a drag-and-drop **Manufacturer sort
+order** list - see below), **External Sites** (one editable URL field per manufacturer - every
+manufacturer PDT knows about, not just ones with drivers currently on disk; see "Drivers folder
+layout" above - seeded with `defaultManufacturerURLs` in `settings.go`, saved together with the rest
+of Settings), and **About** (version, author, a clickable GitHub link, and **Check for Updates** - see
+below). The modal is a fixed size regardless of which tab is showing or how many manufacturers there
+are - both External Sites and the sort-order list scroll internally rather than growing the window
+once they're taller than that fixed size. The Defaults panel's own
 **Check for Updates** button (a different one - printer driver updates, not app updates) opens the
 currently-selected manufacturer's configured URL in the system browser (`OpenManufacturerURL` ->
 `runtime.BrowserOpenURL`) - no vendor exposes an API to actually check the latest driver version, so
 this only ever hands a human the page to look at themselves; true automated version-checking would
 mean scraping each vendor's download portal individually; fragile, and high-maintenance per vendor, so
 deliberately out of scope here.
+
+### Manufacturer sort order (Settings > General)
+
+A plain HTML5 drag-and-drop list (no external library) of every manufacturer PDT knows about,
+persisted as `Settings.ManufacturerOrder` (`settings.go`) and applied by `App.Manufacturers()`
+(`applyManufacturerOrder` in `app.go`) - this is what actually controls the order of the Manufacturer
+dropdown in both the Defaults panel and every grid row (both read from the same `state.manufacturers`
+in the frontend). Saving triggers `refreshManufacturerDropdowns()`, which re-fetches the reordered list
+and rebuilds every already-rendered Manufacturer `<select>`'s options in place - the Defaults panel's
+and each existing grid row's - preserving each one's current selection rather than resetting it.
+
+**Settings > External Sites is deliberately exempt** - it's always alphabetical
+(`App.AllManufacturers()` sorts it every time), regardless of this custom order, since its job is
+finding a specific manufacturer to edit a URL for, not deployment convenience.
+
+`reconcileManufacturerOrder` (`settings.go`) keeps the saved order valid across changes to
+`driver.Manufacturers` itself: on load and on every save, it keeps the user's own ordering for
+manufacturers still present, drops any name no longer recognized, and appends any manufacturer not yet
+in the saved order (freshly added to `driver.Manufacturers`, or never dragged by this user) at the end
+- so adding a ninth/tenth manufacturer later never causes it to silently disappear from either the
+reorder list or the dropdowns.
 
 ### Checking for and applying app updates (`internal/update`, About tab)
 

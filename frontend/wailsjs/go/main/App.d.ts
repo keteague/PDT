@@ -4,6 +4,8 @@ import {main} from '../models';
 import {printer} from '../models';
 import {config} from '../models';
 
+export function AllManufacturers():Promise<Array<string>>;
+
 export function ApplyUpdate(arg1:string):Promise<main.ApplyUpdateResult>;
 
 export function CheckForUpdate():Promise<main.UpdateCheckResult>;

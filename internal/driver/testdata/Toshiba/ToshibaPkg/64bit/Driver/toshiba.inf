@@ -1,0 +1,20 @@
+; Synthetic test fixture - not a real vendor INF. Named after the real
+; Toshiba Universal Printer 2 driver package.
+
+[Version]
+Signature="$Windows NT$"
+Provider=%TOSHIBA%
+ClassGUID={4D36E979-E325-11CE-BFC1-08002BE10318}
+Class=Printer
+DriverVer=02/01/2026,2.0.0.0
+CatalogFile=toshiba.cat
+PnpLockDown=1
+
+[Manufacturer]
+"TOSHIBA" = ToshibaModels,NTamd64
+
+[ToshibaModels]
+"TOSHIBA Universal Printer 2" = TUP2, USBPRINT\ToshibaEStudio
+
+[Strings]
+TOSHIBA = "Toshiba"

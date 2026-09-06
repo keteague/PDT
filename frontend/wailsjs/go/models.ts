@@ -210,6 +210,7 @@ export namespace main {
 	export class Settings {
 	    saveFileBasePath: string;
 	    manufacturerUrls: Record<string, string>;
+	    manufacturerOrder: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -219,6 +220,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.saveFileBasePath = source["saveFileBasePath"];
 	        this.manufacturerUrls = source["manufacturerUrls"];
+	        this.manufacturerOrder = source["manufacturerOrder"];
 	    }
 	}
 	export class UpdateCheckResult {

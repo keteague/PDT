@@ -323,12 +323,18 @@ table.grid td.checkbox-cell {
     z-index: 100;
 }
 
+/* A fixed width, not just a min-width - without an upper bound, a tab with
+   any long unbroken line of text (External Sites' own instructional
+   sentence, before it was shortened - see the .tab-panel comment below) grows
+   the modal to fit it via ordinary block shrink-to-fit sizing, which nothing
+   else here constrains. max-width remains as the only concession, for
+   windows too narrow to fit this at all. */
 .modal {
     background: #1a2536;
     border: 1px solid #3f5978;
     border-radius: 6px;
     padding: 16px 20px;
-    min-width: 420px;
+    width: 460px;
     max-width: 90vw;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
@@ -364,12 +370,23 @@ table.grid td.checkbox-cell {
 }
 
 /* :not([hidden]) - see the .modal-backdrop rule above for why a bare
-   `display: flex` here would defeat the hidden attribute outright. */
+   `display: flex` here would defeat the hidden attribute outright. A fixed
+   height (not min-height) so every tab reserves exactly the same space
+   regardless of how much content it has - deliberately more robust than
+   hand-tuning a min-height to match "whichever tab is currently tallest",
+   which needed re-tuning every time a manufacturer was added to External
+   Sites. Without this, each tab's panel sizes to its own (very different)
+   content height, and switching tabs visibly resized/rejumped the whole
+   modal on every click (the .modal width fix above solves the same problem
+   horizontally). Shorter tabs just carry blank space below their content;
+   taller ones (External Sites, once it has enough manufacturers) scroll
+   internally instead of growing past this - max-height is only a safety
+   clamp for a window too short to fit this at all. */
 .tab-panel:not([hidden]) {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    min-width: 380px;
+    height: 320px;
     max-height: 50vh;
     overflow-y: auto;
 }
@@ -391,6 +408,45 @@ table.grid td.checkbox-cell {
     display: flex;
     flex-direction: column;
     gap: 14px;
+}
+
+/* Manufacturer sort order (Settings > General) - a plain HTML5
+   drag-and-drop reorderable list. Its own max-height/overflow (separate from
+   the tab-panel's) keeps Save File Base Path always visible above it rather
+   than the whole tab scrolling out of view together. */
+.mfg-order-list {
+    list-style: none;
+    margin: 0;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 170px;
+    overflow-y: auto;
+    border: 1px solid #33455c;
+    border-radius: 4px;
+    background: #16202e;
+}
+
+.mfg-order-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    background: #223247;
+    border: 1px solid #3f5978;
+    border-radius: 3px;
+    cursor: grab;
+    font-size: 13px;
+}
+
+.mfg-order-item.dragging {
+    opacity: 0.4;
+}
+
+.mfg-order-handle {
+    color: #6f89a8;
+    font-size: 12px;
 }
 
 .about-panel {

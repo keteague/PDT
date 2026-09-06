@@ -1,0 +1,30 @@
+; Synthetic test fixture - not a real vendor INF. Mirrors the real Konica
+; Minolta Universal Driver package's naming quirk, confirmed against the real
+; local package during development: the exact same driver (same DriverVer,
+; same install section) is declared under both a plain name and a
+; version-suffixed one - "KONICA MINOLTA Universal PCL" and
+; "KONICA MINOLTA Universal PCL v3.9.13" - and the version-suffixed one is the
+; one that should win as the Defaults panel's pre-selected default (see
+; DefaultDriverNameFor's tie-break). The folder this file lives under
+; ("KonicaMinolta", no space) deliberately doesn't match driver.Manufacturers'
+; "Konica Minolta" (with a space) byte-for-byte either - also confirmed
+; against the real Drivers folder - to exercise foldMatchIgnoringSpaces.
+
+[Version]
+Signature="$Windows NT$"
+Provider=%KM%
+ClassGUID={4D36E979-E325-11CE-BFC1-08002BE10318}
+Class=Printer
+DriverVer=01/15/2026,3.9.13.0
+CatalogFile=km.cat
+PnpLockDown=1
+
+[Manufacturer]
+"KM" = KMModels,NTamd64
+
+[KMModels]
+"KONICA MINOLTA Universal PCL"          = KMPCL, USBPRINT\KMBizhub
+"KONICA MINOLTA Universal PCL v3.9.13"  = KMPCL, USBPRINT\KMBizhub
+
+[Strings]
+KM = "Konica Minolta"

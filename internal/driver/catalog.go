@@ -10,21 +10,58 @@ import (
 )
 
 // Manufacturers is the fixed, known manufacturer list - each corresponds to
-// one top-level folder under the Drivers root.
-var Manufacturers = []string{"Canon", "HP", "Kyocera", "Ricoh", "Sharp"}
+// one top-level folder under the Drivers root. This is every manufacturer PDT
+// knows about, regardless of whether its drivers are actually present
+// locally - see ManufacturersWithDrivers for the subset that's actually
+// deployable.
+var Manufacturers = []string{"Canon", "HP", "Kyocera", "Ricoh", "Sharp", "Toshiba", "Xerox", "Konica Minolta", "Lexmark"}
 
-// isUsableDriverName filters out driver names too vague to safely deploy
-// under. Confirmed against the real Ricoh Universal Driver package: it
-// declares the exact same driver under both a RICOH-branded name ("RICOH
-// PCL6 UniversalDriver V4.45") and a generic, manufacturer-less alias
-// ("PCL6 Driver for Universal Print") - the alias is unusable here since
-// nothing about it identifies which vendor's driver it actually is, and it
-// would otherwise show up as a selectable, ambiguous-looking option.
-func isUsableDriverName(manufacturer, name string) bool {
-	if manufacturer == "Ricoh" && !strings.Contains(strings.ToUpper(name), "RICOH") {
-		return false
+// foldMatchIgnoringSpaces compares two folder/manufacturer names
+// case-insensitively and ignoring spaces - confirmed necessary against a
+// real Drivers folder, where "Konica Minolta" (this app's own display name,
+// spaced out for readability in the UI) sat on disk as "KonicaMinolta" (no
+// space), which a plain strings.EqualFold never matches.
+func foldMatchIgnoringSpaces(a, b string) bool {
+	return strings.EqualFold(strings.ReplaceAll(a, " ", ""), strings.ReplaceAll(b, " ", ""))
+}
+
+// ManufacturersWithDrivers is the subset of Manufacturers that actually have
+// at least one usable driver in catalog. The Defaults panel's Manufacturer
+// dropdown (and each grid row's) should only ever offer a manufacturer as a
+// deployment option once its drivers are actually present locally - unlike
+// Settings > External Sites, which lists every manufacturer in Manufacturers
+// regardless, so a URL can be configured before its drivers are ever added.
+func ManufacturersWithDrivers(catalog Catalog) []string {
+	var out []string
+	for _, m := range Manufacturers {
+		if len(catalog[m]) > 0 {
+			out = append(out, m)
+		}
 	}
-	return true
+	return out
+}
+
+// vagueNameFilterBrand: manufacturer -> a brand token that must appear
+// (case-insensitively) in a driver name for it to be considered specific
+// enough to deploy under. Several vendors' INFs declare the exact same
+// driver under both a branded, versioned name and a generic, manufacturer-
+// less alias - confirmed against the real Ricoh Universal Driver package
+// ("RICOH PCL6 UniversalDriver V4.45" alongside "PCL6 Driver for Universal
+// Print", the latter unusable since nothing about it identifies which
+// vendor's driver it actually is) - and the same pattern is expected from
+// Xerox's and Konica Minolta's own multi-name INFs.
+var vagueNameFilterBrand = map[string]string{
+	"Ricoh":          "RICOH",
+	"Xerox":          "XEROX",
+	"Konica Minolta": "KONICA",
+}
+
+func isUsableDriverName(manufacturer, name string) bool {
+	brand, ok := vagueNameFilterBrand[manufacturer]
+	if !ok {
+		return true
+	}
+	return strings.Contains(strings.ToUpper(name), brand)
 }
 
 // ArchEntry is one architecture-specific build within a driver's version
@@ -134,7 +171,7 @@ func scanManufacturerFolders(catalog Catalog, root string) {
 		}
 		mfg := ""
 		for _, m := range Manufacturers {
-			if strings.EqualFold(m, e.Name()) {
+			if foldMatchIgnoringSpaces(m, e.Name()) {
 				mfg = m
 				break
 			}

@@ -4,14 +4,17 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"PDT/internal/driver"
 )
 
 // Settings is the whole persisted-preferences document - its own JSON file
 // (rather than folding into config.SavedConfig) since these are app-wide
 // preferences, not something that travels with a particular printer list.
 type Settings struct {
-	SaveFileBasePath string            `json:"saveFileBasePath"`
-	ManufacturerURLs map[string]string `json:"manufacturerUrls"`
+	SaveFileBasePath  string            `json:"saveFileBasePath"`
+	ManufacturerURLs  map[string]string `json:"manufacturerUrls"`
+	ManufacturerOrder []string          `json:"manufacturerOrder"`
 }
 
 // defaultSaveFileBasePath is Documents\Preinstall under the current user's
@@ -33,12 +36,45 @@ func defaultSaveFileBasePath() string {
 // Settings since a vendor can relocate its own download page at any time.
 func defaultManufacturerURLs() map[string]string {
 	return map[string]string{
-		"Canon":   "https://www.usa.canon.com/support/software-and-drivers",
-		"HP":      "https://support.hp.com/ee-en/drivers/hp-universal-print-driver-series-for-windows/503548",
-		"Kyocera": "https://www.kyoceradocumentsolutions.us/en/support/downloads.html",
-		"Ricoh":   "https://support.ricoh.com/bb/html/dr_ut_e/rc3/model/p_i/p_i.htm?lang=en",
-		"Sharp":   "https://global.sharp/restricted/print/select.html?view=2",
+		"Canon":          "https://www.usa.canon.com/support/software-and-drivers",
+		"HP":             "https://support.hp.com/ee-en/drivers/hp-universal-print-driver-series-for-windows/503548",
+		"Kyocera":        "https://www.kyoceradocumentsolutions.us/en/support/downloads.html",
+		"Ricoh":          "https://support.ricoh.com/bb/html/dr_ut_e/rc3/model/p_i/p_i.htm?lang=en",
+		"Sharp":          "https://global.sharp/restricted/print/select.html?view=2",
+		"Toshiba":        "https://business.toshiba.com/",
+		"Xerox":          "https://www.support.xerox.com/en-us/product/global-printer-driver/downloads?language=en",
+		"Konica Minolta": "https://onyxweb.mykonicaminolta.com/OneStopProductSupport?appMode=Public&target=Drivers",
+		"Lexmark":        "https://www.lexmark.com/en_us/technical-support/universal-print-driver-support.html",
 	}
+}
+
+// reconcileManufacturerOrder returns a complete permutation of every
+// manufacturer in driver.Manufacturers: saved's entries first (in the order
+// the user last dragged them into, dropping any that no longer name a real
+// manufacturer), then any manufacturer not present in saved appended in
+// driver.Manufacturers' own declared order - so a manufacturer added to a
+// later PDT version (or one a user hasn't dragged yet) still shows up in the
+// Settings > General reorder list instead of silently vanishing from it.
+func reconcileManufacturerOrder(saved []string) []string {
+	valid := make(map[string]bool, len(driver.Manufacturers))
+	for _, m := range driver.Manufacturers {
+		valid[m] = true
+	}
+
+	seen := make(map[string]bool, len(driver.Manufacturers))
+	out := make([]string, 0, len(driver.Manufacturers))
+	for _, m := range saved {
+		if valid[m] && !seen[m] {
+			out = append(out, m)
+			seen[m] = true
+		}
+	}
+	for _, m := range driver.Manufacturers {
+		if !seen[m] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // settingsFilePath is under the OS's standard per-user config directory
@@ -62,7 +98,11 @@ func settingsFilePath() (string, error) {
 // a settings file saved before a manufacturer existed, or with just one URL
 // blanked out, still gets sensible defaults for the rest.
 func loadSettings() Settings {
-	s := Settings{SaveFileBasePath: defaultSaveFileBasePath(), ManufacturerURLs: defaultManufacturerURLs()}
+	s := Settings{
+		SaveFileBasePath:  defaultSaveFileBasePath(),
+		ManufacturerURLs:  defaultManufacturerURLs(),
+		ManufacturerOrder: reconcileManufacturerOrder(nil),
+	}
 	path, err := settingsFilePath()
 	if err != nil {
 		return s
@@ -83,6 +123,7 @@ func loadSettings() Settings {
 			s.ManufacturerURLs[mfg] = url
 		}
 	}
+	s.ManufacturerOrder = reconcileManufacturerOrder(loaded.ManufacturerOrder)
 	return s
 }
 

@@ -1,0 +1,26 @@
+; Synthetic test fixture - not a real vendor INF. Mirrors the real Xerox
+; Global Print Driver package's naming quirk, confirmed against the real
+; local package during development: the exact same driver is declared under
+; both a generic "Global Print Driver" name and a GPD-branded, versioned one
+; ("Xerox GPD PCL6 V5.1076.4.0") - the versioned one is the one that should
+; win as the Defaults panel's pre-selected default (DefaultDriverNameFor's
+; token match on "GPD"/"PCL"/"6", which the generic name doesn't contain).
+
+[Version]
+Signature="$Windows NT$"
+Provider=%XEROX%
+ClassGUID={4D36E979-E325-11CE-BFC1-08002BE10318}
+Class=Printer
+DriverVer=03/01/2026,5.1076.4.0
+CatalogFile=xerox.cat
+PnpLockDown=1
+
+[Manufacturer]
+"XEROX" = XeroxModels,NTamd64
+
+[XeroxModels]
+"Xerox GPD PCL6 V5.1076.4.0"       = XGPD, USBPRINT\XeroxWC
+"Xerox Global Print Driver PCL6"   = XGPD, USBPRINT\XeroxWC
+
+[Strings]
+XEROX = "Xerox"

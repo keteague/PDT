@@ -4,6 +4,159 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-06 - Manufacturer sort order, Lexmark support (metadata only)
+
+### Added
+- **Settings > General > Manufacturer sort order**: a plain HTML5 drag-and-drop list (no library)
+  controlling the Manufacturer dropdown's order in both the Defaults panel and every grid row.
+  `Settings.ManufacturerOrder` persists it; `reconcileManufacturerOrder` (`settings.go`) keeps it a
+  valid permutation of `driver.Manufacturers` across saves - preserving the user's own ordering,
+  dropping stale names, appending any manufacturer not yet ordered (e.g. one just added to the code)
+  at the end rather than letting it silently disappear. `App.Manufacturers()` applies this order
+  (`applyManufacturerOrder`); `App.AllManufacturers()` - Settings > External Sites - is deliberately
+  exempt and always alphabetical instead.
+- **Lexmark** added to `driver.Manufacturers` with a default-driver token rule (`Universal`, `v2` ->
+  "Lexmark Universal v2") and a default update-check URL - the catalog-matching/metadata side is fully
+  wired up like every other manufacturer. **Actually deploying a Lexmark driver through PDT does not
+  work yet** - see the README's new "Lexmark: known limitation" section for what was tried and found:
+  the driver package is a self-extracting RAR archive (not zip/7z - can't be auto-extracted the way
+  `.zip` packages are), its `.msi`-embedded files need an MSI administrative install
+  (`msiexec /a ... /qn TARGETDIR=...`) plus `expand.exe` to become real, correctly-named files
+  `BuildCatalog` can parse (confirmed working), but the resulting INF is rejected by Windows' own
+  `pnputil` and by PDT's `SetupCopyOEMInf`-based install path alike ("the style of the INF is
+  different than what was requested") - likely because it's an internal multi-OS template Lexmark's
+  own installer tooling preprocesses before real use, not something meant for direct driver-staging
+  API calls. Left as a known limitation rather than silently omitting Lexmark or claiming it fully
+  works.
+- Considered and deliberately **excluded Brother**: no universal print driver compatible with most of
+  its larger models, and its lineup targets home/small-office rather than fleet deployment.
+
+### Verified
+- New tests: `TestApplyManufacturerOrder`, `TestApplyManufacturerOrder_UnlistedItemAppendedAtEnd`,
+  `TestReconcileManufacturerOrder_Nil`, `TestReconcileManufacturerOrder_PreservesCustomOrder`,
+  `TestReconcileManufacturerOrder_DropsUnknownAndDuplicates` (first tests for the `main` package - it
+  had none before), plus `TestDefaultDriverNameFor`'s Lexmark case. Full suite (`go build`/`vet`/`test`,
+  `wails build`) clean.
+- Screenshot/UI-Automation-confirmed live: with a custom order saved directly to `settings.json`
+  (`["Sharp","Ricoh","Kyocera","HP","Canon"]`), the Defaults panel's Manufacturer dropdown correctly
+  defaulted to Sharp (with Sharp's own default driver auto-populated), while Settings > External Sites
+  still listed all manufacturers alphabetically regardless.
+- The Lexmark investigation itself was hands-on against the real downloaded package on this machine,
+  not guessed: confirmed the `Rar!` signature by scanning the raw `.exe`'s bytes; confirmed
+  `msiexec /a` produces a correctly-named `.inf` and that `driver.DriverNamesFromInf` parses it
+  correctly (extracting "Lexmark Universal v2"); confirmed the install failure independently through
+  both `pnputil /add-driver` and PDT's own code; checked `setupapi.dev.log` and the `DevicePath`
+  registry value to rule out stale driver-store state as the cause; confirmed no partial driver
+  registration was left behind afterward (`pnputil /enum-drivers`).
+
+## 2026-09-06 - Toshiba/Xerox/Konica Minolta support; External Sites reverted to plain fields
+
+### Changed
+- **External Sites reverted** to yesterday's plain always-visible text field per manufacturer (the
+  link-plus-"Change"-modal redesign is gone) - the fixed-size modal made the original design's only
+  real problem (a raw URL forcing the window wider) moot, and the simpler always-visible field was
+  preferred once that was no longer a tradeoff. `.modal`'s fixed width is kept from that redesign.
+- `.tab-panel`'s sizing changed from a hand-tuned `min-height` (needing re-tuning every time External
+  Sites' manufacturer count changed - which it immediately did, twice, this same session) to a fixed
+  `height` instead: every tab now reserves exactly the same space regardless of its own content,
+  permanently, with `overflow-y: auto` for whichever tab has more content than that (now routinely
+  External Sites, with 8 manufacturers) rather than ever growing the modal.
+
+### Clarified (no code change)
+- The Settings modal stays above the main window and moves with it because it's rendered as an
+  in-page overlay (`.modal-backdrop`) inside the same native OS window as everything else - not a
+  separate window at all - so there's no separate z-order or position to fall out of sync in the
+  first place. Worth keeping in mind for any future change that touches window handles
+  (`titlebar_windows.go`'s `findMainWindow`, etc.): this behavior depends on Settings never becoming
+  an actual second OS window.
+
+### Added
+- **Toshiba, Xerox, and Konica Minolta** added to `driver.Manufacturers`, with default-driver token
+  rules (`internal/driver/default.go`) and default update-check URLs (`settings.go`) - see the
+  README's "Drivers folder layout" for the full per-manufacturer table.
+- **Manufacturers without local drivers no longer appear as deployment options.** `App.Manufacturers()`
+  now filters to `driver.ManufacturersWithDrivers(catalog)` (only manufacturers with at least one
+  usable driver actually present); a new `App.AllManufacturers()` returns the full, unfiltered list
+  for Settings > External Sites specifically, so a URL can still be configured for a manufacturer
+  before its drivers are ever added.
+- Generalized the "prefer the branded/versioned name over a generic alias" behavior (previously
+  hardcoded to Ricoh only - `isUsableDriverName`) into a small per-manufacturer brand-token table
+  (`vagueNameFilterBrand`) covering Ricoh, Xerox, and Konica Minolta.
+- `DefaultDriverNameFor`'s tie-break, for when more than one catalog name matches a manufacturer's
+  token rule, now prefers (in order): the newest INF-declared date, then - on an exact date tie, i.e.
+  genuinely the same underlying driver registered under two names - whichever name actually shows a
+  version number, then alphabetical only as a final deterministic fallback. Previously this was a
+  bare alphabetical tie-break, which happened to work by accident for the original 5 manufacturers
+  (each only ever had one name matching their tokens) but picked the *wrong* one once Konica Minolta
+  was added: `"KONICA MINOLTA Universal PCL"` sorts before `"...Universal PCL v3.9.13"` since it's a
+  literal string prefix of it, so the plain, non-versioned name was winning.
+- `foldMatchIgnoringSpaces`: manufacturer folder names now match `driver.Manufacturers` ignoring
+  spaces as well as case - found necessary immediately against the real Drivers folder, where
+  "Konica Minolta" (this app's display name) sits on disk as `KonicaMinolta`, no space at all.
+
+### Verified
+- All three manufacturers tested against the **real, already-populated** local Drivers folder (not
+  just synthetic fixtures) via a throwaway catalog-dump script: Toshiba resolves to
+  `TOSHIBA Universal Printer 2`, Xerox to `Xerox GPD PCL6 V5.1076.4.0` (correctly preferring it over
+  the also-present, unversioned `Xerox Global Print Driver PCL6`), and Konica Minolta - once the
+  space-folding fix was in - to `KONICA MINOLTA Universal PCL v3.9.13` (correctly preferring it over
+  the plain `KONICA MINOLTA Universal PCL`, an exact-date-tie case the real package actually has).
+- New tests: `TestDefaultDriverNameFor_PrefersVersionedNameOnDateTie`,
+  `TestBuildCatalog_ManufacturerFolderNameIgnoresSpaces`,
+  `TestXeroxGenericAliasIsSelectableButNotDefault`, plus new `Toshiba`/`Xerox`/`KonicaMinolta` (no
+  space, deliberately) fixtures under `internal/driver/testdata/`. Full suite (`go build`/`vet`/`test`,
+  `wails build`) clean.
+- Screenshot/UI-Automation-confirmed live: the Defaults panel's Manufacturer dropdown lists only
+  Canon/HP/Kyocera/Ricoh/Sharp/Toshiba/Xerox on this machine (Konica Minolta correctly excluded before
+  the space-fold fix, correctly included after); Settings > External Sites lists all 8 with the three
+  new URLs pre-filled correctly, confirmed by reading each field's value directly via UI Automation.
+
+## 2026-09-06 - Settings modal no longer resizes when switching tabs; External Sites redesigned
+
+### Fixed
+- **Real bug, reported from live use**: switching tabs in the Settings modal visibly resized the whole
+  modal on every click - both dimensions, not just vertically as first fixed (see below). Two separate
+  root causes:
+  - *Vertical*: `.tab-panel` had a `max-height` cap but no lower bound, and the modal has no fixed
+    size of its own - it sizes to whichever tab's content is showing. Fixed with a shared
+    `.tab-panel` `min-height` (tuned to whichever tab is now tallest - see the External Sites redesign
+    below, which changed that).
+  - *Horizontal*: `.modal` had a `min-width` but likewise no upper bound, so External Sites' one long
+    instructional sentence (a `<p>`, which by ordinary block shrink-to-fit sizing contributes its full
+    unwrapped width when nothing constrains its ancestors) stretched the modal to roughly double the
+    other tabs' width. Fixed by giving `.modal` a genuine fixed `width` instead of a `min-width`.
+  - Confirmed via screenshot: the modal box is now pixel-identical (same edges, same Cancel/Save
+    button position) across all three tabs.
+
+### Changed
+- **Settings > External Sites redesigned**: each manufacturer is now a clickable link (opens its
+  configured URL via the same `OpenManufacturerURL` call Defaults' own "Check for Updates" button
+  already used) plus a **Change** button that opens a small "Change URL" modal, instead of an
+  always-visible text field showing the raw URL. Saving in that modal persists immediately (its own
+  `SaveSettings` call) rather than staying pending for the outer Settings modal's own Save button -
+  simplest way to keep the manufacturer link always accurate right after a change, with no separate
+  "unsaved edit" state to track just for this one field. This was also what made the horizontal-resize
+  bug possible to fully fix rather than just contain: a raw URL string in a fixed-width box either
+  clips or forces the modal wider (whack-a-mole either way), and neither problem exists once the URL
+  itself isn't shown inline at all.
+
+### Verified
+- `go build`/`go vet`/`go test` and `wails build` all clean.
+- Screenshot-confirmed: identical modal size across all three tabs; the Change URL modal opens
+  pre-filled with the current value, and a save round-trips correctly (confirmed directly by reading
+  `%AppData%\PDT\settings.json` before and after, then restoring the real URL afterward).
+- Caught and fixed a markup issue while testing the Change URL modal: writing `URL for
+  <span id="siteUrlMfgName">` as two adjacent inline pieces directly inside a `flex-direction: column`
+  label put them in *separate* flex items (one per contiguous inline run, per the flex layout spec),
+  rendering "URL for" and the manufacturer name on two separate lines instead of one. Fixed by wrapping
+  both in a single containing `<span>` so they're one flex item.
+- Also caught mid-verification (unrelated to the app itself): a Bash heredoc used to restore
+  `settings.json` after a manual test collapsed its `\\` path escapes to single backslashes,
+  producing invalid JSON ("\U", "\K", "\D" aren't legal JSON escapes). Caught by reading the file back
+  before moving on, rather than assuming the write matched what was typed; fixed by rewriting it with
+  a tool that doesn't round-trip through shell string interpretation, then re-verified the app starts
+  clean and reads it back correctly.
+
 ## 2026-09-06 - Check for Updates / self-update, repo made public
 
 ### Added

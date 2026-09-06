@@ -2,7 +2,7 @@ import './style.css';
 import './app.css';
 
 import {
-    Manufacturers, Models, DriverCandidates, DefaultDriverFor, GetCatalogStatus,
+    Manufacturers, AllManufacturers, Models, DriverCandidates, DefaultDriverFor, GetCatalogStatus,
     NewCsvTemplate, ImportCsv, OpenConfiguration, SaveConfiguration, Deploy,
     GetSettings, SaveSettings, PickFolder, OpenManufacturerURL,
     GetAppInfo, OpenRepoURL, CheckForUpdate, ApplyUpdate,
@@ -31,6 +31,7 @@ const TIP = {
     ip: 'Printer\'s IP address, or "NUL" to bind permanently to the local NUL: port.',
     selectAllHeader: 'Check/uncheck every row.',
     saveFileBasePath: 'The folder Open/Save Configuration start from by default.',
+    manufacturerOrder: 'Drag to reorder - controls the Manufacturer dropdown\'s order in Defaults and in the grid. Settings > External Sites is always alphabetical regardless of this order.',
 };
 
 // HTML-attribute-escapes a string for use inside title="..." - every tooltip
@@ -104,7 +105,7 @@ const state = {
     deploying: false,
     statusText: '',
     logLines: [],
-    settings: {saveFileBasePath: '', manufacturerUrls: {}},
+    settings: {saveFileBasePath: '', manufacturerUrls: {}, manufacturerOrder: []},
     // Set while Deploy is running: the exact rows submitted, in submission
     // order, plus how many deploy-progress events have arrived so far - since
     // events arrive in that same order, this correlates each event to its
@@ -137,6 +138,10 @@ document.querySelector('#app').innerHTML = `
             <button id="btnBrowseBasePath" title="Browse for a folder...">&hellip;</button>
           </div>
         </label>
+        <div class="modal-field" title="${tip('manufacturerOrder')}">
+          Manufacturer sort order
+          <ul id="mfgOrderList" class="mfg-order-list" title="${tip('manufacturerOrder')}"></ul>
+        </div>
       </div>
       <div class="tab-panel" data-tab-panel="sites" hidden>
         <p class="modal-hint">Pages to check for driver updates - no vendor offers a way to check
@@ -307,6 +312,7 @@ function flashInvalidInput(input) {
 
 async function init() {
     state.manufacturers = await Manufacturers();
+    state.allManufacturers = await AllManufacturers();
     const mfgSelect = el('defMfg');
     mfgSelect.innerHTML = state.manufacturers.map(m => `<option value="${m}">${m}</option>`).join('');
     mfgSelect.value = state.manufacturers[0] || '';
@@ -511,6 +517,24 @@ function rowHtml(r) {
 function mfgSelectHtml(r) {
     const opts = state.manufacturers.map(m => `<option value="${m}" ${m === r.manufacturer ? 'selected' : ''}>${m}</option>`).join('');
     return `<select class="row-mfg" title="${tip('manufacturer')}">${opts}</select>`;
+}
+
+// refreshManufacturerDropdowns: re-fetches state.manufacturers (reflecting
+// any just-saved Settings > General reorder) and rebuilds every already-
+// rendered Manufacturer <select>'s <option> list in place - the Defaults
+// panel's and every existing grid row's - each preserving its own current
+// selection rather than resetting to the new first option.
+async function refreshManufacturerDropdowns() {
+    state.manufacturers = await Manufacturers();
+    const optsHtml = (selected) => state.manufacturers
+        .map(m => `<option value="${m}" ${m === selected ? 'selected' : ''}>${m}</option>`).join('');
+
+    const defMfg = el('defMfg');
+    defMfg.innerHTML = optsHtml(defMfg.value);
+
+    for (const select of document.querySelectorAll('table.grid select.row-mfg')) {
+        select.innerHTML = optsHtml(select.value);
+    }
 }
 
 function attr(s) {
@@ -732,9 +756,13 @@ function wireEvents() {
 
 // --- Settings modal ---
 
+// Each manufacturer is a plain always-visible text field - state.allManufacturers
+// (every manufacturer PDT knows about) rather than state.manufacturers (only
+// those with drivers actually present locally), so a URL can be configured
+// here before its drivers are ever added to the local Drivers folder.
 function renderSettingsSitesPanel() {
     const panel = el('settingsSitesPanel');
-    panel.innerHTML = state.manufacturers.map(mfg => `
+    panel.innerHTML = state.allManufacturers.map(mfg => `
         <label class="modal-field">
           ${mfg}
           <input type="text" class="settings-url" data-mfg="${attr(mfg)}">
@@ -742,17 +770,78 @@ function renderSettingsSitesPanel() {
     `).join('');
 }
 
+// renderManufacturerOrderList + wireMfgOrderDragDrop: a plain HTML5
+// drag-and-drop reorderable list (no library) for Settings > General's
+// Manufacturer sort order - controls the Manufacturer dropdown's order in
+// both the Defaults panel and the grid (both read from state.manufacturers,
+// itself ordered by App.Manufacturers() per this same saved order).
+// Reordering happens live during dragover (moving the dragged <li> directly
+// via insertBefore) rather than waiting for a drop event - a common
+// lightweight pattern that needs no separate drop handler.
+function renderManufacturerOrderList() {
+    const list = el('mfgOrderList');
+    list.innerHTML = state.settings.manufacturerOrder.map(mfg => `
+        <li class="mfg-order-item" draggable="true" data-mfg="${attr(mfg)}">
+          <span class="mfg-order-handle">&#9776;</span> ${mfg}
+        </li>
+    `).join('');
+    wireMfgOrderDragDrop();
+}
+
+function wireMfgOrderDragDrop() {
+    const list = el('mfgOrderList');
+    let draggedEl = null;
+
+    for (const item of list.querySelectorAll('.mfg-order-item')) {
+        item.addEventListener('dragstart', () => {
+            draggedEl = item;
+            item.classList.add('dragging');
+        });
+        item.addEventListener('dragend', () => {
+            item.classList.remove('dragging');
+            draggedEl = null;
+        });
+        item.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (!draggedEl || draggedEl === item) return;
+            const rect = item.getBoundingClientRect();
+            const before = (e.clientY - rect.top) < rect.height / 2;
+            list.insertBefore(draggedEl, before ? item : item.nextSibling);
+        });
+    }
+}
+
+function currentManufacturerOrder() {
+    return Array.from(el('mfgOrderList').querySelectorAll('.mfg-order-item')).map(li => li.dataset.mfg);
+}
+
 function openSettingsModal() {
     el('settingsBasePath').value = state.settings.saveFileBasePath;
     for (const input of el('settingsSitesPanel').querySelectorAll('.settings-url')) {
         input.value = state.settings.manufacturerUrls?.[input.dataset.mfg] || '';
     }
+    renderManufacturerOrderList();
     switchSettingsTab('general');
     el('settingsBackdrop').hidden = false;
 }
 
 function closeSettingsModal() {
     el('settingsBackdrop').hidden = true;
+}
+
+// Clicking the modal's dim backdrop itself (not the modal box) closes it,
+// same as Cancel - but only when the click started and ended on the
+// backdrop, so dragging a text selection out over the backdrop before
+// releasing doesn't accidentally close it.
+function wireBackdropDismiss(backdropId, onClose) {
+    let mouseDownOnSelf = false;
+    const backdrop = el(backdropId);
+    backdrop.addEventListener('mousedown', (e) => {
+        mouseDownOnSelf = e.target === e.currentTarget;
+    });
+    backdrop.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget && mouseDownOnSelf) onClose();
+    });
 }
 
 function switchSettingsTab(tab) {
@@ -837,17 +926,7 @@ function wireSettingsModal() {
         btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab));
     }
 
-    // Clicking the dim backdrop itself (not the modal box) closes it, same
-    // as Cancel - but only when the click started and ended on the backdrop,
-    // so dragging a text selection from inside the modal out over the
-    // backdrop before releasing doesn't accidentally close it.
-    let backdropMouseDownOnSelf = false;
-    el('settingsBackdrop').addEventListener('mousedown', (e) => {
-        backdropMouseDownOnSelf = e.target === e.currentTarget;
-    });
-    el('settingsBackdrop').addEventListener('click', (e) => {
-        if (e.target === e.currentTarget && backdropMouseDownOnSelf) closeSettingsModal();
-    });
+    wireBackdropDismiss('settingsBackdrop', closeSettingsModal);
 
     el('btnBrowseBasePath').addEventListener('click', async () => {
         const result = await PickFolder(el('settingsBasePath').value);
@@ -859,8 +938,10 @@ function wireSettingsModal() {
         for (const input of el('settingsSitesPanel').querySelectorAll('.settings-url')) {
             manufacturerUrls[input.dataset.mfg] = input.value;
         }
-        const saved = await SaveSettings({saveFileBasePath: el('settingsBasePath').value, manufacturerUrls});
+        const manufacturerOrder = currentManufacturerOrder();
+        const saved = await SaveSettings({saveFileBasePath: el('settingsBasePath').value, manufacturerUrls, manufacturerOrder});
         state.settings = saved;
+        await refreshManufacturerDropdowns();
         closeSettingsModal();
         setStatus('Settings saved.');
     });

@@ -97,6 +97,7 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 			s.ManufacturerURLs[mfg] = defaultURL
 		}
 	}
+	s.ManufacturerOrder = reconcileManufacturerOrder(s.ManufacturerOrder)
 	if err := saveSettingsToDisk(s); err != nil {
 		return Settings{}, err
 	}
@@ -263,9 +264,53 @@ func (a *App) GetCatalogStatus() CatalogStatus {
 	return CatalogStatus{OK: true}
 }
 
-// Manufacturers is the fixed manufacturer list every row's dropdown offers.
+// Manufacturers is every row's dropdown offers - only manufacturers that
+// actually have at least one driver present in the local Drivers folder are
+// offered as deployment options, ordered per the user's own Settings >
+// General drag/drop preference (a.settings.ManufacturerOrder); see
+// AllManufacturers for the full list Settings > External Sites uses instead
+// (which is always alphabetical, not this custom order).
 func (a *App) Manufacturers() []string {
-	return driver.Manufacturers
+	<-a.ready
+	return applyManufacturerOrder(driver.ManufacturersWithDrivers(a.catalog), a.settings.ManufacturerOrder)
+}
+
+// AllManufacturers is every manufacturer PDT knows about, regardless of
+// whether its drivers are present locally - Settings > External Sites uses
+// this (not Manufacturers), always alphabetically (not the custom
+// Manufacturers order - that's for deployment convenience, not for finding a
+// specific manufacturer's URL to edit), so a URL can be configured before its
+// drivers are ever added to the local Drivers folder.
+func (a *App) AllManufacturers() []string {
+	out := append([]string(nil), driver.Manufacturers...)
+	sort.Strings(out)
+	return out
+}
+
+// applyManufacturerOrder reorders items (already filtered to whatever's
+// actually relevant - e.g. manufacturers with local drivers present) to match
+// order's sequence. An item in items but not (yet) in order is appended at
+// the end in items' own original order, so a manufacturer added after the
+// user last customized their order doesn't just vanish from the dropdown.
+func applyManufacturerOrder(items []string, order []string) []string {
+	pos := make(map[string]int, len(order))
+	for i, m := range order {
+		pos[m] = i
+	}
+	out := append([]string(nil), items...)
+	sort.SliceStable(out, func(i, j int) bool {
+		pi, iok := pos[out[i]]
+		pj, jok := pos[out[j]]
+		switch {
+		case iok && jok:
+			return pi < pj
+		case iok:
+			return true
+		default:
+			return false
+		}
+	})
+	return out
 }
 
 // Models lists the known models for manufacturer (Kyocera only - other

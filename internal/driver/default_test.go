@@ -90,3 +90,22 @@ func TestXeroxGenericAliasIsSelectableButNotDefault(t *testing.T) {
 		t.Errorf("DefaultDriverNameFor(Xerox) = %q, want %q", got, want)
 	}
 }
+
+// TestDefaultDriverNameFor_PrefersBaseNameOverNewerSpecializedVariant covers
+// the real Lexmark surprise found live, after the .msi auto-extraction
+// pipeline picked up every package in the tree at once: "Lexmark Universal
+// v2 XL" (an extra-large-format variant, testdata's LexmarkXLPkg fixture)
+// has a genuinely newer INF-declared date than the base "Lexmark Universal
+// v2" (LexmarkPkg) - two days newer - but it's a different, more
+// specialized product, not a newer version of the base driver, and the
+// Defaults panel's default should still be the base name despite the date.
+func TestDefaultDriverNameFor_PrefersBaseNameOverNewerSpecializedVariant(t *testing.T) {
+	cat := testCatalog(t)
+	lexmark := cat["Lexmark"]
+	if _, ok := lexmark["Lexmark Universal v2 XL"]; !ok {
+		t.Fatal("expected the XL variant to be present in the catalog too (not filtered out - it's still a valid, selectable candidate)")
+	}
+	if got, want := DefaultDriverNameFor(cat, "Lexmark"), "Lexmark Universal v2"; got != want {
+		t.Errorf("DefaultDriverNameFor(Lexmark) = %q, want %q (should not be swayed by the XL variant's newer date)", got, want)
+	}
+}

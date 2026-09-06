@@ -147,6 +147,14 @@ shows for that INF:
   keeps resolving correctly once a newer `V5.1078.x.x` (or whatever the next one is called) replaces
   it on disk, with no code change needed. The same holds for Ricoh and any other manufacturer whose
   preferred driver's own name embeds a version number.
+- **A newer date doesn't always mean "the newer version of the same driver."** Confirmed against the
+  real Lexmark package: alongside the base "Lexmark Universal v2" there's a genuinely different,
+  more specialized "Lexmark Universal v2 XL" (an extra-large-format variant) built two days later -
+  a different product, not a newer build of the base one. Since neither name carries a version number
+  of its own, the tie-break here falls to preferring the *shorter* matching name (a name that's a
+  superset of another, with an extra qualifier tacked on, is presumed to be the more specialized
+  variant) before ever considering date - see `DefaultDriverNameFor`'s doc comment in `default.go`
+  for the complete tie-break order.
 
 **Default driver per manufacturer** (`internal/driver/default.go`, `DefaultDriverNameFor`): the
 Defaults panel pre-selects a specific driver name when a manufacturer is chosen, matched by token
@@ -202,55 +210,55 @@ permitted under 7-Zip's own license (LGPL + an "unRAR restriction" that only bar
 build a RAR *compressor*, not redistributing the decoder) - `third_party/7zip/License.txt` travels
 with the binaries per that license's own terms.
 
-**The `.msi` layer past that point is still a manual, one-time-per-version step** (same in spirit as
-Kyocera's self-extracting `.exe` writeup below) - confirmed end to end against the real
-`Lexmark_Universal_v2_UD1_Installation_Package_*.exe` package, all the way through driver install,
-printer creation, duplex/color, and APF, all verified working through PDT's own existing, unmodified
-code once the `.msi` is properly unpacked:
+**The `.msi` layer past that point is also auto-extracted** (`internal/driver/msi.go`,
+`ensureMsiExtracted`) - unlike the RAR layer, this needs no bundled tool at all, since `msiexec.exe`
+and `expand.exe` are both already part of Windows itself. For every `.msi` `BuildCatalog` finds (e.g.
+`print64PCL.msi` under `InstallationPackage\Drivers\x64\`, reachable only after the RAR layer above
+has already been unpacked), it:
 
-1. Let PDT auto-extract the outer `.exe` (drop the downloaded package directly into
-   `Drivers\Windows\<version>\Lexmark\` and run PDT once - the RAR layer is handled automatically, as
-   above).
-2. Find the manufacturer/model's `.msi` under `InstallationPackage\Drivers\<x64 or x86>\` (e.g.
-   `print64PCL.msi` for the x64 PCL driver).
-3. Run an MSI **administrative install** to unpack it with real filenames/paths intact - **this does
+1. Runs an MSI **administrative install** to unpack it with real filenames/paths intact - **this does
    not install anything**, it only extracts:
    ```
-   msiexec /a "print64PCL.msi" /qn TARGETDIR="C:\some\empty\folder"
+   msiexec /a "print64PCL.msi" /qn TARGETDIR="<sibling folder>"
    ```
    This alone gets the main `.inf` out correctly (`LMUD1o40.inf`, not the mangled `LMUD1o40inf` a
    plain archive-tool extraction of the `.msi` produces) - the `.msi`'s own file table maps its
    internal mangled CAB entry names back to real ones, which only an administrative install (not a
-   generic un-zip/un-cab tool) actually reads.
-4. The result lands under `<TARGETDIR>\Lexmark\Lexmark Universal v2\Drivers\Print\GDI\` - the real
-   `.inf` alongside its `.dl_`/`.gd_`/`.gp_`/`.tx_`/`.in_`/`.xm_`/`.pn_`/`.ex_` compressed siblings
-   (Microsoft's legacy single-file-compressed form) and `amd64`/`i386` subfolders of compiled binaries
-   the INF references.
-5. Decompress every compressed sibling with Windows' own `expand.exe`, **using `-R` (restore original
-   name) rather than guessing the real extension from the compressed one**:
-   ```
-   expand -R LMUD1o40.gd_
-   ```
-   This matters more than it looks: the extension-to-extension mapping isn't the simple 1:1 scheme it
-   looks like at a glance - `.gd_` decompresses to `.gdl` and `.in_` to `.ini` here, *not* to `.gpd`/
-   `.inf` as their names suggest (there's a genuinely separate `.gp_` -> `.gpd` pair too). Guessing
-   this mapping (as an early pass at this did) silently produces a wrong-but-plausible-looking result:
-   it can overwrite a file the `.msi` already extracted correctly (the real `.inf`, clobbered by
-   decompressing `.in_` on top of it under the same assumed name) and leave genuinely-required files
-   named `.gdl` missing entirely (assumed to be redundant with `.gpd` and silently never produced) -
-   both errors that `SetupCopyOEMInf`/`BuildCatalog` tolerate quietly enough at staging time to look
-   like success, while `AddPrinter` fails outright the moment something tries to actually use the
-   driver (`ERROR_CAN_NOT_COMPLETE`) - a good example of why "it staged with no error" isn't the same
-   as "it actually works," and worth re-verifying end to end rather than stopping at the first
-   success signal. `-R` sidesteps the whole problem by asking `expand.exe` itself, which reads the
+   generic un-zip/un-cab tool) actually reads. The result lands under
+   `<sibling folder>\Lexmark\Lexmark Universal v2\Drivers\Print\GDI\` - the real `.inf` alongside its
+   `.dl_`/`.gd_`/`.gp_`/`.tx_`/`.in_`/`.xm_`/`.pn_`/`.ex_` compressed siblings (Microsoft's legacy
+   single-file-compressed form) and `amd64`/`i386` subfolders of compiled binaries the INF references.
+2. Decompresses every compressed sibling with Windows' own `expand.exe`, **using `-R` (restore
+   original name) rather than guessing the real extension from the compressed one**. This matters more
+   than it looks: the extension-to-extension mapping isn't the simple 1:1 scheme it looks like at a
+   glance - `.gd_` decompresses to `.gdl` and `.in_` to `.ini` here, *not* to `.gpd`/`.inf` as their
+   names suggest (there's a genuinely separate `.gp_` -> `.gpd` pair too). An early pass at this
+   guessed the mapping instead of asking `expand.exe`, and paid for it: the wrong guess silently
+   overwrote the `.msi`'s own correctly-extracted `.inf` with unrelated `.ini` content sharing the
+   same assumed filename, and left a genuinely-required `.gdl` file missing entirely - both errors
+   `SetupCopyOEMInf`/`BuildCatalog` tolerated quietly enough at staging time to look like success,
+   while `AddPrinter` failed outright the moment something tried to actually use the driver
+   (`ERROR_CAN_NOT_COMPLETE`) - a good example of why "it staged with no error" isn't the same as "it
+   actually works." `-R` sidesteps the whole problem by asking `expand.exe` itself, which reads the
    real name straight out of the compressed file's own header instead of guessing from its extension.
-6. Move the resulting folder into `Drivers\Windows\<version>\Lexmark\`, renamed to something
-   version-identifying.
 
-This produces a folder that both `driver.BuildCatalog` (finds and catalogs it as
-`"Lexmark Universal v2"`) and PDT's existing `SetupCopyOEMInf`-based install path
+Putting it together: drop the downloaded `Lexmark_..._Installation_Package_*.exe` directly into
+`Drivers\Windows\<version>\Lexmark\` and run PDT once - the RAR layer, then every `.msi` inside it,
+extract automatically with no manual steps at all. Confirmed end to end against the real package: the
+resulting `.inf` is found and cataloged correctly, and driver install, printer creation, duplex/color,
+and APF all work through PDT's existing, unmodified `SetupCopyOEMInf`-based install path
 (`driverinstall_windows.go` - the exact same mechanism used for every other manufacturer here, no
-Lexmark-specific code needed) handle correctly with no changes.
+Lexmark-specific code needed).
+
+**One real surprise worth knowing about**: Lexmark's package contains more than one product variant
+sharing a base name - alongside `print64PCL.msi`'s "Lexmark Universal v2" there's also
+`print64XL.msi`'s "Lexmark Universal v2 XL" (an extra-large-format variant), built two days later.
+Auto-extracting *all* the `.msi` files in the tree means both show up in the catalog - and the
+XL variant's newer date isn't "a newer version of the base driver," it's a different, more
+specialized product, so `DefaultDriverNameFor`'s tie-break was corrected to prefer the shorter,
+non-variant name over a merely-newer one that carries no version number of its own (see its doc
+comment in `default.go` for the full tie-break order, and the README's own note in "Default driver
+per manufacturer" below).
 
 ### Kyocera: self-extracting `.exe` packages
 

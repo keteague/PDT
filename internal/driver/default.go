@@ -49,18 +49,36 @@ var versionSuffixRe = regexp.MustCompile(`\d+\.\d+`)
 // that manufacturer, or "" if manufacturer has no such rule or no catalog
 // entry matches (e.g. the driver simply isn't installed locally).
 //
-// More than one name can match: a vendor's INF may register the exact same
-// driver under two names (confirmed against the real Konica Minolta package -
-// "KONICA MINOLTA Universal PCL" and "...Universal PCL v3.9.13" both present,
-// identical date), or a vendor's preferred driver's own display name may
-// embed a version number that changes over time (Xerox, Konica Minolta - see
-// defaultDriverTokens), making each version a genuinely different catalog
-// name rather than just a different version-group under one name. Tie-break,
-// in order: newest INF-declared date wins outright; on an exact date tie
-// (the same-driver-two-names case), the name that actually shows a version
-// number wins, matching what a human would call "the more descriptive one";
-// alphabetical is the final fallback, only to stay deterministic on a
-// complete tie.
+// More than one name can match, for two different reasons, confirmed against
+// two different real packages:
+//   - A vendor's preferred driver's own display name embeds a version number
+//     that changes over time (Xerox, Konica Minolta - see
+//     defaultDriverTokens), making each version a genuinely different catalog
+//     name rather than just a different version-group under one name; Konica
+//     Minolta's INF additionally registers the exact same driver under both a
+//     plain and a version-suffixed name, with an identical date.
+//   - A vendor ships multiple real product *variants* that happen to share
+//     the same base name (confirmed against the real Lexmark package: the
+//     base "Lexmark Universal v2" alongside "Lexmark Universal v2 XL", an
+//     extra-large-format variant, built two days apart) - here the *newer*
+//     one is very much the wrong default; "XL" isn't a newer version of the
+//     base driver, it's a different, more specialized one.
+//
+// Tie-break, in order:
+//  1. A name that visibly carries a version number wins outright - it's
+//     unambiguously "the same driver, a specific build" rather than a
+//     different variant (Xerox, Konica Minolta).
+//  2. Otherwise, the shorter name wins - a name that's a superset of another
+//     matching name (an extra qualifier tacked on, like "XL") is presumed to
+//     be the more specialized variant; the shorter, more general one is the
+//     more sensible default (Lexmark). Deliberately checked before date,
+//     since a specialized variant can easily have a newer build date than
+//     the base one without being "the newer version" of it in any sense a
+//     user would want defaulted to.
+//  3. Otherwise, newest INF-declared date wins - genuinely the same name
+//     family with more than one build present.
+//  4. Alphabetical is the final fallback, only to stay deterministic on a
+//     complete tie.
 func DefaultDriverNameFor(catalog Catalog, manufacturer string) string {
 	tokens, ok := defaultDriverTokens[manufacturer]
 	if !ok {
@@ -94,10 +112,12 @@ func DefaultDriverNameFor(catalog Catalog, manufacturer string) string {
 		switch {
 		case best == "":
 			replace = true
-		case !newest.Equal(bestDate):
-			replace = newest.After(bestDate)
 		case versioned != bestVersioned:
 			replace = versioned
+		case len(name) != len(best):
+			replace = len(name) < len(best)
+		case !newest.Equal(bestDate):
+			replace = newest.After(bestDate)
 		default:
 			replace = name < best
 		}

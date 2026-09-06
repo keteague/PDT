@@ -4,6 +4,44 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-06 - Auto-extract .msi drivers too; fix a real default-driver bug it surfaced
+
+### Added
+- **`.msi`-packaged drivers are now auto-extracted** (`internal/driver/msi.go`, `ensureMsiExtracted`),
+  completing the Lexmark pipeline the previous entry's RAR auto-extraction started: for every `.msi`
+  found, runs an MSI *administrative install* (`msiexec /a ... TARGETDIR=...` - unpacks with real
+  filenames/paths, installs nothing) into a sibling folder, then decompresses every Microsoft
+  legacy-compressed sibling file the install produces via `expand.exe -R` (restore original name,
+  read out of the compressed file's own header - not a guessed extension mapping; see the previous
+  correction entry for why guessing broke this before). Uses `msiexec.exe`/`expand.exe` directly, no
+  bundled tool needed (both are already part of Windows). End to end, dropping the raw, unmodified
+  `Lexmark_Universal_v2_UD1_Installation_Package_*.exe` into `Drivers\Windows\<version>\Lexmark\` and
+  launching PDT now needs zero manual steps to reach a scannable, installable driver.
+
+### Fixed
+- **Real bug, found live once the full pipeline ran against everything in the tree at once**:
+  auto-extracting *every* `.msi` surfaced a second real driver - `print64XL.msi`'s
+  "Lexmark Universal v2 XL" (an extra-large-format variant), built two days *after* the base
+  "Lexmark Universal v2" - and `DefaultDriverNameFor`'s existing "newest date wins" tie-break picked
+  the XL variant as the default, which is wrong: it's a different, more specialized product, not a
+  newer version of the base driver. Neither name carries a version number of its own (Xerox's/Konica
+  Minolta's own tie-break signal doesn't apply here), so the tie-break was reordered to prefer the
+  *shorter* matching name before ever considering date - a name that's a superset of another, with an
+  extra qualifier tacked on, is presumed to be the more specialized variant. Confirmed the reordering
+  doesn't disturb the Xerox/Konica Minolta cases (their own version-number signal is checked first and
+  fully resolves both before the shorter-name tier is ever reached).
+
+### Verified
+- New tests: `TestCompressedSiblingRe`, `TestEnsureMsiExtracted_SkipsAlreadyExtracted`,
+  `TestDefaultDriverNameFor_PrefersBaseNameOverNewerSpecializedVariant` (a new `LexmarkXLPkg` testdata
+  fixture reproducing the real two-days-newer-but-wrong-default scenario exactly). Full suite
+  (`go build`/`vet`/`test`, `wails build`) clean.
+- Live end to end against the real, unmodified Lexmark package: launched the built `PDT.exe` fresh,
+  confirmed the full RAR-then-MSI-then-expand chain produced a byte-identical result to the earlier
+  hand-verified-correct extraction (same file sizes for `.inf`/`.gdl`/`.gpd`/`.ini`/`.dll`), and
+  confirmed via screenshot that the Defaults panel now correctly pre-selects "Lexmark Universal v2"
+  (not "...XL") once the tie-break fix was in.
+
 ## 2026-09-06 - Bundle 7-Zip, auto-extract self-extracting RAR packages
 
 ### Added

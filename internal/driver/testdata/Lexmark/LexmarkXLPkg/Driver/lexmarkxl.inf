@@ -1,0 +1,29 @@
+; Synthetic test fixture - not a real vendor INF. Mirrors the real Lexmark
+; package's own surprise, confirmed against the real local package during
+; development: alongside the base "Lexmark Universal v2" driver
+; (lexmark.inf in the sibling LexmarkPkg fixture) there's a genuinely
+; different, more specialized "Lexmark Universal v2 XL" (extra-large-format)
+; variant, built two days later - a *newer date* here does not mean "the
+; newer version of the same driver" the way it does for Xerox/Konica
+; Minolta's version-suffixed names; it's a different product entirely, and
+; the base name is still the right Defaults-panel default. See
+; DefaultDriverNameFor's tie-break for how the shorter, non-variant name
+; wins despite this file's later DriverVer.
+
+[Version]
+Signature="$Windows NT$"
+Provider="Lexmark International"
+ClassGUID={4D36E979-E325-11CE-BFC1-08002BE10318}
+Class=Printer
+CatalogFile=LMUD1O40XL.cat
+DriverVer=01/10/2016,3.1.0.0
+PnpLockdown=1
+
+[Manufacturer]
+%LEXMARK%=LEXMARK_XL_PRINTERS,NTamd64.6.0
+
+[LEXMARK_XL_PRINTERS.NTamd64.6.0]
+"Lexmark Universal v2 XL" = LMUD1O40XL.GPD.NTamd64.6.0,USBPRINT\LexmarkLexmark_UniveXL01
+
+[Strings]
+LEXMARK = "Lexmark"

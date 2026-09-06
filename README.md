@@ -179,65 +179,60 @@ be wired up (a `driver.Manufacturers` entry, a `defaultDriverTokens` rule once y
 driver name, and a default URL in `settings.go`) the same way Toshiba/Xerox/Konica Minolta/Lexmark
 were.
 
-### Lexmark: known limitation - driver package doesn't install via PDT's mechanism yet
+### Lexmark: self-extracting RAR + `.msi`-packaged drivers
 
-Lexmark's manufacturer metadata (catalog matching, default driver, update-check URL) is wired up like
-every other manufacturer above, but **actually deploying a Lexmark driver through PDT has not been
-gotten working yet** - confirmed against the real `Lexmark_Universal_v2_UD1_Installation_Package_*.exe`
-package:
+Lexmark's package is a **self-extracting RAR archive** (confirmed by its `Rar!` signature, not a ZIP
+or 7z), so it can't be auto-extracted the way `.zip` packages are - unlike Kyocera's self-extracting
+`.exe`, there's no zero-dependency way to unpack this one in Go (Go's standard library has no RAR
+reader, and RAR5 support among third-party Go libraries is thin), so extraction is a manual,
+one-time-per-version step, same in spirit as Kyocera's.
 
-- The package itself is a **self-extracting RAR archive** (confirmed by its `Rar!` signature, not a
-  ZIP or 7z), so it can't be auto-extracted the way `.zip` packages are - see "Getting drivers out of
-  it" below for the manual path.
-- Its driver files ship inside `.msi` installers, and extracting one directly (7-Zip, or any generic
-  archive tool) produces mangled output: filenames with no extension separator (`LMUD1o40inf` instead
-  of `LMUD1o40.inf`) and sibling files still in Microsoft's legacy single-file-compressed form
-  (`LMUD1o40.dl_`, decompresses to `LMUD1o40.dll`) - `msiexec /a` (an MSI *administrative install*,
-  which only unpacks files to their real names/paths rather than actually installing anything) fixes
-  the naming, and Windows' own `expand.exe` decompresses the `.dl_`-style siblings; both were confirmed
-  necessary and sufficient to get a `driver.BuildCatalog`/`DriverNamesFromInf`-parseable `.inf` with
-  correctly-named companion files. **This part works** - `internal/driver`'s existing code correctly
-  finds and catalogs the result with no changes needed.
-- **Actually installing it does not work yet**, even outside PDT: Windows' own `pnputil /add-driver`
-  rejects the resulting INF with `"The style of the INF is different than what was requested"`, and
-  PDT's own `SetupCopyOEMInf`-based install path (`driverinstall_windows.go`, the same mechanism that
-  already installs Canon/HP/Kyocera/Ricoh/Sharp drivers successfully) fails on it too. The INF's own
-  `[Version]` section carries non-standard `LM_DRV_OS=MERGED`/`LM_DRV_MERGED_OS=2000,V32,X64,V64` keys
-  that aren't part of the documented INF schema at all - a strong hint this particular INF is an
-  internal multi-OS *template* Lexmark's own installer tooling (`PackagingUtility.exe`,
-  `LMConfigMan.exe` - both present in the package) preprocesses into something installable before real
-  use, not something meant to be handed directly to Windows' driver-staging APIs. Resolving this would
-  need either finding/producing a de-merged, single-OS variant of the INF, or accepting that Lexmark
-  needs a different install mechanism entirely (shelling out to its own installer) rather than the
-  `.inf`-based approach every other manufacturer here uses - a real design question, not attempted yet.
+**Extraction procedure** (confirmed end to end against the real
+`Lexmark_Universal_v2_UD1_Installation_Package_*.exe` package - driver install, printer creation,
+duplex/color, and APF all verified working through PDT's own existing, unmodified code):
 
-**Getting the driver files out of the self-extracting `.exe`, for when the install-mechanism question
-above gets resolved:**
 1. Extract the `.exe` with 7-Zip (it recognizes the embedded RAR archive directly, despite the file
    having a `.exe` extension and no visible RAR structure at a glance).
 2. Find the manufacturer/model's `.msi` under `InstallationPackage\Drivers\<x64 or x86>\` (e.g.
    `print64PCL.msi` for the x64 PCL driver).
-3. Run an administrative install to unpack it with real filenames/paths intact - **this does not
-   install anything**, it only extracts:
+3. Run an MSI **administrative install** to unpack it with real filenames/paths intact - **this does
+   not install anything**, it only extracts:
    ```
    msiexec /a "print64PCL.msi" /qn TARGETDIR="C:\some\empty\folder"
    ```
-4. The result lands under `<TARGETDIR>\Lexmark\Lexmark Universal v2\Drivers\Print\GDI\` - a real
-   `LMUD1o40.inf` alongside its `.dl_`/`.gd_`/`.gp_`/`.tx_`/`.in_` compressed siblings and `amd64`/`i386`
-   subfolders of compiled binaries the INF references.
-5. Decompress the compressed siblings with Windows' own `expand.exe` (one call per file, since it
-   doesn't batch-process a whole folder):
+   This alone gets the main `.inf` out correctly (`LMUD1o40.inf`, not the mangled `LMUD1o40inf` a
+   plain archive-tool extraction of the `.msi` produces) - the `.msi`'s own file table maps its
+   internal mangled CAB entry names back to real ones, which only an administrative install (not a
+   generic un-zip/un-cab tool) actually reads.
+4. The result lands under `<TARGETDIR>\Lexmark\Lexmark Universal v2\Drivers\Print\GDI\` - the real
+   `.inf` alongside its `.dl_`/`.gd_`/`.gp_`/`.tx_`/`.in_`/`.xm_`/`.pn_`/`.ex_` compressed siblings
+   (Microsoft's legacy single-file-compressed form) and `amd64`/`i386` subfolders of compiled binaries
+   the INF references.
+5. Decompress every compressed sibling with Windows' own `expand.exe`, **using `-R` (restore original
+   name) rather than guessing the real extension from the compressed one**:
    ```
-   expand LMUD1o40.dl_ LMUD1o40.dll
+   expand -R LMUD1o40.gd_
    ```
-   (map each `.??_`/`.??_64` extension to its real one: `.dl_`/`.dl_64` -> `.dll`, `.ex_` -> `.exe`,
-   `.gd_`/`.gp_` -> `.gpd`, `.tx_` -> `.txt`, `.in_` -> `.inf`, `.pn_` -> `.png`.)
+   This matters more than it looks: the extension-to-extension mapping isn't the simple 1:1 scheme it
+   looks like at a glance - `.gd_` decompresses to `.gdl` and `.in_` to `.ini` here, *not* to `.gpd`/
+   `.inf` as their names suggest (there's a genuinely separate `.gp_` -> `.gpd` pair too). Guessing
+   this mapping (as an early pass at this did) silently produces a wrong-but-plausible-looking result:
+   it can overwrite a file the `.msi` already extracted correctly (the real `.inf`, clobbered by
+   decompressing `.in_` on top of it under the same assumed name) and leave genuinely-required files
+   named `.gdl` missing entirely (assumed to be redundant with `.gpd` and silently never produced) -
+   both errors that `SetupCopyOEMInf`/`BuildCatalog` tolerate quietly enough at staging time to look
+   like success, while `AddPrinter` fails outright the moment something tries to actually use the
+   driver (`ERROR_CAN_NOT_COMPLETE`) - a good example of why "it staged with no error" isn't the same
+   as "it actually works," and worth re-verifying end to end rather than stopping at the first
+   success signal. `-R` sidesteps the whole problem by asking `expand.exe` itself, which reads the
+   real name straight out of the compressed file's own header instead of guessing from its extension.
 6. Move the resulting folder into `Drivers\Windows\<version>\Lexmark\`, renamed to something
    version-identifying.
 
-This gets you a folder `BuildCatalog` correctly recognizes as `"Lexmark Universal v2"` - confirmed - but
-until the INF-style install question above is resolved, PDT will offer it as a Manufacturer/Driver
-option and then fail to actually install it.
+This produces a folder that both `driver.BuildCatalog` (finds and catalogs it as
+`"Lexmark Universal v2"`) and PDT's existing `SetupCopyOEMInf`-based install path
+(`driverinstall_windows.go` - the exact same mechanism used for every other manufacturer here, no
+Lexmark-specific code needed) handle correctly with no changes.
 
 ### Kyocera: self-extracting `.exe` packages
 

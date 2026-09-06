@@ -4,6 +4,43 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-06 - Lexmark actually works - yesterday's "known limitation" entry was wrong
+
+### Fixed
+- **The "Lexmark: known limitation" entry a few sections down was itself the result of two of my own
+  mistakes, not a real Lexmark incompatibility** - corrected after redoing the whole investigation
+  with a genuinely elevated session (see below) and finding driver install, printer creation,
+  duplex/color, and APF all work correctly through PDT's existing, unmodified code. What actually
+  happened:
+  1. The PowerShell session used for yesterday's testing had silently lost its elevation partway
+     through the conversation (confirmed via `whoami /groups` - Medium integrity, Administrators
+     group present but "deny only", the signature of a UAC-filtered non-elevated token) - re-tested a
+     known-good Canon driver install in that same session and it failed identically, proving the
+     session itself was the problem, not Lexmark. Fixed once the user relaunched the terminal as
+     Administrator.
+  2. Separately, and more subtly: the extraction script guessed each compressed file's real extension
+     from its compressed one (`.gd_` -> assumed `.gpd`, `.in_` -> assumed `.inf`) rather than asking
+     `expand.exe` for the real embedded name (`expand -R`) - the guess was wrong for both. `.in_`
+     actually decompresses to `.ini`, so the guess clobbered the real `.inf` (already correctly
+     extracted by the earlier `msiexec /a` step) with unrelated `.ini` content sharing the same
+     assumed filename - silently, since both are small text files. `.gd_` actually decompresses to
+     `.gdl`, a file the driver's own `CopyFiles` section requires and which never got created at all
+     under the wrong assumed `.gpd` name - `SetupCopyOEMInf` tolerated the missing file quietly enough
+     at staging time to report success, but `AddPrinter` failed the moment anything tried to actually
+     use the driver (`ERROR_CAN_NOT_COMPLETE`), confirmed independently through PDT's own code,
+     native `Add-Printer`, and against both the `NUL:` port and a real Standard TCP/IP port (ruling
+     out a port-specific cause).
+  See the updated "Lexmark: self-extracting RAR + `.msi`-packaged drivers" section in the README for
+  the corrected procedure using `expand -R`.
+
+### Verified
+- Full round-trip against the real package: `msiexec /a` extraction, `expand -R` decompression of
+  every compressed sibling, `EnsureDriverInstalled` (stage + register - PDT's existing
+  `driverinstall_windows.go`, no changes), `CreatePrinter` bound to `NUL:`, `SetDuplexAndColor` +
+  `GetDevmode` round-trip, `SetAdvancedPrintingFeatures` - all succeeded. Cleaned up afterward
+  (test printer deleted, driver package removed via `pnputil /delete-driver`, confirmed gone via
+  `Get-Printer`/`Get-PrinterPort`/`pnputil /enum-drivers`) and confirmed nothing was left behind.
+
 ## 2026-09-06 - Manufacturer sort order, Lexmark support (metadata only)
 
 ### Added
@@ -17,17 +54,17 @@ limitation carries forward from it.
   exempt and always alphabetical instead.
 - **Lexmark** added to `driver.Manufacturers` with a default-driver token rule (`Universal`, `v2` ->
   "Lexmark Universal v2") and a default update-check URL - the catalog-matching/metadata side is fully
-  wired up like every other manufacturer. **Actually deploying a Lexmark driver through PDT does not
-  work yet** - see the README's new "Lexmark: known limitation" section for what was tried and found:
-  the driver package is a self-extracting RAR archive (not zip/7z - can't be auto-extracted the way
-  `.zip` packages are), its `.msi`-embedded files need an MSI administrative install
-  (`msiexec /a ... /qn TARGETDIR=...`) plus `expand.exe` to become real, correctly-named files
-  `BuildCatalog` can parse (confirmed working), but the resulting INF is rejected by Windows' own
-  `pnputil` and by PDT's `SetupCopyOEMInf`-based install path alike ("the style of the INF is
-  different than what was requested") - likely because it's an internal multi-OS template Lexmark's
-  own installer tooling preprocesses before real use, not something meant for direct driver-staging
-  API calls. Left as a known limitation rather than silently omitting Lexmark or claiming it fully
-  works.
+  wired up like every other manufacturer. The driver package is a self-extracting RAR archive (not
+  zip/7z - can't be auto-extracted the way `.zip` packages are); its `.msi`-embedded files need an MSI
+  administrative install (`msiexec /a ... /qn TARGETDIR=...`) plus `expand.exe` to become real,
+  correctly-named files `BuildCatalog` can parse.
+  **Update, same day**: this entry originally reported actual deployment as a known-broken limitation
+  ("the style of the INF is different than what was requested") - that finding was wrong, caused by
+  two mistakes on my end (a session that had silently lost admin elevation, and a wrong guess at which
+  real filename each compressed sibling file decompresses to), not a real Lexmark incompatibility. See
+  the later "Lexmark actually works" entry above for the correction and the "Lexmark:
+  self-extracting RAR + `.msi`-packaged drivers" section in the README for the corrected procedure -
+  deployment is fully verified working through PDT's existing, unmodified install code.
 - Considered and deliberately **excluded Brother**: no universal print driver compatible with most of
   its larger models, and its lineup targets home/small-office rather than fleet deployment.
 

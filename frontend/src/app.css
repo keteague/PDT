@@ -380,6 +380,19 @@ table.grid td.checkbox-cell {
     font-size: 12px;
 }
 
+/* #settingsSitesPanel's own children (.modal-field labels) each have their
+   own internal label-to-input gap (6px), but the panel itself is a plain div
+   with no gap of its own between entries - without this, one entry's input
+   sits flush against the next entry's label with no visual separation at
+   all, reading as if that label belongs to the field above it. This gap is
+   deliberately wider than the 6px internal one so each entry still reads as
+   its own group. */
+#settingsSitesPanel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
 .about-panel {
     display: flex;
     flex-direction: column;
@@ -400,6 +413,13 @@ table.grid td.checkbox-cell {
 .about-row a {
     color: #7fc4ff;
     word-break: break-all;
+}
+
+.about-update {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
 }
 
 .modal-field {

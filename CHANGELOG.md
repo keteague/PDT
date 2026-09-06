@@ -4,6 +4,87 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-06 - Check for Updates / self-update, repo made public
+
+### Added
+- **Settings > About > Check for Updates**: queries this project's GitHub Releases
+  (`internal/update.FetchLatest`, `GET /repos/keteague/PDT/releases/latest`) and compares the
+  release's tag against `AppVersion` (`driver.CompareVersions` - already a generic dot-separated
+  numeric comparator despite living in the driver package, reused here rather than duplicated).
+  Reports one of: an error (most commonly "no releases have been published yet", since none exist
+  yet - confirmed live against the real, now-public repo), "you are running the latest version", or a
+  newer version available with an **Update Now** button.
+- **Update Now** (`App.ApplyUpdate`): downloads the newer release's `PDT.exe` asset and installs it in
+  place of the running executable, then relaunches it and quits - see "Self-update" below for how that
+  works with no separate installer.
+- `internal/update`: the above as a standalone, unit-tested package (`FetchLatest`, `Download`,
+  `Apply`, `CleanupOldExe`) independent of Wails/`app.go` plumbing.
+
+### Changed
+- The GitHub repo (`keteague/PDT`) is now public - confirmed nothing sensitive is actually tracked in
+  it first: the only driver-related files under git are small `.INF` text fixtures used by unit tests
+  (largest ~320KB), never the real `Drivers/` package tree (which was never committed to begin with -
+  it's resolved next to the running exe at runtime, per "Drivers folder layout" in the README).
+
+### Verified
+- `go build`/`go vet`/`go test` (including new `internal/update` tests against an `httptest` server)
+  and `wails build` all clean.
+- **The core mechanism this whole feature depends on** - replacing a *running* Windows .exe's own
+  file with no separate installer or helper process - confirmed directly against a real running copy
+  of `PDT.exe` before writing any of the surrounding code: `Rename-Item` on the running exe's file
+  succeeded while it kept running, a new file could then be written back at the original path, and the
+  running (now-renamed-underneath-it) process was confirmed still alive and fully functional
+  throughout. This is the Windows behavior `internal/update.Apply` relies on (rename the running exe
+  aside, move the downloaded one into its place).
+- Launching a `requireAdministrator`-manifested child process (`exec.Command(exePath).Start()`, used
+  to relaunch after an update) from an already-elevated parent was separately confirmed not to trigger
+  a second UAC prompt, incidentally, while testing the above (`Start-Process` launched `PDT.exe`
+  immediately with no `-Verb RunAs` and no prompt/delay from an already-elevated shell).
+- Live end-to-end through the real UI (Settings > About > Check for Updates) against the real,
+  now-public GitHub API: correctly reported "no releases have been published yet" (accurate - none
+  exist yet). The full download-and-apply path is exercised by `internal/update`'s own tests against a
+  local `httptest` server; the live "Update Now" path itself needs an actual GitHub release to test
+  against, which doesn't exist yet.
+
+### Release process (new requirement for Check for Updates to find anything)
+- Bump `AppVersion` (`version.go`) and `wails.json`'s `info.productVersion` together, `wails build`,
+  then create a GitHub Release tagged `v<AppVersion>` (e.g. `v0.1.1`) with `build/bin/PDT.exe` uploaded
+  as a release asset named exactly `PDT.exe` - `CheckForUpdate` looks for that exact asset name.
+
+### Self-update mechanism (no installer)
+`ApplyUpdate` downloads the new `PDT.exe` next to the running one, then calls `internal/update.Apply`:
+rename the running exe to `PDT.exe.old`, move the downloaded file to the original `PDT.exe` name, then
+relaunch it and quit. This works because Windows only needs a running executable's *name* freed to
+place a new file there - it doesn't need the file itself closed, and the running process keeps
+executing unaffected from its now-renamed-away file until it exits on its own a moment later. The
+`.old` file is cleaned up the next time the app starts (`update.CleanupOldExe`, called from
+`startup()`), once whatever process left it behind is guaranteed to have already exited. No installer,
+no separate updater binary, and no extra UAC prompt (the relaunch inherits this already-elevated
+process's token) - deliberately simpler than adding an NSIS/Inno installer pipeline, which would only
+be worth it if this app ever needed Start Menu shortcuts or an uninstaller entry, neither of which it
+does today (a single portable exe next to a `Drivers/` folder).
+
+## 2026-09-06 - External Sites tab spacing, About tab verification
+
+### Fixed
+- **Real bug, reported from live use**: in Settings > External Sites, each manufacturer's field had
+  its own internal 6px label-to-input gap (`.modal-field`'s own `gap`), but `#settingsSitesPanel`
+  itself was a plain `<div>` with no gap between the `.modal-field` labels/entries - so one entry's
+  input sat flush against the next entry's label, reading as though that label belonged to the field
+  above it. Fixed by giving `#settingsSitesPanel` its own `display: flex; flex-direction: column; gap:
+  14px` - wider than the 6px internal gap, so each entry still reads as its own group. Confirmed via
+  screenshot after rebuilding: consistent spacing across all five manufacturer entries.
+
+### Verified
+- Found a reliable way to drive the Settings modal after two earlier automation attempts (coordinate
+  clicks + Tab navigation) landed on the wrong control: WebView2 doesn't populate its UI Automation
+  tree with named/typed elements until something first requests it, and the gear button's accessible
+  name is its glyph (`⚙`), not "Settings" - locating and invoking elements by their actual accessible
+  name via `System.Windows.Automation`'s `InvokePattern`, rather than simulated clicks/keystrokes at
+  believed coordinates, opened the modal and switched tabs reliably.
+- Using that method, the previously-unconfirmed **Settings > About** tab is now screenshot-confirmed
+  correct: name, version, author, and the GitHub link all render as expected.
+
 ## 2026-09-05 - App icon, titlebar name/version, Settings > About
 
 ### Added
@@ -32,14 +113,11 @@ limitation carries forward from it.
   confirmed screenshot-matching the new design.
 - `go build`/`go vet`/`go test` and `wails build` all clean.
 
-### Not verified
-- The Settings > About tab's actual rendered content (version/author/GitHub link, and that clicking
-  the link opens the browser) was not confirmed interactively this round - simulated keyboard
-  navigation to reach the Settings gear button landed on an unrelated field instead, consistent with
-  this environment's previously-documented click/focus automation unreliability. The panel reuses the
-  exact same tab-switching and async on-open-populate pattern already visually confirmed for
-  Settings > External Sites, so it's expected to work, but this is a code-review-level claim, not a
-  screenshot-verified one.
+### Not verified at the time (see the 2026-09-06 entry above)
+- The Settings > About tab's actual rendered content wasn't confirmed interactively this round -
+  simulated keyboard navigation to reach the Settings gear button landed on an unrelated field
+  instead. Screenshot-confirmed correct the next day, once UI Automation's `InvokePattern` replaced
+  coordinate-based clicks/keystrokes as the way to drive the Settings modal.
 
 ## 2026-09-05 - Yellow titlebar while deploying
 

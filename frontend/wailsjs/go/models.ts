@@ -87,6 +87,18 @@ export namespace main {
 	        this.repoUrl = source["repoUrl"];
 	    }
 	}
+	export class ApplyUpdateResult {
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ApplyUpdateResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.error = source["error"];
+	    }
+	}
 	export class CatalogStatus {
 	    ok: boolean;
 	    error: string;
@@ -207,6 +219,28 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.saveFileBasePath = source["saveFileBasePath"];
 	        this.manufacturerUrls = source["manufacturerUrls"];
+	    }
+	}
+	export class UpdateCheckResult {
+	    available: boolean;
+	    currentVersion: string;
+	    latestVersion: string;
+	    releaseUrl: string;
+	    assetUrl: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpdateCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.currentVersion = source["currentVersion"];
+	        this.latestVersion = source["latestVersion"];
+	        this.releaseUrl = source["releaseUrl"];
+	        this.assetUrl = source["assetUrl"];
+	        this.error = source["error"];
 	    }
 	}
 

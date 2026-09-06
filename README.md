@@ -239,12 +239,31 @@ user might be editing while a multi-minute deploy is still running elsewhere in 
 A modal with three tabs: **General** (Save File Base Path - where Open/Save Configuration's dialogs
 start from), **External Sites** (one URL per manufacturer, seeded from `defaultManufacturerURLs`
 in `settings.go`, editable and persisted to `%AppData%\PDT\settings.json`), and **About** (version,
-author, and a clickable GitHub link, all sourced from `version.go` via `GetAppInfo`). The Defaults
-panel's **Check for Updates** button opens the currently-selected manufacturer's configured URL in the
-system browser (`OpenManufacturerURL` -> `runtime.BrowserOpenURL`) - no vendor exposes an API to
-actually check the latest driver version, so this only ever hands a human the page to look at
-themselves; true automated version-checking would mean scraping each vendor's download portal
-individually; fragile, and high-maintenance per vendor, so deliberately out of scope here.
+author, a clickable GitHub link, and **Check for Updates** - see below). The Defaults panel's own
+**Check for Updates** button (a different one - printer driver updates, not app updates) opens the
+currently-selected manufacturer's configured URL in the system browser (`OpenManufacturerURL` ->
+`runtime.BrowserOpenURL`) - no vendor exposes an API to actually check the latest driver version, so
+this only ever hands a human the page to look at themselves; true automated version-checking would
+mean scraping each vendor's download portal individually; fragile, and high-maintenance per vendor, so
+deliberately out of scope here.
+
+### Checking for and applying app updates (`internal/update`, About tab)
+
+Unlike driver updates above, PDT's *own* updates genuinely can be checked and applied automatically,
+since this project's GitHub Releases are under our own control: About's **Check for Updates** queries
+`GET /repos/keteague/PDT/releases/latest` and compares the release tag against `AppVersion`
+(numerically, via `driver.CompareVersions` - a generic comparator despite living in the driver
+package). If newer, **Update Now** downloads that release's `PDT.exe` asset and installs it in place
+of the running executable, then relaunches it - see `internal/update`'s doc comment for how that works
+with **no separate installer**: Windows lets a running executable's file be renamed out of the way
+while it keeps running from the renamed file, which is enough to drop the new exe in at the original
+name; the process finishes on its own a moment later and its renamed-away `.old` file is cleaned up
+the next time the app starts.
+
+**For this to find anything**, a release actually has to exist: bump `AppVersion` (`version.go`) and
+`wails.json`'s `info.productVersion` together, `wails build`, then create a GitHub Release tagged
+`v<AppVersion>` with `build/bin/PDT.exe` uploaded as a release asset named exactly `PDT.exe` (the exact
+name `CheckForUpdate` looks for).
 
 ### App identity (titlebar, icon, version)
 

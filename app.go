@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -12,6 +15,7 @@ import (
 	"PDT/internal/driver"
 	"PDT/internal/printer"
 	pdtwin "PDT/internal/printer/windows"
+	"PDT/internal/update"
 )
 
 const deployProgressEvent = "deploy-progress"
@@ -50,6 +54,13 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.settings = loadSettings()
+
+	// Best-effort cleanup of a previous update's renamed-aside old exe (see
+	// internal/update.Apply) - by the time this process is running at all,
+	// whatever process left that file behind has necessarily already exited.
+	if exe, err := os.Executable(); err == nil {
+		update.CleanupOldExe(exe)
+	}
 
 	catalog, err := driver.BuildCatalog(driversRoot())
 	if err != nil {
@@ -136,6 +147,86 @@ func (a *App) GetAppInfo() AppInfo {
 // browser - the About tab's repo link.
 func (a *App) OpenRepoURL() {
 	runtime.BrowserOpenURL(a.ctx, appRepoURL)
+}
+
+// updateAssetName is the exact GitHub release asset name CheckForUpdate looks
+// for - the release process for this app is to build with `wails build` and
+// upload build/bin/PDT.exe under this same name to each GitHub release.
+const updateAssetName = "PDT.exe"
+
+// repoSlug is appRepoURL in GitHub API "owner/name" form.
+func repoSlug() string {
+	return strings.TrimPrefix(appRepoURL, "https://github.com/")
+}
+
+// UpdateCheckResult is CheckForUpdate's outcome.
+type UpdateCheckResult struct {
+	Available      bool   `json:"available"`
+	CurrentVersion string `json:"currentVersion"`
+	LatestVersion  string `json:"latestVersion"`
+	ReleaseURL     string `json:"releaseUrl"`
+	AssetURL       string `json:"assetUrl"`
+	Error          string `json:"error"`
+}
+
+// CheckForUpdate queries this project's GitHub Releases for a version newer
+// than AppVersion - Settings > About's "Check for Updates" button. Comparison
+// is numeric (driver.CompareVersions - a generic dot-separated numeric
+// comparator despite living in the driver package, already exported for
+// exactly this kind of reuse outside it), not string equality, so "0.1.0"
+// isn't mistaken for older than "0.1.0" due to formatting. AssetURL is left
+// empty (with Available still true) if the matching release has no
+// updateAssetName asset to download - a release published without one is a
+// process mistake worth surfacing, not silently ignoring.
+func (a *App) CheckForUpdate() UpdateCheckResult {
+	rel, err := update.FetchLatest(repoSlug())
+	if err != nil {
+		return UpdateCheckResult{CurrentVersion: AppVersion, Error: err.Error()}
+	}
+
+	latest := strings.TrimPrefix(rel.TagName, "v")
+	result := UpdateCheckResult{CurrentVersion: AppVersion, LatestVersion: latest, ReleaseURL: rel.HTMLURL}
+	if driver.CompareVersions(latest, AppVersion) > 0 {
+		result.Available = true
+		if asset := rel.Asset(updateAssetName); asset != nil {
+			result.AssetURL = asset.DownloadURL
+		} else {
+			result.Error = fmt.Sprintf("release %s has no %s asset to download", rel.TagName, updateAssetName)
+		}
+	}
+	return result
+}
+
+// ApplyUpdateResult is ApplyUpdate's outcome. Error is "" on success, in
+// which case the app has already relaunched itself and this process is about
+// to quit - there is nothing further for the frontend to do either way.
+type ApplyUpdateResult struct {
+	Error string `json:"error"`
+}
+
+// ApplyUpdate downloads assetURL (from a prior CheckForUpdate result),
+// installs it in place of the running executable, relaunches it, and quits
+// this process - see internal/update's doc comment for how replacing a
+// running .exe works on Windows with no separate installer. Runs inline with
+// no progress reporting since it's one small exe download, not a
+// multi-minute operation like Deploy.
+func (a *App) ApplyUpdate(assetURL string) ApplyUpdateResult {
+	exePath, err := os.Executable()
+	if err != nil {
+		return ApplyUpdateResult{Error: err.Error()}
+	}
+	tmpPath, err := update.Download(assetURL, exePath)
+	if err != nil {
+		return ApplyUpdateResult{Error: err.Error()}
+	}
+	if err := update.Apply(exePath, tmpPath); err != nil {
+		return ApplyUpdateResult{Error: err.Error()}
+	}
+	if err := exec.Command(exePath).Start(); err != nil {
+		return ApplyUpdateResult{Error: "update installed, but failed to relaunch: " + err.Error()}
+	}
+	runtime.Quit(a.ctx)
+	return ApplyUpdateResult{}
 }
 
 // driversRoot resolves the Drivers/ folder next to the running executable

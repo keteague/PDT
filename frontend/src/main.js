@@ -5,7 +5,7 @@ import {
     Manufacturers, Models, DriverCandidates, DefaultDriverFor, GetCatalogStatus,
     NewCsvTemplate, ImportCsv, OpenConfiguration, SaveConfiguration, Deploy,
     GetSettings, SaveSettings, PickFolder, OpenManufacturerURL,
-    GetAppInfo, OpenRepoURL,
+    GetAppInfo, OpenRepoURL, CheckForUpdate, ApplyUpdate,
 } from '../wailsjs/go/main/App';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 
@@ -152,6 +152,11 @@ document.querySelector('#app').innerHTML = `
           <div class="about-row"><span class="about-label">GitHub</span>
             <a href="#" id="aboutRepoLink" title="Open in your browser"></a>
           </div>
+        </div>
+        <div class="about-update">
+          <button type="button" id="btnCheckUpdate" title="Check this project's GitHub Releases for a newer version.">Check for Updates</button>
+          <button type="button" class="primary" id="btnApplyUpdate" hidden title="Download and install the update, then relaunch.">Update Now</button>
+          <span class="modal-hint" id="updateStatus"></span>
         </div>
       </div>
       <div class="modal-actions">
@@ -772,12 +777,61 @@ async function renderAboutPanel() {
     });
 }
 
+// The asset URL from the most recent CheckForUpdate result with an update
+// available - stashed here rather than re-derived, since Update Now needs to
+// hand it straight back to ApplyUpdate without asking GitHub again.
+let pendingUpdateAssetUrl = '';
+
+async function checkForUpdate() {
+    const btn = el('btnCheckUpdate');
+    const status = el('updateStatus');
+    btn.disabled = true;
+    el('btnApplyUpdate').hidden = true;
+    status.textContent = 'Checking...';
+    try {
+        const result = await CheckForUpdate();
+        if (result.error) {
+            status.textContent = result.error;
+        } else if (result.available) {
+            status.textContent = `Version ${result.latestVersion} is available (you have ${result.currentVersion}).`;
+            pendingUpdateAssetUrl = result.assetUrl;
+            el('btnApplyUpdate').hidden = !result.assetUrl;
+        } else {
+            status.textContent = 'You are running the latest version.';
+        }
+    } catch (e) {
+        status.textContent = `Update check failed: ${e}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function applyUpdate() {
+    const btn = el('btnApplyUpdate');
+    btn.disabled = true;
+    el('updateStatus').textContent = 'Downloading and installing the update...';
+    try {
+        const result = await ApplyUpdate(pendingUpdateAssetUrl);
+        if (result.error) {
+            el('updateStatus').textContent = result.error;
+            btn.disabled = false;
+        }
+        // On success the app relaunches itself and this process quits - there's
+        // nothing further to show here.
+    } catch (e) {
+        el('updateStatus').textContent = `Update failed: ${e}`;
+        btn.disabled = false;
+    }
+}
+
 function wireSettingsModal() {
     renderSettingsSitesPanel();
     renderAboutPanel();
 
     el('btnSettings').addEventListener('click', openSettingsModal);
     el('btnSettingsCancel').addEventListener('click', closeSettingsModal);
+    el('btnCheckUpdate').addEventListener('click', checkForUpdate);
+    el('btnApplyUpdate').addEventListener('click', applyUpdate);
 
     for (const btn of document.querySelectorAll('.tab-btn')) {
         btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab));

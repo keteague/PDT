@@ -11,8 +11,9 @@ that documentation didn't cover it, verified directly against this machine's rea
 ## Status
 
 - **Phase 1 - data layer** (`internal/config`, `internal/driver`, `internal/printer` types): CSV/JSON
-  import-export, the driver catalog (multi-version/multi-arch scanning of a `Drivers/<Manufacturer>/...`
-  tree, `Archive` subfolders excluded), driver-name/version resolution, and the platform-independent
+  import-export, the driver catalog (multi-version/multi-arch scanning of a
+  `Drivers/Windows/<any version folder>/<Manufacturer>/...` tree - see "Drivers folder layout" below -
+  `Archive` subfolders excluded), driver-name/version resolution, and the platform-independent
   `PrinterRow`/`DeployRequest`/`DeployResult` shapes every phase builds on. Done.
 - **Phase 2 - Win32 bindings** (`internal/printer/windows`): hand-written syscall bindings for every
   winspool.drv/setupapi.dll operation the tool needs - `golang.org/x/sys/windows` has no
@@ -22,8 +23,10 @@ that documentation didn't cover it, verified directly against this machine's rea
   printer -> conditional NUL:-to-real-port rebind -> print config -> APF) wired on top of phases 1-2,
   plus the confirmation-dialog flows for driver-version changes and printer updates. Done; see
   "Deploy sequence" below.
-- **Not started**: the Wails frontend itself (`app.go`/`frontend/` are still the unmodified project
-  template) and macOS/Linux support (`printer.Deployer` is implemented for Windows only; there is no
+- **Phase 4 - Wails frontend** (`app.go`, `frontend/src/`): the actual GUI - a plain HTML/CSS/vanilla-JS
+  grid (no framework), the `App` struct's bound methods the frontend calls, and native OS dialogs for
+  file pickers and deploy confirmations. Done; see "Frontend" below.
+- **Not started**: macOS/Linux support (`printer.Deployer` is implemented for Windows only; there is no
   `darwin`/other-OS stub yet).
 
 ## Windows bindings (`internal/printer/windows`)
@@ -58,6 +61,64 @@ machine's real spooler for one throwaway printer, auto-confirming every prompt, 
 itself (unless `nocleanup` is given, to set up a same-row redeploy test). Run `pdtdebug` with no
 arguments for the full command list.
 
+## Drivers folder layout
+
+`driver.BuildCatalog(driversRoot)` (`internal/driver/catalog.go`) expects:
+
+```
+Drivers/
+  Windows/
+    11/                          <- any name; every folder under Windows/ is scanned and merged
+      Canon/...
+      HP/...
+      Kyocera/...
+      Ricoh/...
+      Sharp/...
+```
+
+Every folder found directly under `Drivers/Windows/` is scanned and merged into one catalog - a
+printer driver is rarely genuinely Windows-version-specific the way it can be for macOS (see below),
+so there's no attempt to detect/match the running Windows version to a specific folder. Each
+manufacturer folder's own internal structure (multi-version, multi-arch, `Archive` subfolders
+excluded) is unchanged from before this layout existed.
+
+**Back-compat**: if `driversRoot` has no `Windows` subfolder at all, it's treated as the older flat
+layout (`Drivers/<Manufacturer>/...` directly) - this is what the unit tests under
+`internal/driver/testdata/` still use, and what an old, pre-reorg `Drivers` folder would still work
+against unmodified.
+
+**`.zip` packages are extracted automatically** (`internal/driver/zip.go`, `ensureZipsExtracted`,
+called before each manufacturer folder is scanned): confirmed necessary against a real package
+(Sharp's UD3 driver ships as `UD3_07_PCL6_2510a.zip`) - `BuildCatalog` only ever looks for `.inf`
+files already sitting on disk, so a driver that's never been extracted is otherwise completely
+invisible to it. `Foo.zip` extracts to a sibling `Foo/` folder the first time it's seen; if that
+folder already exists (however it got there - this, or a manual extraction), it's left alone and not
+re-extracted. A zip that fails to extract (corrupt, or an entry that would land outside the
+destination folder) is skipped rather than failing the whole catalog scan, and any partial output is
+cleaned up so a later run - once whatever's wrong is fixed - retries instead of mistaking a partial
+extraction for a complete one.
+
+**Default driver per manufacturer** (`internal/driver/default.go`, `DefaultDriverNameFor`): the
+Defaults panel pre-selects a specific driver name when a manufacturer is chosen (Canon -> its UFR II
+driver, HP/Ricoh -> PCL 6, Sharp -> PCL 6 UD3), matched by token presence (case- and
+whitespace-insensitive, order-independent) against the real catalog rather than an exact string -
+confirmed necessary since vendors aren't consistent about it even within this one Drivers folder
+("PCL 6" vs "PCL6", and Sharp's own driver is literally named "SHARP UD3 PCL6", tokens reversed from
+how "PCL 6 UD3" reads out loud).
+
+**macOS is not read by this function at all yet.** The real macOS side of the Drivers tree (being
+built out alongside the Windows side) nests the *other* way - `Drivers/macOS/<Manufacturer>/<macOS
+version>/...` (version under manufacturer, not manufacturer under version like Windows) - reflecting
+that macOS driver packages genuinely do vary by OS release in a way Windows ones generally don't.
+There is also a `Drivers/macOS/OpenPrinting/<Manufacturer>/*.ppd` bucket (flat, no version
+breakdown) as a fallback source for manufacturers/models with nothing better. None of this is
+scanned yet - `internal/driver` has no macOS-specific code, and there is no macOS `Deployer`
+implementation at all (this tool remains Windows-only for now). The bigger open question for that
+work: most of the macOS packages on disk are `.dmg` images (some wrapping a nested `.dmg`, most
+ultimately containing a `.pkg` installer) - extracting the driver files (or PPDs) from those without
+either running a full installer or requiring a macOS host to mount them is unsolved and needs its
+own design pass before any macOS catalog-scanning code gets written.
+
 ## Deploy sequence (`internal/printer/windows/deploy_windows.go`)
 
 `Deployer.Deploy` ports `Create-Printers.ps1`'s `Deploy-PrinterRow`, in the same order (port ->
@@ -75,8 +136,23 @@ simplification versus the original: there is no `BindNulPort` checkbox. Instead:
 driver install, `CreatePrinter`/`SetInfo2`, the NUL:-to-real-port rebind) is the one thing that
 matters most - failing any of those steps is fatal *for that row only* (`DeployResult.Err`, logged
 `[ERR]`) and `printer.DeployAll` always continues to the next row regardless. Everything after the
-object exists - duplex/color, advanced printing features - is best-effort: a failure there is a
-`[WARN]`, never stops the row, and both are always attempted even if one already failed.
+object exists - duplex/color, advanced printing features, "Print spooled documents first" - is
+best-effort: a failure there is a `[WARN]`, never stops the row, and all of them are always attempted
+even if an earlier one already failed.
+
+**Duplex/color is set two ways, deliberately** - `SetDuplexAndColor` (raw DEVMODE) *and*
+`SetPrintConfigurationViaShell` (shells out to `Set-PrintConfiguration`). Confirmed necessary against
+a real Canon UFR II printer: DEVMODE alone was already correct (verified via .NET's own
+`PrinterSettings`, independent of this tool), yet the printer's own Properties dialog and
+`Get-PrintConfiguration` still showed the opposite settings - they read from a separate
+PrintTicket-based store DEVMODE never touches, apparently left at the driver's install-time default
+until something updates it explicitly. Both calls target the same end state, so this is redundant on
+drivers where DEVMODE alone would have been enough - the cost is one extra `powershell.exe` launch
+per row, worth it since there's no way to tell in advance whether a given driver needs it.
+
+**"Print spooled documents first"** (`SetPrintSpooledDocumentsFirst`, `PRINTER_ATTRIBUTE_DO_COMPLETE_FIRST`)
+is enabled unconditionally for every row - unlike APF, there's no per-row checkbox for it; it's just
+a fixed default every deployment gets.
 
 Every log line is timestamped and level-tagged (`internal/printer/log.go`'s `Logger`:
 `[INFO]`/`[OK]`/`[WARN]`/`[ERR]`) so the UI can show a row's progress directly with no further
@@ -102,10 +178,78 @@ leaves it completely untouched; print configuration and APF still apply independ
 
 Every row first checks whether a Standard TCP/IP port already targets its IP (registry-based,
 `portlookup_windows.go`) and reuses it if so - this also doubles as the fix for ever creating a
-genuine duplicate port for a host that already has one, e.g. on redeploy. If `UseExistingPort` is
-checked and no such port exists, that's a fatal error for the row. Otherwise a new port is created,
-named `<prefix><ip>` (or just `<ip>` with no prefix set), with a numeric suffix appended only if
-that exact name is already in use by a *different* host.
+genuine duplicate port for a host that already has one, e.g. on redeploy. Otherwise a new port is
+created, named `<prefix><ip>` (or just `<ip>` with no prefix set), with a numeric suffix appended
+only if that exact name is already in use by a *different* host - including when `UseExistingPort`
+is checked but no existing port targets the IP: that's a fallback to creating one, not a failure.
+
+## Frontend (`app.go`, `frontend/src/`)
+
+Plain HTML/CSS/vanilla JS (no framework) - a single-page grid mirroring the original tool's layout:
+top bar (SalesChain ID, Open/Save Configuration), a Defaults panel (Manufacturer/Model/Driver, then
+the **Port** / **Print Defaults** / **Advanced** subsections, all used by "Add Printer"), a toolbar
+(Add Printer/Remove Selected on the left, New CSV/Import CSV, then Deploy on the right), the row grid
+itself, and a live log panel.
+
+**Model and Driver are a small custom combobox** (`setupCombobox()` in `main.js`), not a native
+`<input list=...><datalist>` - datalist only offers suggestions once the user starts typing (no
+"click to see everything available" the way the original WinForms ComboBox did) and its filtering is
+inconsistent across browsers, so it didn't actually deliver the original "type to filter" feel.
+Every instance (Defaults panel and each grid row) owns its own DOM elements and closure state, so -
+unlike the WinForms `DataGridView` bug that forced a full rewrite of the original tool's grid, rooted
+in cells sharing one live editing control - there's no shared state for one row's combobox to leak
+into another's. Model candidates are filtered client-side (substring match) against `Models()`'s
+full per-manufacturer list; Driver candidates are forwarded straight to `DriverCandidates()`, which
+already fuzzy-filters/ranks server-side.
+
+`app.go`'s `App` struct is the only thing the frontend talks to (Wails auto-generates
+`frontend/wailsjs/go/main/App.d.ts`/`.js` from its exported methods on every `wails build`/`wails dev`
+- regenerate with `wails generate module` after changing that struct's method set). Two things shaped
+its design:
+
+- **Wails only supports a bound method returning `(T)` or `(T, error)`** - never more outputs, and
+  anything else is silently dropped - so every method that can both fail *and* needs a second signal
+  (a canceled file dialog, a row's error message) wraps its result in a small DTO (`PathResult`,
+  `ImportResult`, `DeployRowResult`, ...) instead.
+- **A bare Go `error` value doesn't JSON-marshal its message at all** (most concrete error types have
+  no exported fields - it would cross the wire as `{}`), so `DeployRowResult.Error` is a plain
+  `string` (`""` on success), never a Go `error`.
+
+Deploying streams live progress: `Deploy` emits a `"deploy-progress"` event (one `DeployRowResult`)
+after each row finishes - necessary since a single HP row alone can run for minutes even with the
+NUL: workaround declined - in addition to returning every result once the whole run completes.
+Confirmation dialogs (driver-version change, printer update) are native OS Yes/No message boxes
+(`runtime.MessageDialog`), the same kind of blocking modal the original tool used (a WinForms
+`MessageBox`), just through Wails' cross-platform equivalent. The driver catalog is built once at
+startup from a `Drivers/` folder next to the running executable (falling back to `./Drivers` under
+the working directory for `wails dev`).
+
+The grid never does a full-table re-render while a deploy is running or while progress events are
+arriving - only the specific row a progress event is about gets its success/failure class toggled,
+by a stable per-row `_id` rather than by array position or by name (which the tool has never required
+to be unique). A full re-render there would destroy focus and in-progress edits in any other row the
+user might be editing while a multi-minute deploy is still running elsewhere in the grid.
+
+### Settings (gear icon, top-right)
+
+A modal with two tabs: **General** (Save File Base Path - where Open/Save Configuration's dialogs
+start from) and **External Sites** (one URL per manufacturer, seeded from `defaultManufacturerURLs`
+in `settings.go`, editable and persisted to `%AppData%\PDT\settings.json`). The Defaults panel's
+**Check for Updates** button opens the currently-selected manufacturer's configured URL in the
+system browser (`OpenManufacturerURL` -> `runtime.BrowserOpenURL`) - no vendor exposes an API to
+actually check the latest driver version, so this only ever hands a human the page to look at
+themselves; true automated version-checking would mean scraping each vendor's download portal
+individually; fragile, and high-maintenance per vendor, so deliberately out of scope here.
+
+### Startup readiness (`App.ready`)
+
+Every method reading `catalog`/`modelIndex`/`settings` blocks on `<-a.ready` (closed once `startup`
+finishes populating them) before proceeding. This turned out to be a real bug, not just defensive
+coding: Wails does not block the frontend's own script from running until `OnStartup` returns, and
+`BuildCatalog` scanning a real `Drivers` folder - particularly with zip extraction added - easily
+takes longer than the frontend needs to fire its first catalog-dependent call (`DefaultDriverFor` on
+page load), which was silently seeing `catalog`/`modelIndex` still at their nil zero value and
+returning empty/wrong results with no error at all.
 
 ## Building / testing
 

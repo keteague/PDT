@@ -20,6 +20,14 @@ func main() {
 		Title:  "PDT",
 		Width:  1024,
 		Height: 768,
+		// The window is otherwise freely resizable (and correctly per-monitor
+		// DPI-aware - see build/windows/wails.exe.manifest's dpiAwareness
+		// declaration, which WebView2 honors automatically) - this floor just
+		// keeps the user from shrinking it below a size the flex-wrap layout
+		// has actually been verified to still hold up at with no clipping or
+		// overlap.
+		MinWidth:  700,
+		MinHeight: 520,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

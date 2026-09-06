@@ -96,6 +96,30 @@ func TestBuildCatalog_KyoceraVersionsAndDates(t *testing.T) {
 	}
 }
 
+func TestBuildCatalog_WindowsVersionNestedLayout(t *testing.T) {
+	// Mirrors the real on-disk layout as reorganized: driversRoot/Windows/
+	// <any version folder>/<Manufacturer>/... rather than driversRoot/
+	// <Manufacturer>/... directly - testdata_windows_layout/Windows/11/Canon
+	// is a copy of testdata/Canon one level deeper, under a "Windows/11"
+	// prefix, to prove this layout is actually found and scanned.
+	cat, err := BuildCatalog("testdata_windows_layout")
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+	versions := cat["Canon"]["Canon Generic Plus UFR II"]
+	if len(versions) != 1 {
+		t.Fatalf("expected exactly 1 version group for Canon Generic Plus UFR II under the nested Windows/11 layout, got %d: %v", len(versions), versions)
+	}
+	for _, archMap := range versions {
+		if _, ok := archMap["32bit"]; !ok {
+			t.Errorf("expected 32bit arch entry, got %v", archMap)
+		}
+		if _, ok := archMap["x64"]; !ok {
+			t.Errorf("expected x64 arch entry, got %v", archMap)
+		}
+	}
+}
+
 func TestPreferredArchTokens_HostArch(t *testing.T) {
 	if runtime.GOARCH != "amd64" {
 		t.Skip("this table assumes the dev/CI host is amd64")

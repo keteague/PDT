@@ -1,54 +1,406 @@
-#logo {
-    display: block;
-    width: 50%;
-    height: 50%;
-    margin: auto;
-    padding: 10% 0 0;
-    background-position: center;
-    background-repeat: no-repeat;
-    background-size: 100% 100%;
-    background-origin: content-box;
+* {
+    box-sizing: border-box;
 }
 
-.result {
-    height: 20px;
-    line-height: 20px;
-    margin: 1.5rem auto;
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
 }
 
-.input-box .btn {
-    width: 60px;
-    height: 30px;
-    line-height: 30px;
-    border-radius: 3px;
-    border: none;
-    margin: 0 0 0 20px;
+.top-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: #1f2c3d;
+    border-bottom: 1px solid #33455c;
+}
+
+.top-bar .catalog-warning {
+    color: #ffb454;
+    margin-left: auto;
+    font-size: 12px;
+}
+
+.toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    background: #223247;
+    border-bottom: 1px solid #33455c;
+}
+
+.toolbar .spacer {
+    flex: 1;
+}
+
+.status-label {
+    font-size: 12px;
+    color: #9fb3c8;
     padding: 0 8px;
+}
+
+button {
+    background: #2d425c;
+    color: white;
+    border: 1px solid #3f5978;
+    border-radius: 4px;
+    padding: 6px 12px;
     cursor: pointer;
+    font-size: 13px;
 }
 
-.input-box .btn:hover {
-    background-image: linear-gradient(to top, #cfd9df 0%, #e2ebf0 100%);
-    color: #333333;
+button:hover:not(:disabled) {
+    background: #3a577a;
 }
 
-.input-box .input {
-    border: none;
+button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+button.primary {
+    background: #2f6f4f;
+    border-color: #3f8f66;
+}
+
+button.primary:hover:not(:disabled) {
+    background: #38835d;
+}
+
+input[type="text"], input[type="number"], select {
+    background: #f0f0f0;
+    color: #111;
+    border: 1px solid #3f5978;
     border-radius: 3px;
-    outline: none;
-    height: 30px;
-    line-height: 30px;
-    padding: 0 10px;
-    background-color: rgba(240, 240, 240, 1);
-    -webkit-font-smoothing: antialiased;
+    padding: 5px 7px;
+    font-size: 13px;
 }
 
-.input-box .input:hover {
-    border: none;
-    background-color: rgba(255, 255, 255, 1);
+.defaults-panel select {
+    min-width: 140px;
 }
 
-.input-box .input:focus {
+@keyframes flash-red {
+    0%, 100% { background: #f0f0f0; }
+    30% { background: #ff6b6b; }
+}
+
+.input-invalid-flash {
+    animation: flash-red 0.3s ease;
+}
+
+label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+fieldset {
+    border: 1px solid #33455c;
+    border-radius: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    padding: 8px 12px;
+}
+
+legend {
+    padding: 0 6px;
+    color: #9fb3c8;
+    font-size: 12px;
+}
+
+.defaults-panel {
+    padding: 6px 10px;
+    background: #1a2536;
+    border-bottom: 1px solid #33455c;
+}
+
+.defaults-outer {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 4px 12px 8px;
+}
+
+.defaults-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    /* The Manufacturer/Model/Driver row has no border of its own (unlike
+       Port/Print Defaults/Advanced, each their own bordered fieldset right
+       below it), so the flex gap after it reads as noticeably more space
+       than the border-to-border gaps between the fieldsets themselves - a
+       bordered box's own legend visually "absorbs" part of the gap above it
+       in a way a bare row's trailing whitespace doesn't. Pulled in by eye
+       against a screenshot, not computed from any exact box-model number. */
+    margin-bottom: -18px;
+}
+
+.defaults-row .driver-label {
+    flex: 1 1 240px;
+    min-width: 0;
+}
+
+.defaults-row .driver-label .combo {
+    flex: 1;
+    min-width: 0;
+}
+
+.defaults-row .driver-label .combo input {
+    width: 100%;
+}
+
+/* Combobox (Model/Driver): a plain text input plus an absolutely-positioned
+   dropdown of matching candidates - see setupCombobox() in main.js. */
+.combo {
+    position: relative;
+    display: inline-block;
+}
+
+table.grid .combo {
+    display: block;
+    width: 100%;
+}
+
+.combo-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 30;
+    max-height: 220px;
+    overflow-y: auto;
+    background: #f0f0f0;
+    border: 1px solid #3f5978;
+    border-radius: 0 0 3px 3px;
+}
+
+.combo-item {
+    padding: 4px 7px;
+    color: #111;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.combo-item:hover, .combo-item.active {
+    background: #9fc4ec;
+}
+
+table.grid .combo-list {
+    right: auto;
+    white-space: nowrap;
+    width: max-content;
+    min-width: 100%;
+}
+
+.defaults-sub {
+    background: #16202e;
+}
+
+.grid-wrap {
+    flex: 1;
+    overflow: auto;
+    border-bottom: 1px solid #33455c;
+}
+
+table.grid {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12.5px;
+}
+
+table.grid th, table.grid td {
+    border: 1px solid #2c3c50;
+    padding: 4px 6px;
+    text-align: left;
+    white-space: nowrap;
+}
+
+table.grid th {
+    position: sticky;
+    top: 0;
+    background: #223247;
+    z-index: 1;
+}
+
+table.grid tbody tr:nth-child(even) {
+    background: #1c2838;
+}
+
+table.grid tbody tr.row-failed {
+    background: #4a2020;
+}
+
+table.grid tbody tr.row-succeeded {
+    background: #1e3a26;
+}
+
+table.grid input[type="text"] {
+    width: 100%;
+    min-width: 90px;
+}
+
+table.grid td.checkbox-cell {
+    text-align: center;
+}
+
+.row-remove {
+    padding: 2px 8px;
+    font-size: 14px;
+    line-height: 1;
+    color: #ff8a8a;
+    background: transparent;
+    border-color: transparent;
+}
+
+.row-remove:hover {
+    background: #5a2a2a;
+    border-color: #7a3a3a;
+    color: #fff;
+}
+
+.log-panel {
+    height: 200px;
+    display: flex;
+    flex-direction: column;
+    background: #10182300;
+}
+
+.log-panel .log-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: #1a2536;
+}
+
+.log-panel pre {
+    flex: 1;
+    margin: 0;
+    padding: 6px 10px;
+    overflow: auto;
+    white-space: pre-wrap;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 12px;
+    background: #0d1520;
+}
+
+.log-line-err { color: #ff6b6b; }
+.log-line-warn { color: #ffb454; }
+.log-line-ok { color: #6fd88a; }
+.log-line-info { color: #9fb3c8; }
+
+.icon-btn {
+    margin-left: auto;
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px 9px;
+}
+
+/* Settings modal */
+/* :not([hidden]), not a bare .modal-backdrop rule - a plain `display: flex`
+   here would have equal specificity to the browser's default
+   `[hidden] { display: none }` rule and, coming later in the cascade, would
+   always win and defeat `hidden` entirely (confirmed: the modal showed on
+   load despite the `hidden` attribute being present, before this fix). */
+.modal-backdrop:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.modal {
+    background: #1a2536;
+    border: 1px solid #3f5978;
+    border-radius: 6px;
+    padding: 16px 20px;
+    min-width: 420px;
+    max-width: 90vw;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.modal h3 {
+    margin: 0 0 14px;
+}
+
+.tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid #3f5978;
+    margin-bottom: 14px;
+}
+
+.tab-btn {
+    background: transparent;
     border: none;
-    background-color: rgba(255, 255, 255, 1);
+    border-radius: 0;
+    border-bottom: 2px solid transparent;
+    padding: 6px 4px;
+    color: #9fb3c8;
+}
+
+.tab-btn:hover:not(:disabled) {
+    background: transparent;
+    color: white;
+}
+
+.tab-btn.active {
+    color: white;
+    border-bottom-color: #3f8f66;
+}
+
+/* :not([hidden]) - see the .modal-backdrop rule above for why a bare
+   `display: flex` here would defeat the hidden attribute outright. */
+.tab-panel:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 380px;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.modal-hint {
+    margin: 0;
+    color: #9fb3c8;
+    font-size: 12px;
+}
+
+.modal-field {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    white-space: normal;
+}
+
+.path-row {
+    display: flex;
+    gap: 6px;
+}
+
+.path-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 18px;
 }

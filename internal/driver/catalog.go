@@ -13,6 +13,20 @@ import (
 // one top-level folder under the Drivers root.
 var Manufacturers = []string{"Canon", "HP", "Kyocera", "Ricoh", "Sharp"}
 
+// isUsableDriverName filters out driver names too vague to safely deploy
+// under. Confirmed against the real Ricoh Universal Driver package: it
+// declares the exact same driver under both a RICOH-branded name ("RICOH
+// PCL6 UniversalDriver V4.45") and a generic, manufacturer-less alias
+// ("PCL6 Driver for Universal Print") - the alias is unusable here since
+// nothing about it identifies which vendor's driver it actually is, and it
+// would otherwise show up as a selectable, ambiguous-looking option.
+func isUsableDriverName(manufacturer, name string) bool {
+	if manufacturer == "Ricoh" && !strings.Contains(strings.ToUpper(name), "RICOH") {
+		return false
+	}
+	return true
+}
+
 // ArchEntry is one architecture-specific build within a driver's version
 // group: the INF that provides it, and the version/date it declares (which
 // should match the version group's key, but is kept alongside the InfPath
@@ -48,21 +62,70 @@ func formatDateKey(t time.Time) string {
 }
 
 // BuildCatalog ports Build-DriverCatalog: recursively scans each manufacturer
-// folder under driversRoot for .inf files, skipping any path that has an
-// "etc" or "Archive" segment at any depth, and groups the printer driver
-// names it finds by manufacturer -> name -> version -> architecture.
+// folder for .inf files, skipping any path that has an "etc" or "Archive"
+// segment at any depth, and groups the printer driver names it finds by
+// manufacturer -> name -> version -> architecture.
+//
+// Layout: driversRoot/Windows/<any version folder, e.g. "11">/<Manufacturer>/...
+// - every version folder found under Windows/ is scanned and merged into one
+// catalog (a driver is rarely genuinely Windows-version-specific the way it
+// can be for macOS, where the on-disk layout instead nests version under
+// manufacturer - Drivers/macOS/<Manufacturer>/<version>/... - a difference
+// that matters once a macOS Deployer exists to read it; this function only
+// ever reads the Windows side).
+//
+// Back-compat: if driversRoot has no "Windows" subfolder at all, it's treated
+// as the older flat layout (driversRoot/<Manufacturer>/... directly, no
+// platform/version nesting) - keeps this working unmodified against existing
+// testdata fixtures and any pre-reorg Drivers folder.
 func BuildCatalog(driversRoot string) (Catalog, error) {
 	catalog := Catalog{}
 	for _, m := range Manufacturers {
 		catalog[m] = map[string]map[string]map[string]ArchEntry{}
 	}
 
-	entries, err := os.ReadDir(driversRoot)
+	windowsRoot := ""
+	rootEntries, err := os.ReadDir(driversRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return catalog, nil
 		}
 		return nil, err
+	}
+	for _, e := range rootEntries {
+		if e.IsDir() && strings.EqualFold(e.Name(), "Windows") {
+			windowsRoot = filepath.Join(driversRoot, e.Name())
+			break
+		}
+	}
+
+	if windowsRoot == "" {
+		scanManufacturerFolders(catalog, driversRoot)
+		return catalog, nil
+	}
+
+	versionEntries, err := os.ReadDir(windowsRoot)
+	if err != nil {
+		return catalog, nil
+	}
+	for _, ve := range versionEntries {
+		if !ve.IsDir() {
+			continue
+		}
+		scanManufacturerFolders(catalog, filepath.Join(windowsRoot, ve.Name()))
+	}
+	return catalog, nil
+}
+
+// scanManufacturerFolders scans root's immediate children for manufacturer-
+// named folders and merges whatever driver .infs they contain into catalog.
+// Safe to call multiple times against the same catalog (e.g. once per
+// Windows version folder) - ArchEntry merging already keeps the newer file
+// whenever the same manufacturer/name/version/arch is seen more than once.
+func scanManufacturerFolders(catalog Catalog, root string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
 	}
 
 	for _, e := range entries {
@@ -80,7 +143,8 @@ func BuildCatalog(driversRoot string) (Catalog, error) {
 			continue
 		}
 
-		mfgPath := filepath.Join(driversRoot, e.Name())
+		mfgPath := filepath.Join(root, e.Name())
+		ensureZipsExtracted(mfgPath)
 		_ = filepath.WalkDir(mfgPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
@@ -118,6 +182,9 @@ func BuildCatalog(driversRoot string) (Catalog, error) {
 				if dname == "" || seenNames[dname] {
 					continue
 				}
+				if !isUsableDriverName(mfg, dname) {
+					continue
+				}
 				seenNames[dname] = true
 
 				if catalog[mfg][dname] == nil {
@@ -140,5 +207,4 @@ func BuildCatalog(driversRoot string) (Catalog, error) {
 			return nil
 		})
 	}
-	return catalog, nil
 }

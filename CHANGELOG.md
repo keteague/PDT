@@ -4,6 +4,236 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-05 - Print Defaults/Preferences fix, "Print spooled documents first", Save Configuration filename
+
+### Fixed
+- **Real bug, found from a live deployment report**: Canon UFR II printers deployed with Monochrome +
+  1-sided checked were showing "Color (Auto)" and "Duplex, long edge" in their own Properties dialog.
+  Root cause, confirmed against the real printer via three independent checks
+  (`Get-PrintConfiguration`, .NET `System.Drawing.Printing.PrinterSettings`, and re-running
+  `Set-PrintConfiguration` directly): raw DEVMODE (`SetDuplexAndColor`, this rewrite's only
+  duplex/color mechanism until now) was already being set *correctly* - confirmed via
+  `PrinterSettings`, the same mechanism the deploy sequence's own verification step uses - but a
+  Canon UFR II printer's own Properties dialog and `Get-PrintConfiguration` read from a *separate*
+  PrintTicket-based configuration store that DEVMODE alone never touches, and it was staying stale at
+  whatever the driver's own install-time default was. Fixed by additionally calling
+  `Set-PrintConfiguration` (`internal/printer/windows/printconfig_windows.go`,
+  `SetPrintConfigurationViaShell`, shelling out to `powershell.exe`) after the existing DEVMODE step -
+  confirmed by that same three-way check all agreeing afterward. Best-effort/`[WARN]`-only, same as
+  the DEVMODE step it supplements, since DEVMODE alone already governs actual print behavior for most
+  consumers.
+- `PRINTER_ATTRIBUTE_DO_COMPLETE_FIRST` ("Print spooled documents first" on the Advanced tab) was
+  researched and defined (`structs_windows.go`) during Phase 2 but never actually wired into
+  anything - no deployed printer ever had it enabled. Added `SetPrintSpooledDocumentsFirst`
+  (`apf_windows.go`, same `PRINTER_INFO_2.Attributes` mechanism as APF) and call it unconditionally
+  (`enable: true`) for every row - this isn't a per-row checkbox like APF, just a fixed default every
+  deployment should get. Verified via `Get-WmiObject Win32_Printer`'s `Attributes` bitmask against a
+  real deployed printer.
+- Save Configuration's suggested filename was always the generic `printers.json`, ignoring
+  SalesChain ID entirely. `App.SaveConfiguration` now defaults to `<SalesChainID>.json` when
+  SalesChain ID is set (already restricted to filesystem-safe characters by the frontend's own input
+  validation), falling back to `printers.json` only when it's blank.
+
+## 2026-09-05 - SalesChain ID rejection feedback (flash + beep)
+
+### Added
+- SalesChain ID now flashes red and plays a short synthesized beep on any keystroke that actually
+  gets rejected - a disallowed character stripped, or a reserved device name (`PRN`, `COM1`, ...)
+  reverted - never for an ordinary edit, since re-sanitizing an already-valid string is always a
+  no-op. Detected by comparing the field's raw value against what `setSalesChainId` actually applied;
+  they only ever differ when this keystroke was rejected. The beep is a couple of Web Audio nodes
+  torn down right after (`playInvalidDing`), not an embedded audio asset, and fails silently if audio
+  is unavailable rather than blocking the rejection feedback on it.
+
+## 2026-09-05 - Check for Updates, Settings > External Sites, zip-packaged drivers
+
+### Added
+- **Check for Updates** button in the Defaults panel: opens the selected manufacturer's configured
+  driver-download page in the system browser (`OpenManufacturerURL` -> `runtime.BrowserOpenURL`).
+  Deliberately not automated version-checking - no vendor exposes an API for that, and scraping five
+  different download portals individually would be fragile and high-maintenance; this just saves
+  hunting down the URL each time.
+- **Settings > External Sites** tab: one editable URL per manufacturer (seeded with the pages
+  provided - Canon, HP, Kyocera, Ricoh, Sharp - via `defaultManufacturerURLs` in `settings.go`),
+  persisted alongside Save File Base Path in the same `settings.json`. Each manufacturer's URL falls
+  back to its own default independently if left blank, both on load and on save.
+- `internal/driver/zip.go`: `.zip`-packaged driver downloads are now extracted automatically before
+  each manufacturer folder is scanned - confirmed necessary against a real package (Sharp's UD3
+  driver ships as `UD3_07_PCL6_2510a.zip`, previously invisible to `BuildCatalog` since it only ever
+  looked for `.inf` files already sitting on disk). Extracts `Foo.zip` to a sibling `Foo/` folder
+  once; leaves it alone (no re-extraction) if that folder already exists, however it got there.
+  Zip-slip protected (rejects any entry that would extract outside the destination folder); a
+  corrupt/unreadable zip is skipped (with its partial output cleaned up so a later run retries)
+  rather than failing the whole catalog scan.
+
+### Fixed
+- Found while testing the above (the extra zip-scanning I/O made it consistently reproducible,
+  though the underlying bug already existed): `App`'s catalog-dependent methods
+  (`DefaultDriverFor`, `Models`, `DriverCandidates`, `GetCatalogStatus`, `Deploy`, `GetSettings`,
+  `SaveSettings`, `OpenManufacturerURL`, `OpenConfiguration`, `SaveConfiguration`) could run before
+  `startup()` finished populating `catalog`/`modelIndex`/`settings` - Wails does not block the
+  frontend's own script from running until `OnStartup` returns, so a `BuildCatalog` scan slow enough
+  to still be running when the frontend fires its first call (e.g. `DefaultDriverFor` on page load)
+  would silently see nil/zero-value state and return an empty result with no error. Fixed with a
+  `ready` channel every such method now blocks on (`<-a.ready`) before proceeding, closed once
+  `startup()` completes - confirmed by reproducing the empty-Driver-field symptom, then confirming
+  it's gone after the fix, both against the real Drivers folder.
+
+### Verified
+- `DefaultDriverNameFor` re-confirmed correct against the real catalog in isolation (ruling it out as
+  the cause once the startup-race symptom appeared) before diagnosing and fixing the real bug above.
+- New tests: `TestBuildCatalog_ExtractsAndScansZippedDriverPackage` and
+  `TestBuildCatalog_DoesNotReExtractExistingFolder` (zip fixture built on the fly with `archive/zip`
+  rather than committing a binary `.zip` to the repo).
+- Screenshot-confirmed (`PrintWindow`) the Defaults panel's new button placement and that the
+  Settings modal stays correctly hidden on load - proactively checked the new `.tab-panel` CSS for
+  the same `display` vs. `[hidden]` specificity conflict already found and fixed on `.modal-backdrop`
+  earlier, and guarded it the same way (`:not([hidden])`) before it could ship broken.
+
+## 2026-09-05 - Real combobox for Model/Driver, Drivers/Windows/<version> layout support
+
+### Added
+- `setupCombobox()` (`main.js`): a small, self-contained dropdown component replacing the native
+  `<input list=...><datalist>` attempt - shows every current candidate on focus, filters live as you
+  type, click/Enter/arrow-keys to select. Wired up for the Defaults panel's Model/Driver fields and
+  every grid row's Model/Driver fields.
+- `internal/driver.BuildCatalog` now scans `driversRoot/Windows/<any version folder>/<Manufacturer>/...`
+  (merging every version folder found) instead of assuming manufacturer folders sit directly under
+  `driversRoot` - matching the real Drivers folder as it's being reorganized (Windows and macOS sides
+  broken out, `Drivers/Windows/11/<Manufacturer>/...` for the Windows side). Falls back to the old
+  flat layout when there's no `Windows` subfolder at all, so existing `internal/driver/testdata`
+  fixtures and any pre-reorg `Drivers` folder keep working unmodified.
+- `TestBuildCatalog_WindowsVersionNestedLayout`: new test against a dedicated nested fixture
+  (`testdata_windows_layout/Windows/11/Canon/...`, a copy of the existing flat Canon fixture one
+  level deeper) proving the new layout is actually found and scanned correctly.
+
+### Changed
+- Port name prefix's text field now shows "IP_" as a real placeholder (grayed hint, gone once you
+  type) instead of a pre-filled default value - and, as before, stays disabled until the checkbox is
+  checked.
+- The Defaults panel's Driver field now expands to fill the remaining width of its row (was a fixed
+  `size="40"`), via `flex: 1` on its wrapping label/combo rather than a fixed character count.
+
+### Not done (explicitly out of scope for this round)
+- The macOS side of the Drivers folder reorg (`Drivers/macOS/<Manufacturer>/<version>/...`, plus an
+  `OpenPrinting` PPD fallback bucket) is not read by `BuildCatalog` at all yet, and there is still no
+  macOS `Deployer`. Most of the real macOS packages on disk are `.dmg` images (frequently wrapping a
+  nested `.dmg`, ultimately containing a `.pkg` installer) - extracting driver files/PPDs from those
+  without a macOS host or a full GUI installer run is a real open question needing its own design
+  pass, not something to guess at inside this change. See the README's "Drivers folder layout"
+  section.
+
+### Process note
+- Mid-verification, an automated screenshot (`CopyFromScreen` at coordinates believed to be PDT's
+  window) instead captured an unrelated terminal window's content that had ended up on top at that
+  screen position - discarded immediately, not analyzed further. Switched all subsequent screenshots
+  to `PrintWindow` (captures a specific window's own content directly, independent of focus/z-order),
+  which avoids the failure mode entirely. Further interactive automation (simulated clicks/typing)
+  was halted after a mouse click aimed at PDT's title bar landed on a different, unrelated window
+  instead - the coordinate math proved unreliable in this multi-window desktop environment, and
+  continuing risked interacting with unrelated windows rather than PDT.
+
+## 2026-09-05 - Toolbar reorder, UseExistingPort fallback, DPI/resize robustness
+
+### Changed
+- **Open Configuration**/**Save Configuration** moved from the toolbar to the top bar, to the right
+  of SalesChain ID. **Add Printer**/**Remove Selected** moved to the far left of the toolbar (ahead
+  of New CSV/Import CSV).
+- `UseExistingPort` checked with no matching port for the row's IP is no longer a fatal error - it
+  now falls back to creating a new port instead (logged `[INFO]`), same as if the checkbox were
+  unchecked. The row's real intent ("give me a working port for this IP") is still satisfiable, so
+  failing the whole row over it was unnecessarily strict. Updated the matching tooltip, grid header,
+  and README wording accordingly.
+- Added `MinWidth`/`MinHeight` (700x520) to the main window - otherwise unconstrained and freely
+  resizable, this floor just keeps it from being shrunk below a size the flex-based layout has
+  actually been verified to hold up at with no clipping or overlapping controls.
+
+### Verified
+- Confirmed `build/windows/wails.exe.manifest` already declares `permonitorv2` DPI awareness, which
+  WebView2 honors automatically - the window and its content scale correctly per-monitor with no
+  changes needed there.
+- Resized the running app down to 700x520 (well below the 1024x768 default) and confirmed via
+  screenshot that the flex-wrap layout reflows cleanly (the Manufacturer/Model/Driver row wraps, the
+  Port subsection's checkboxes wrap to a second line) with no clipped or overlapping controls -
+  the practical stand-in for "things need more room" that DPI scaling or a smaller display would
+  also produce.
+- Re-verified `UseExistingPort`'s new fallback behavior end to end against the real spooler via
+  `pdtdebug deployrow ... useexisting` with no matching port present: logs the fallback, creates the
+  port, and the row deploys successfully instead of failing.
+
+## 2026-09-05 - Defaults panel restructure, SalesChain ID validation, tooltips
+
+### Changed
+- Defaults panel restructured into one outer "Defaults (used by 'Add Printer')" box containing
+  Manufacturer/Model/Driver, then three labeled subsections: **Port** (Subnet, Port name prefix +
+  its text field, Use existing port, SNMP), **Print Defaults** (Monochrome, 1-sided), **Advanced**
+  (Enable APF).
+- SalesChain ID now restricts input to letters, digits, hyphen, and underscore as you type (covers
+  every DOS/shell-reserved character - `\/:*?"<>|` on Windows, `/` and `:` on macOS - without needing
+  to enumerate them), and separately rejects the Windows reserved device names (`CON`, `PRN`, `AUX`,
+  `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, case-insensitive, whole-string only) by refusing the keystroke
+  that would complete one and reverting to whatever was there just before. A loaded configuration's
+  SalesChain ID goes through the same check (resetting to empty if the saved value itself is a
+  reserved name, since there's no "just before" to revert to for a freshly loaded value).
+- Added a `title` tooltip to every interactive control in the app - toolbar buttons, Defaults panel
+  fields, grid column headers, and every per-row input - explaining what it does or what it affects.
+
+### Fixed
+- Found during manual testing of the first tooltip pass: several tooltip strings contain a literal
+  `"` (e.g. `"SalesChain: <id>"`), which - embedded directly into a double-quoted `title="..."`
+  attribute - closed the attribute early and leaked the rest of the tooltip text onto the page as
+  visible content. Fixed by routing every tooltip through a shared `tip()` helper that HTML-escapes
+  it first; verified visually (rebuilt, screenshotted) that the leak is gone.
+
+## 2026-09-05 - Phase 4: Wails frontend
+
+### Added
+- `app.go`: the full `App` API the frontend calls - `Manufacturers`/`Models`/`DriverCandidates` for
+  the grid's dropdowns, `NewCsvTemplate`/`ImportCsv`/`OpenConfiguration`/`SaveConfiguration` (each
+  wrapping a native OS file dialog), and `Deploy` (streams a `"deploy-progress"` event per row in
+  addition to returning every result at the end). `confirm` implements `printer.Confirm` via a native
+  `runtime.MessageDialog` Yes/No box - the Wails equivalent of the original tool's WinForms
+  `MessageBox`. The driver catalog builds once at startup from a `Drivers/` folder resolved next to
+  the running executable (falling back to `./Drivers` for `wails dev`).
+- `frontend/src/main.js` (+ `app.css`): a plain HTML/CSS/vanilla-JS grid (no framework) replacing the
+  Wails vanilla template - top bar, Defaults panel, toolbar, the row grid, and a live timestamped/
+  level-tagged log panel, wired to the `App` API above.
+- Every multi-signal or error-bearing `App` method returns a small DTO (`PathResult`, `ImportResult`,
+  `OpenConfigResult`, `DeployRowResult`) rather than a second/third raw return value or a bare Go
+  `error` - confirmed by reading Wails' own binding-dispatch code that it only supports `(T)` or
+  `(T, error)` return shapes, and that a bare `error` has no exported fields to JSON-marshal a message
+  from at all (it would cross the wire as `{}`).
+- `internal/printer/batch.go`: `DeployAllWithProgress` (`DeployAll` now a thin wrapper over it) - runs
+  the batch exactly as before but also invokes a callback after each row, for `Deploy` above to stream
+  progress from.
+
+### Design notes
+- The grid never fully re-renders while a deploy is running: `onDeployProgress` correlates each
+  incoming event to its row by submission order (`activeDeploy.nextIndex`) and toggles only that row's
+  success/failure CSS class directly via a stable per-row `_id` - not the row's `Name` (never required
+  to be unique) and not its position in `state.rows` (shifts as rows are added/removed). A full
+  re-render on every progress event - a real bug caught before shipping - would otherwise destroy
+  focus and in-progress edits in any other row while a multi-minute HP deploy is still running
+  elsewhere in the grid.
+
+### Verified
+- `go build`/`go vet`/`go test` all pass; `npm run build` (Vite) and `wails build` both produce a
+  working `PDT.exe`.
+- Launched the built app against the real 3.1 GB `Drivers/` package tree (copied next to the exe):
+  starts with no catalog-load warning, Manufacturer/Model/Driver dropdowns populate live, Add Printer
+  adds a row, and the layout matches the design pass end to end (screenshot-verified via a real
+  window capture + simulated clicks, not just "it compiles").
+
+### Changed (layout, found during live manual testing of the first build)
+- Added the missing **Subnet** default field (pre-fills a new row's IP when set, adding a trailing
+  `.` if the user didn't type one - matches the original tool's own Subnet-default behavior), placed
+  in the Defaults panel with **Port name prefix** immediately to its right (moved there from the top
+  bar).
+- Reordered the Defaults panel's checkboxes so **SNMP** sits immediately left of **Enable APF**.
+- The Defaults panel's Manufacturer `<select>` now matches every text field's size/styling (it had no
+  explicit sizing before and was noticeably narrower).
+- **Monochrome** and **1-sided** are now checked by default in the Defaults panel.
+
 ## 2026-09-05 - Phase 3: Deploy orchestration
 
 ### Added

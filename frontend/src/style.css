@@ -1,6 +1,5 @@
 html {
     background-color: rgba(27, 38, 54, 1);
-    text-align: center;
     color: white;
 }
 
@@ -10,6 +9,7 @@ body {
     font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
     "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
     sans-serif;
+    font-size: 13px;
 }
 
 @font-face {
@@ -22,5 +22,4 @@ body {
 
 #app {
     height: 100vh;
-    text-align: center;
 }

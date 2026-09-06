@@ -1,0 +1,22 @@
+; Synthetic test fixture - not a real vendor INF. Mirrors the real Sharp
+; driver package, whose only current entry is "SHARP UD3 PCL6" (tokens in
+; the reverse order of how "PCL 6 UD3" is normally said out loud) - see
+; DefaultDriverNameFor's token-based, order-independent matching.
+
+[Version]
+Signature="$Windows NT$"
+Provider=%SHARP%
+ClassGUID={4D36E979-E325-11CE-BFC1-08002BE10318}
+Class=Printer
+DriverVer=02/01/2026,3.1.0.0
+CatalogFile=sharp.cat
+PnpLockDown=1
+
+[Manufacturer]
+"SHARP" = SharpModels,NTamd64
+
+[SharpModels]
+"SHARP UD3 PCL6"       = SHUD3, USBPRINT\SharpMXC55c
+
+[Strings]
+SHARP = "Sharp"

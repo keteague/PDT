@@ -244,6 +244,18 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 		}
 	}
 
+	// DEVMODE alone (just above) was confirmed correct yet still left a real
+	// Canon UFR II printer showing the *opposite* settings in its own Shell
+	// UI (Printing Defaults/Preferences) - that dialog, and Get-PrintConfiguration,
+	// read from a separate PrintTicket-based store DEVMODE doesn't touch.
+	// Best-effort/non-fatal since the DEVMODE path above already governs
+	// actual print behavior for most consumers.
+	if err := SetPrintConfigurationViaShell(row.Name, row.OneSided, row.Mono); err != nil {
+		log.Warn("Could not update Printing Defaults/Preferences to match (Set-PrintConfiguration): %v", err)
+	} else {
+		log.OK("Printing Defaults/Preferences updated to match (oneSided=%v, mono=%v).", row.OneSided, row.Mono)
+	}
+
 	// --- Advanced printing features ---
 	if err := SetAdvancedPrintingFeatures(row.Name, row.AdvancedPrintingFeatures); err != nil {
 		log.Warn("Could not set advanced printing features: %v", err)
@@ -251,19 +263,30 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 		log.OK("Advanced printing features set to %v.", row.AdvancedPrintingFeatures)
 	}
 
+	// --- Print spooled documents first (Advanced tab) ---
+	// Always requested, not a per-row setting - every deployment should get
+	// this by default rather than the printer's own PRINTER_INFO_2 default
+	// of "off" (Start printing after last page is spooled).
+	if err := SetPrintSpooledDocumentsFirst(row.Name, true); err != nil {
+		log.Warn("Could not enable \"Print spooled documents first\": %v", err)
+	} else {
+		log.OK("\"Print spooled documents first\" enabled.")
+	}
+
 	log.OK("Deployment finished for %q.", row.Name)
 	return printer.DeployResult{RowName: row.Name, Log: log.Lines(), Err: nil}
 }
 
 // ensureRealPort resolves (creating if necessary) the real Standard TCP/IP
-// port for ip, honoring UseExistingPort's documented contract: reuse the
-// port already configured for this IP if one exists (regardless of the
-// checkbox - this also doubles as the fix for ever creating a genuine
-// duplicate port for a host that already has one), and fail this row if
-// UseExistingPort is checked but no such port exists. Otherwise create a new
-// one, named "<prefix><ip>" (or just "<ip>" with no prefix), with a numeric
-// suffix appended only if that exact name is already in use by a different
-// host.
+// port for ip: reuse the port already configured for this IP if one exists
+// (regardless of the checkbox - this also doubles as the fix for ever
+// creating a genuine duplicate port for a host that already has one).
+// Otherwise create a new one, named "<prefix><ip>" (or just "<ip>" with no
+// prefix), with a numeric suffix appended only if that exact name is already
+// in use by a different host - including when UseExistingPort is checked but
+// no existing port targets this IP: that's a fallback to creating one, not a
+// failure, since the row's intent ("give me a working port for this IP") is
+// still satisfiable.
 func (d *Deployer) ensureRealPort(ip string, useExisting bool, prefix string, snmpEnabled bool, log *printer.Logger) (string, error) {
 	if existingName, found, err := FindTcpIpPortByHost(ip); err != nil {
 		return "", err
@@ -271,7 +294,7 @@ func (d *Deployer) ensureRealPort(ip string, useExisting bool, prefix string, sn
 		log.Info("Reusing existing Standard TCP/IP port %q already configured for %s.", existingName, ip)
 		return existingName, nil
 	} else if useExisting {
-		return "", fmt.Errorf("UseExistingPort is checked but no existing Standard TCP/IP port targets %s", ip)
+		log.Info("UseExistingPort is checked but no existing Standard TCP/IP port targets %s; creating a new one instead.", ip)
 	}
 
 	base := ip

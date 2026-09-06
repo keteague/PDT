@@ -1,0 +1,27 @@
+; Synthetic test fixture - not a real vendor INF. Mirrors the real Ricoh
+; Universal Driver package's naming quirk: it declares both vague aliases
+; ("PCL6 Driver for Universal Print", no manufacturer name at all) and
+; RICOH-prefixed names for the very same driver, confirmed against the real
+; local package during development - see DefaultDriverNameFor and the
+; Ricoh-name filter in BuildCatalog.
+
+[Version]
+Signature="$Windows NT$"
+Provider=%RICOH%
+ClassGUID={4D36E979-E325-11CE-BFC1-08002BE10318}
+Class=Printer
+DriverVer=01/15/2026,4.45.0.0
+CatalogFile=ricoh.cat
+PnpLockDown=1
+
+[Manufacturer]
+"RICOH" = RicohModels,NTamd64
+
+[RicohModels]
+"PCL6 Driver for Universal Print"       = RUDPCL6, USBPRINT\RicohIM_C4510
+"PS Driver for Universal Print"         = RUDPS, USBPRINT\RicohIM_C4510_PS
+"RICOH PCL6 UniversalDriver V4.45"      = RUDPCL6, USBPRINT\RicohIM_C4510
+"RICOH PS UniversalDriver V4.45"        = RUDPS, USBPRINT\RicohIM_C4510_PS
+
+[Strings]
+RICOH = "Ricoh"

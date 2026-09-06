@@ -182,17 +182,35 @@ were.
 ### Lexmark: self-extracting RAR + `.msi`-packaged drivers
 
 Lexmark's package is a **self-extracting RAR archive** (confirmed by its `Rar!` signature, not a ZIP
-or 7z), so it can't be auto-extracted the way `.zip` packages are - unlike Kyocera's self-extracting
-`.exe`, there's no zero-dependency way to unpack this one in Go (Go's standard library has no RAR
-reader, and RAR5 support among third-party Go libraries is thin), so extraction is a manual,
-one-time-per-version step, same in spirit as Kyocera's.
+or 7z) with its actual driver files packaged inside `.msi` installers one level in.
 
-**Extraction procedure** (confirmed end to end against the real
-`Lexmark_Universal_v2_UD1_Installation_Package_*.exe` package - driver install, printer creation,
-duplex/color, and APF all verified working through PDT's own existing, unmodified code):
+**The RAR layer is auto-extracted** (`internal/driver/rarsfx.go`, `ensureRarSfxExtracted`) - unlike
+`.zip` extraction, this can't use Go's standard library (it has no RAR reader at all), and the one
+pure-Go RAR library evaluated (`nwaples/rardecode`) was found to silently corrupt exactly the `.msi`
+files this needs (confirmed by feeding its output to `msiexec`, which rejected it as an invalid
+package - `ERROR_INSTALL_PACKAGE_INVALID`). 7-Zip's own easily-redistributable "Extra" console-only
+package doesn't include RAR support either (confirmed directly - it errors "Cannot open the file as
+archive"; only the full `7z.dll` does). What actually works, and is what PDT bundles: `7z.exe` +
+`7z.dll` (~2.5MB total) copied out of a full 7-Zip install with no installer needed - confirmed these
+two files run completely standalone. They're embedded directly into `PDT.exe` (`sevenzip.go`,
+`go:embed third_party/7zip/...`) and extracted once to `%LocalAppData%\PDT\tools\7zip\` at startup;
+`BuildCatalog` then auto-detects any `.exe` containing a RAR signature (`isSelfExtractingRar` - a
+byte-signature scan, not a naming convention, so it works for a future self-extracting package from
+any manufacturer, not just Lexmark) and extracts it via the bundled `7z.exe`, the same
+skip-if-already-extracted convention as `.zip` auto-extraction. Redistributing `7z.exe`/`7z.dll` is
+permitted under 7-Zip's own license (LGPL + an "unRAR restriction" that only bars using the code to
+build a RAR *compressor*, not redistributing the decoder) - `third_party/7zip/License.txt` travels
+with the binaries per that license's own terms.
 
-1. Extract the `.exe` with 7-Zip (it recognizes the embedded RAR archive directly, despite the file
-   having a `.exe` extension and no visible RAR structure at a glance).
+**The `.msi` layer past that point is still a manual, one-time-per-version step** (same in spirit as
+Kyocera's self-extracting `.exe` writeup below) - confirmed end to end against the real
+`Lexmark_Universal_v2_UD1_Installation_Package_*.exe` package, all the way through driver install,
+printer creation, duplex/color, and APF, all verified working through PDT's own existing, unmodified
+code once the `.msi` is properly unpacked:
+
+1. Let PDT auto-extract the outer `.exe` (drop the downloaded package directly into
+   `Drivers\Windows\<version>\Lexmark\` and run PDT once - the RAR layer is handled automatically, as
+   above).
 2. Find the manufacturer/model's `.msi` under `InstallationPackage\Drivers\<x64 or x86>\` (e.g.
    `print64PCL.msi` for the x64 PCL driver).
 3. Run an MSI **administrative install** to unpack it with real filenames/paths intact - **this does

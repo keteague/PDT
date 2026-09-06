@@ -4,6 +4,50 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-06 - Bundle 7-Zip, auto-extract self-extracting RAR packages
+
+### Added
+- **Self-extracting RAR driver packages (Lexmark's own) are now auto-extracted**, the same way `.zip`
+  packages already are. `internal/driver/rarsfx.go`: `isSelfExtractingRar` detects one by scanning for
+  the actual RAR signature bytes (not a naming convention - `.zip`-extraction's convention of matching
+  on file extension doesn't work here since a self-extracting archive is still just a `.exe`), and
+  `ensureRarSfxExtracted` extracts a match into a sibling folder, same skip-if-already-extracted
+  convention as `ensureZipsExtracted`.
+- **Bundles `7z.exe` + `7z.dll`** (`third_party/7zip/`, embedded via `go:embed` in the new
+  `sevenzip.go` and extracted once to `%LocalAppData%\PDT\tools\7zip\` at startup) to actually perform
+  that extraction - reached only after ruling out every zero-dependency option:
+  - Go's standard library has no RAR reader at all.
+  - The one pure-Go RAR library evaluated, `nwaples/rardecode` (`/v2`), opens and lists the real
+    Lexmark archive correctly but **silently corrupts exactly the `.msi` files this needs** - confirmed
+    by feeding its output back to `msiexec`, which rejected it outright
+    (`ERROR_INSTALL_PACKAGE_INVALID`, not just a checksum-mismatch false alarm). No known fix or newer
+    version resolves this (checked the library's open GitHub issues directly - nothing matches this
+    symptom), and no more-mature pure-Go alternative exists.
+  - 7-Zip's own official, easily-redistributable "Extra" console-only package (`7za.exe`) does **not**
+    include RAR support at all - confirmed directly by downloading it fresh and testing it against the
+    real file (`Cannot open the file as archive`). Only the full `7z.dll` (from the full GUI install)
+    has RAR support.
+  - Confirmed instead that just `7z.exe` + `7z.dll` (~2.5MB total), copied out of a full 7-Zip install
+    with no installer or registry entries, run completely standalone - tested in a bare, isolated
+    folder with nothing else present. Redistribution is permitted under 7-Zip's own license (read
+    directly from `7-zip.org/license.txt`, not a secondhand summary): the RAR-decoding code is LGPL
+    plus an "unRAR restriction" that only bars using it to build a RAR *compressor*, not redistributing
+    the decoder - `third_party/7zip/License.txt` ships alongside the binaries per that license's own
+    terms.
+
+### Verified
+- New tests: `TestIsSelfExtractingRar` (RAR5 and older-format signatures, both at a nonzero offset
+  mirroring a real SFX stub, plus a true-negative on an ordinary `.exe`),
+  `TestEnsureRarSfxExtracted_NoOpWithoutSevenZipConfigured`,
+  `TestEnsureRarSfxExtracted_SkipsAlreadyExtracted`. Full suite (`go build`/`vet`/`test`, `wails build`)
+  clean.
+- Live end to end against the real, unmodified `Lexmark_Universal_v2_UD1_Installation_Package_*.exe`
+  sitting in the real Drivers folder: launched the built `PDT.exe` fresh, confirmed via temporary debug
+  logging (removed before finishing) that `ensureRarSfxExtracted` correctly identified the file as a
+  self-extracting RAR and extracted it successfully, then confirmed the resulting
+  `InstallationPackage\...` folder tree appeared on disk with no manual intervention. (The `.msi` layer
+  past that point is still a manual, documented step - see the README's Lexmark section.)
+
 ## 2026-09-06 - Lexmark actually works - yesterday's "known limitation" entry was wrong
 
 ### Fixed

@@ -182,6 +182,7 @@ func scanManufacturerFolders(catalog Catalog, root string) {
 
 		mfgPath := filepath.Join(root, e.Name())
 		ensureZipsExtracted(mfgPath)
+		ensureRarSfxExtracted(mfgPath)
 		_ = filepath.WalkDir(mfgPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil

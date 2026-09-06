@@ -62,6 +62,8 @@ func (a *App) startup(ctx context.Context) {
 		update.CleanupOldExe(exe)
 	}
 
+	ensureSevenZipExtracted()
+
 	catalog, err := driver.BuildCatalog(driversRoot())
 	if err != nil {
 		a.catalogErr = err

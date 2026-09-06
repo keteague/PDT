@@ -14,6 +14,10 @@ export function DriverCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['DriverCandidates'](arg1, arg2, arg3);
 }
 
+export function GetAppInfo() {
+  return window['go']['main']['App']['GetAppInfo']();
+}
+
 export function GetCatalogStatus() {
   return window['go']['main']['App']['GetCatalogStatus']();
 }
@@ -44,6 +48,10 @@ export function OpenConfiguration() {
 
 export function OpenManufacturerURL(arg1) {
   return window['go']['main']['App']['OpenManufacturerURL'](arg1);
+}
+
+export function OpenRepoURL() {
+  return window['go']['main']['App']['OpenRepoURL']();
 }
 
 export function PickFolder(arg1) {

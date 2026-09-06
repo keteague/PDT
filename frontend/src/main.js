@@ -5,6 +5,7 @@ import {
     Manufacturers, Models, DriverCandidates, DefaultDriverFor, GetCatalogStatus,
     NewCsvTemplate, ImportCsv, OpenConfiguration, SaveConfiguration, Deploy,
     GetSettings, SaveSettings, PickFolder, OpenManufacturerURL,
+    GetAppInfo, OpenRepoURL,
 } from '../wailsjs/go/main/App';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 
@@ -126,6 +127,7 @@ document.querySelector('#app').innerHTML = `
       <div class="tabs">
         <button type="button" class="tab-btn active" data-tab="general">General</button>
         <button type="button" class="tab-btn" data-tab="sites">External Sites</button>
+        <button type="button" class="tab-btn" data-tab="about">About</button>
       </div>
       <div class="tab-panel" data-tab-panel="general">
         <label class="modal-field" title="${tip('saveFileBasePath')}">
@@ -141,6 +143,16 @@ document.querySelector('#app').innerHTML = `
           automatically, so "Check for Updates" in Defaults just opens the page below for the
           selected manufacturer.</p>
         <div id="settingsSitesPanel"></div>
+      </div>
+      <div class="tab-panel" data-tab-panel="about" hidden>
+        <div class="about-panel">
+          <div class="about-row"><span class="about-label">Name</span><span id="aboutName"></span></div>
+          <div class="about-row"><span class="about-label">Version</span><span id="aboutVersion"></span></div>
+          <div class="about-row"><span class="about-label">Author</span><span id="aboutAuthor"></span></div>
+          <div class="about-row"><span class="about-label">GitHub</span>
+            <a href="#" id="aboutRepoLink" title="Open in your browser"></a>
+          </div>
+        </div>
       </div>
       <div class="modal-actions">
         <button id="btnSettingsCancel">Cancel</button>
@@ -747,8 +759,22 @@ function switchSettingsTab(tab) {
     }
 }
 
+async function renderAboutPanel() {
+    const info = await GetAppInfo();
+    el('aboutName').textContent = info.name;
+    el('aboutVersion').textContent = info.version;
+    el('aboutAuthor').textContent = info.author;
+    const link = el('aboutRepoLink');
+    link.textContent = info.repoUrl;
+    link.addEventListener('click', (e) => {
+        e.preventDefault();
+        OpenRepoURL();
+    });
+}
+
 function wireSettingsModal() {
     renderSettingsSitesPanel();
+    renderAboutPanel();
 
     el('btnSettings').addEventListener('click', openSettingsModal);
     el('btnSettingsCancel').addEventListener('click', closeSettingsModal);

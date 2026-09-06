@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -17,7 +18,7 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "PDT",
+		Title:  fmt.Sprintf("%s v%s", appDisplayName, AppVersion),
 		Width:  1024,
 		Height: 768,
 		// The window is otherwise freely resizable (and correctly per-monitor

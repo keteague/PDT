@@ -120,6 +120,24 @@ func (a *App) OpenManufacturerURL(manufacturer string) {
 	runtime.BrowserOpenURL(a.ctx, url)
 }
 
+// AppInfo is Settings' About tab content.
+type AppInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Author  string `json:"author"`
+	RepoURL string `json:"repoUrl"`
+}
+
+func (a *App) GetAppInfo() AppInfo {
+	return AppInfo{Name: appDisplayName, Version: AppVersion, Author: appAuthor, RepoURL: appRepoURL}
+}
+
+// OpenRepoURL opens this project's GitHub page in the system default
+// browser - the About tab's repo link.
+func (a *App) OpenRepoURL() {
+	runtime.BrowserOpenURL(a.ctx, appRepoURL)
+}
+
 // driversRoot resolves the Drivers/ folder next to the running executable
 // (matching the original tool's convention of Drivers/ next to the script) -
 // falling back to ./Drivers under the working directory for `wails dev`,
@@ -320,6 +338,9 @@ func (a *App) Deploy(rows []printer.PrinterRow, salesChainID, portNamePrefix str
 	for i, r := range rows {
 		reqs[i] = printer.DeployRequest{Row: r, SalesChainID: salesChainID, PortNamePrefix: portNamePrefix}
 	}
+
+	setTitleBarBusy()
+	defer resetTitleBarColor()
 
 	deployer := pdtwin.NewDeployer(a.catalog)
 	results := printer.DeployAllWithProgress(a.ctx, deployer, reqs, a.confirm, func(r printer.DeployResult) {

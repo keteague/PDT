@@ -10,6 +10,8 @@ export function Deploy(arg1:Array<printer.PrinterRow>,arg2:string,arg3:string):P
 
 export function DriverCandidates(arg1:string,arg2:string,arg3:string):Promise<Array<string>>;
 
+export function GetAppInfo():Promise<main.AppInfo>;
+
 export function GetCatalogStatus():Promise<main.CatalogStatus>;
 
 export function GetSettings():Promise<main.Settings>;
@@ -25,6 +27,8 @@ export function NewCsvTemplate():Promise<main.PathResult>;
 export function OpenConfiguration():Promise<main.OpenConfigResult>;
 
 export function OpenManufacturerURL(arg1:string):Promise<void>;
+
+export function OpenRepoURL():Promise<void>;
 
 export function PickFolder(arg1:string):Promise<main.PathResult>;
 

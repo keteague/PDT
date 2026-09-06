@@ -9,5 +9,12 @@
   "author": {
     "name": "Ken Teague",
     "email": "kteague@pobox.com"
+  },
+  "info": {
+    "companyName": "Ken Teague",
+    "productName": "Printer Deployment Tool",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright © 2026 Ken Teague",
+    "comments": "Bulk network printer deployment tool"
   }
 }

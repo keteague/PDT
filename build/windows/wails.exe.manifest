@@ -12,4 +12,19 @@
             <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">permonitorv2,permonitor</dpiAwareness> <!-- falls back to per-monitor if per-monitor v2 is not supported -->
         </asmv3:windowsSettings>
     </asmv3:application>
+    <!-- Every real operation this app performs (all printer/port work) already
+         requires Administrator, so it requests elevation outright rather than
+         launching unelevated and failing partway through a deploy - matches
+         Create-Printers.ps1's own auto-elevation, but for a compiled exe this
+         is just a manifest entry: Windows shows the UAC prompt automatically
+         on launch, with no re-exec trick needed the way a .ps1 (which can't
+         embed a manifest) required. There is no unelevated fallback mode -
+         declining UAC means the process never starts at all. -->
+    <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+        <security>
+            <requestedPrivileges>
+                <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+            </requestedPrivileges>
+        </security>
+    </trustInfo>
 </assembly>

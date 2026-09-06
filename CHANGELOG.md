@@ -4,6 +4,81 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-05 - App icon, titlebar name/version, Settings > About
+
+### Added
+- `version.go`: `AppVersion`/`appDisplayName`/`appAuthor`/`appRepoURL` constants - `AppVersion` must be
+  kept manually in sync with `wails.json`'s `info.productVersion` (Go can't read that value back out
+  at runtime; it only feeds the compiled exe's Win32 version resource and the manifest template).
+  `main.go`'s window `Title` is now `fmt.Sprintf("%s v%s", appDisplayName, AppVersion)` -
+  "Printer Deployment Tool v0.1.0" - instead of the bare "PDT".
+- `cmd/geniconassets`: a permanent repo utility (not a one-off script) that procedurally draws the
+  app's printer-glyph icon and writes `build/appicon.png` (1024x1024, the Linux/frontend-facing icon)
+  and `build/windows/icon.ico` (16/24/32/48/64/128/256, PNG-compressed frames per the modern
+  Vista+ ICO format - no external image asset or design tool involved). Renders at 4x supersample and
+  box-filter-downsamples to each target size (averaged in premultiplied-alpha space); an
+  un-anti-aliased first pass looked jagged and illegible at 16px, visually confirmed fixed by
+  comparing upscaled previews of both versions before finalizing. Re-run manually
+  (`go run ./cmd/geniconassets`) if the icon design ever needs to change - it's not part of the normal
+  build.
+- **Settings > About** tab: version, author, and a clickable GitHub link (`GetAppInfo`,
+  `OpenRepoURL` -> `runtime.BrowserOpenURL`), sourced from the same `version.go` constants as the
+  titlebar.
+
+### Verified
+- Titlebar text confirmed via screenshot (`PrintWindow`) showing "Printer Deployment Tool v0.1.0"
+  alongside the new icon.
+- The compiled `PDT.exe`'s Explorer-associated icon (`[System.Drawing.Icon]::ExtractAssociatedIcon()`)
+  confirmed screenshot-matching the new design.
+- `go build`/`go vet`/`go test` and `wails build` all clean.
+
+### Not verified
+- The Settings > About tab's actual rendered content (version/author/GitHub link, and that clicking
+  the link opens the browser) was not confirmed interactively this round - simulated keyboard
+  navigation to reach the Settings gear button landed on an unrelated field instead, consistent with
+  this environment's previously-documented click/focus automation unreliability. The panel reuses the
+  exact same tab-switching and async on-open-populate pattern already visually confirmed for
+  Settings > External Sites, so it's expected to work, but this is a code-review-level claim, not a
+  screenshot-verified one.
+
+## 2026-09-05 - Yellow titlebar while deploying
+
+### Added
+- `titlebar_windows.go`: the titlebar turns yellow for the duration of a `Deploy` run and always
+  resets to the OS default when done, including on an unexpected error (`defer`) - ports
+  `Create-Printers.ps1`'s own `DwmHelper` (`DwmSetWindowAttribute`/`DWMWA_CAPTION_COLOR`, Windows 11
+  22000+ only; a harmless no-op on older Windows, same as that original tool's note). The one new
+  piece: Wails doesn't expose the native window handle through its public runtime API the way the
+  original tool already had `$form.Handle` in hand, so `findMainWindow` locates it the same way an
+  external tool would - `EnumWindows` filtered to this process's own PID, then to the one visible
+  top-level window (a real process was confirmed to also have several invisible helper windows -
+  `GDI+ Window`, `MSCTFIME UI`, two `Default IME` - that the visibility check correctly excludes).
+  Found once and cached, since the handle never changes for the life of the process.
+
+### Verified
+- The `findMainWindow` matching logic (PID filter + visibility check) replicated directly in
+  PowerShell against a real running `PDT.exe`: exactly one visible window matched, titled "PDT", with
+  the four invisible helper windows correctly excluded.
+- `DwmSetWindowAttribute` called directly against that same real window handle - confirmed
+  screenshot-visible yellow titlebar, then confirmed reset back to the default color - the exact
+  sequence `Deploy` now runs automatically.
+
+## 2026-09-05 - Request elevation on launch
+
+### Added
+- `build/windows/wails.exe.manifest`: `<trustInfo>` / `requestedExecutionLevel level="requireAdministrator"`.
+  Every real operation this app performs (all printer/port work) already required Administrator, so
+  it now requests elevation outright on every launch rather than starting unelevated and failing
+  partway through a deploy - the same reasoning as `Create-Printers.ps1`'s own auto-elevation, but
+  far simpler for a compiled exe: this is purely a manifest entry, Windows shows the UAC prompt
+  automatically, with none of the re-exec-itself-as-admin trick a `.ps1` (which can't embed a
+  manifest) needed. Unlike that original tool, there's no unelevated fallback mode - declining UAC
+  means the process never starts at all, which is fine here since there's no genuinely useful
+  degraded mode to fall back to. Confirmed embedded correctly by inspecting the compiled `PDT.exe`'s
+  resources directly for the `requireAdministrator` string after rebuilding (an actual UAC prompt
+  can't be produced/observed from an already-elevated session, since Windows only prompts when
+  crossing from unelevated to elevated).
+
 ## 2026-09-05 - Print Defaults/Preferences fix, "Print spooled documents first", Save Configuration filename
 
 ### Fixed

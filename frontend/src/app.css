@@ -380,6 +380,28 @@ table.grid td.checkbox-cell {
     font-size: 12px;
 }
 
+.about-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.about-row {
+    display: flex;
+    gap: 10px;
+}
+
+.about-label {
+    width: 70px;
+    flex-shrink: 0;
+    color: #9fb3c8;
+}
+
+.about-row a {
+    color: #7fc4ff;
+    word-break: break-all;
+}
+
 .modal-field {
     display: flex;
     flex-direction: column;

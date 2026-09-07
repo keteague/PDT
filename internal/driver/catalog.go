@@ -12,8 +12,8 @@ import (
 // Manufacturers is the fixed, known manufacturer list - each corresponds to
 // one top-level folder under the Drivers root. This is every manufacturer PDT
 // knows about, regardless of whether its drivers are actually present
-// locally - see ManufacturersWithDrivers for the subset that's actually
-// deployable.
+// locally - see ManufacturersWithDrivers for the subset that actually has a
+// driver package present right now.
 var Manufacturers = []string{"Canon", "HP", "Kyocera", "Ricoh", "Sharp", "Toshiba", "Xerox", "Konica Minolta", "Lexmark"}
 
 // foldMatchIgnoringSpaces compares two folder/manufacturer names
@@ -26,13 +26,19 @@ func foldMatchIgnoringSpaces(a, b string) bool {
 }
 
 // ManufacturersWithDrivers is the subset of Manufacturers that actually have
-// at least one usable driver in catalog. The Defaults panel's Manufacturer
-// dropdown (and each grid row's) should only ever offer a manufacturer as a
-// deployment option once its drivers are actually present locally - unlike
-// Settings > External Sites, which lists every manufacturer in Manufacturers
-// regardless, so a URL can be configured before its drivers are ever added.
+// at least one usable driver in catalog. Used only for GetCatalogStatus'
+// HasDrivers signal (the frontend's first-run "go get some drivers" banner) -
+// the Manufacturer dropdowns themselves (App.Manufacturers) deliberately
+// offer every manufacturer regardless, so a zero-driver install can still
+// pick one and use Check for Updates to go find its download page.
 func ManufacturersWithDrivers(catalog Catalog) []string {
-	var out []string
+	// []string{}, not "var out []string" (a nil slice) - a nil slice
+	// marshals to JSON `null`, not `[]`, across the Wails/JS bridge. Kept
+	// even though this result no longer feeds a frontend .map()/.forEach()
+	// directly (see git history for the crash that pattern once caused
+	// elsewhere) - defensive consistency with every other slice-returning
+	// function in this codebase that crosses that boundary.
+	out := []string{}
 	for _, m := range Manufacturers {
 		if len(catalog[m]) > 0 {
 			out = append(out, m)

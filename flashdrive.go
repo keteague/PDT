@@ -50,7 +50,11 @@ type BatchDriveResult struct {
 // explicit "this erases everything" warning naming these exact drives before
 // ever calling this.
 func (a *App) FormatDrives(letters []string) BatchDriveResult {
-	result := BatchDriveResult{Failed: map[string]string{}}
+	// Succeeded starts as []string{}, not nil, for the same reason
+	// ManufacturersWithDrivers' own comment explains (a nil slice marshals
+	// to JSON `null`) - the frontend already guards every read of this
+	// specific field with `|| []`, but there's no reason to rely on that.
+	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}}
 	for _, letter := range letters {
 		if err := flashdrive.FormatExFAT(letter); err != nil {
 			result.Failed[letter] = err.Error()
@@ -70,7 +74,7 @@ func (a *App) FormatDrives(letters []string) BatchDriveResult {
 // it exactly like it does today when run directly from a flash drive.
 func (a *App) WritePortablePDT(letters []string) BatchDriveResult {
 	<-a.ready
-	result := BatchDriveResult{Failed: map[string]string{}}
+	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}}
 
 	exePath, err := os.Executable()
 	if err != nil {

@@ -299,37 +299,48 @@ func configsRoot() string {
 
 // CatalogStatus reports whether the driver catalog loaded at startup, and
 // its error if not - the frontend surfaces this once on load rather than
-// silently showing zero drivers with no explanation.
+// silently showing zero drivers with no explanation. HasDrivers is a
+// separate, non-error signal: a brand-new install's freshly-scaffolded
+// Drivers folder loads just fine (OK: true) but legitimately has zero
+// manufacturers with any driver package present yet - the frontend uses
+// HasDrivers to show a first-run "go get some drivers" banner rather than
+// treating that state as a load failure.
 type CatalogStatus struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error"`
+	OK         bool   `json:"ok"`
+	Error      string `json:"error"`
+	HasDrivers bool   `json:"hasDrivers"`
 }
 
 func (a *App) GetCatalogStatus() CatalogStatus {
 	<-a.ready
+	hasDrivers := len(driver.ManufacturersWithDrivers(a.catalog)) > 0
 	if a.catalogErr != nil {
-		return CatalogStatus{OK: false, Error: a.catalogErr.Error()}
+		return CatalogStatus{OK: false, Error: a.catalogErr.Error(), HasDrivers: hasDrivers}
 	}
-	return CatalogStatus{OK: true}
+	return CatalogStatus{OK: true, HasDrivers: hasDrivers}
 }
 
-// Manufacturers is every row's dropdown offers - only manufacturers that
-// actually have at least one driver present in the local Drivers folder are
-// offered as deployment options, ordered per the user's own Settings >
-// General drag/drop preference (a.settings.ManufacturerOrder); see
-// AllManufacturers for the full list Settings > External Sites uses instead
-// (which is always alphabetical, not this custom order).
+// Manufacturers is every row's dropdown offers - the full list of
+// manufacturers PDT knows about (same set as AllManufacturers), ordered per
+// the user's own Settings > General drag/drop preference
+// (a.settings.ManufacturerOrder) rather than AllManufacturers' fixed
+// alphabetical order. Deliberately not filtered to manufacturers with a
+// local driver present: a brand-new install has none yet, and still needs
+// to offer every manufacturer here so the Defaults panel's "pick a
+// Manufacturer, then Check for Updates" bootstrap workflow (see the
+// no-drivers banner in init()) works before any driver has been downloaded.
+// A manufacturer with nothing in the local Drivers folder simply offers no
+// Driver candidates yet (see DriverCandidates) - not itself an error.
 func (a *App) Manufacturers() []string {
 	<-a.ready
-	return applyManufacturerOrder(driver.ManufacturersWithDrivers(a.catalog), a.settings.ManufacturerOrder)
+	return applyManufacturerOrder(append([]string(nil), driver.Manufacturers...), a.settings.ManufacturerOrder)
 }
 
-// AllManufacturers is every manufacturer PDT knows about, regardless of
-// whether its drivers are present locally - Settings > External Sites uses
-// this (not Manufacturers), always alphabetically (not the custom
-// Manufacturers order - that's for deployment convenience, not for finding a
-// specific manufacturer's URL to edit), so a URL can be configured before its
-// drivers are ever added to the local Drivers folder.
+// AllManufacturers is every manufacturer PDT knows about - the same set
+// Manufacturers returns, just always alphabetical rather than the user's
+// custom drag/drop order. Settings > External Sites uses this instead of
+// Manufacturers since it's about finding a specific manufacturer's URL to
+// edit, not deployment convenience.
 func (a *App) AllManufacturers() []string {
 	out := append([]string(nil), driver.Manufacturers...)
 	sort.Strings(out)

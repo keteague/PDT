@@ -100,14 +100,15 @@ shows up in the UI) sits on disk as `KonicaMinolta`, no space. Either spelling w
 that doesn't fold-match any entry in `driver.Manufacturers` at all is silently skipped, not an error -
 useful if you keep other, unsupported manufacturers' packages in the same Drivers tree.
 
-**A manufacturer with no drivers present locally is not offered as a deployment option.** The
-Defaults panel's Manufacturer dropdown (and each grid row's) only ever lists a manufacturer once its
-folder actually has at least one usable `.inf`-declared driver in it; not every PDT install needs
-every manufacturer's drivers, and there's no reason to offer one as a choice before its files are
-actually there. This is `App.Manufacturers()` / `driver.ManufacturersWithDrivers` - **Settings >
-External Sites is deliberately the one exception**: it lists every manufacturer in
-`driver.Manufacturers` regardless (`App.AllManufacturers()`), so a manufacturer's update-check URL
-can be configured before its drivers are ever added.
+**Every manufacturer is offered regardless of whether its drivers are present locally.** The Defaults
+panel's Manufacturer dropdown (and each grid row's) lists all of `driver.Manufacturers`
+(`App.Manufacturers()`), same set Settings > External Sites uses (`App.AllManufacturers()`, just
+alphabetical instead of the user's own drag/drop order there) - deliberately not filtered down to
+`driver.ManufacturersWithDrivers`, so a brand-new install with an empty Drivers folder can still pick
+a manufacturer and use **Check for Updates** to reach its download page (see the banner PDT shows on
+launch when no manufacturer has any driver present yet). Picking a manufacturer with nothing in its
+Drivers folder just leaves the Driver field with no candidates to offer yet - not an error, just
+nothing to deploy from until a driver package is downloaded there.
 
 **Back-compat**: if `driversRoot` has no `Windows` subfolder at all, it's treated as the older flat
 layout (`Drivers/<Manufacturer>/...` directly) - this is what the unit tests under

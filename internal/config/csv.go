@@ -70,7 +70,13 @@ func ImportCSV(path string) ([]printer.PrinterRow, error) {
 		return rec[i]
 	}
 
-	var rows []printer.PrinterRow
+	// []printer.PrinterRow{}, not "var rows []printer.PrinterRow" (a nil
+	// slice) - a nil slice marshals to JSON `null`, and the frontend calls
+	// .map()/.length on result.rows with no defensive fallback (see
+	// driver.ManufacturersWithDrivers' own comment for the exact same class
+	// of bug) - a CSV with a header row but zero data rows is a routine,
+	// valid "imported nothing" result, not an error.
+	rows := []printer.PrinterRow{}
 	for _, rec := range records[1:] {
 		rows = append(rows, printer.PrinterRow{
 			Name:                     strings.TrimSpace(get(rec, "Name")),

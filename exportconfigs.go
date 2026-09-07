@@ -47,7 +47,13 @@ func matchingPreinstallFolders(base, salesChainID string) ([]string, error) {
 		return nil, err
 	}
 	prefix := salesChainID + " - "
-	var folders []string
+	// []string{}, not "var folders []string" (a nil slice) - a nil slice
+	// marshals to JSON `null`, and the frontend calls .length/.map() on this
+	// result (listResult.folders) without a defensive `|| []` fallback, the
+	// same class of bug fixed in ManufacturersWithDrivers (see its own
+	// comment) - a SalesChain ID with no matching Preinstall subfolder at
+	// all is a completely routine result here, not an error.
+	folders := []string{}
 	for _, e := range entries {
 		if e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
 			folders = append(folders, filepath.Join(base, e.Name()))
@@ -68,11 +74,14 @@ func matchingConfigFiles(dir, salesChainID string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return []string{}, nil
 		}
 		return nil, err
 	}
-	var names []string
+	// []string{}, not "var names []string" - see matchingPreinstallFolders'
+	// own comment just above; CheckExportCollisions/ExportConfigs both
+	// expose this as JSON to the frontend, which calls .length on it.
+	names := []string{}
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasPrefix(e.Name(), salesChainID) {
 			names = append(names, e.Name())
@@ -100,7 +109,9 @@ func (a *App) CheckExportCollisions(salesChainID, destFolder string) ExportColli
 		return ExportCollisionResult{Error: err.Error()}
 	}
 	pdtDir := filepath.Join(destFolder, "PDT")
-	var colliding []string
+	// []string{}, not nil - see matchingPreinstallFolders' own comment above;
+	// the frontend checks collisionResult.colliding.length directly.
+	colliding := []string{}
 	for _, name := range names {
 		if fileExists(filepath.Join(pdtDir, name)) {
 			colliding = append(colliding, name)

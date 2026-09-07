@@ -24,6 +24,16 @@
     font-size: 12px;
 }
 
+.no-drivers-banner {
+    margin: 8px 10px 0;
+    padding: 8px 12px;
+    background: #1f3a4d;
+    border: 1px solid #2f6f9e;
+    border-radius: 4px;
+    color: #cfe8fb;
+    font-size: 13px;
+}
+
 .toolbar {
     display: flex;
     flex-wrap: wrap;

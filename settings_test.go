@@ -33,6 +33,16 @@ func TestEnsureDriversScaffold_CreatesManufacturerFolders(t *testing.T) {
 		if info, err := os.Stat(folder); err != nil || !info.IsDir() {
 			t.Errorf("expected scaffolded folder %q to exist", folder)
 		}
+
+		archiveReadme := filepath.Join(folder, "Archive", "README.md")
+		data, err := os.ReadFile(archiveReadme)
+		if err != nil {
+			t.Errorf("expected %q to exist: %v", archiveReadme, err)
+			continue
+		}
+		if string(data) != archiveReadmeContent {
+			t.Errorf("%q content = %q, want %q", archiveReadme, data, archiveReadmeContent)
+		}
 	}
 }
 

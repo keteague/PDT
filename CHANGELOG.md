@@ -4,6 +4,52 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.3.1) - Zero-driver first run now actually usable; installer launch-after-install fix
+
+### Added
+- **PDT is now fully usable on a brand-new install with zero drivers present** - previously, a fresh
+  install's empty Drivers folder crashed startup entirely (see Fixed, below); now that the crash is
+  fixed, the Manufacturer dropdowns (Defaults panel and each grid row) offer every manufacturer PDT
+  knows about regardless of whether any driver is present locally yet, and a new banner above the
+  Defaults panel explains the bootstrap workflow: pick a Manufacturer, click **Check for Updates** to
+  open its download page, then drop the downloaded package into the Drivers folder. `GetCatalogStatus`
+  gained a `HasDrivers` field (distinct from its existing load-error `OK`/`Error`) so the frontend can
+  tell "loaded fine, just genuinely nothing here yet" apart from a real catalog failure. The
+  Manufacturer dropdown and Check for Updates button are also now exempt from the Save ID gate (see
+  `applySalesChainGate`) that otherwise disables nearly everything in PDT until a Save ID is entered -
+  picking a manufacturer and opening its download page is job-independent, the same reasoning that
+  already exempted Write to Flash Drive and Spooler, and this bootstrap workflow needs to work before
+  there's any job to name yet.
+- Every manufacturer folder `ensureDriversScaffold` creates now also gets its own `Archive\README.md`,
+  matching the real Drivers folders already documented in the "Drivers folder layout" section of this
+  README - not just the bare manufacturer folder it created before.
+
+### Changed
+- `App.Manufacturers()` (the Defaults panel and grid rows' dropdown source) no longer filters to only
+  manufacturers with a driver already present locally - see Added, above, for why. Settings > External
+  Sites' `AllManufacturers()` is unaffected (same manufacturer set either way, just alphabetical
+  instead of the user's custom order).
+
+### Fixed
+- **Installer's "Launch Printer Deployment Tool" checkbox failed with "CreateProcess failed; code
+  740. The requested operation requires elevation."** Inno Setup's `[Run]` step defaults to
+  `CreateProcess`, which cannot trigger UAC for an exe whose manifest demands elevation (double-
+  clicking the installed exe or its Start Menu shortcut already worked fine, since those go through
+  `ShellExecute`). Fixed by adding the `shellexec` flag to that `[Run]` entry.
+- **A fresh install with an empty (but successfully scaffolded) Drivers folder was completely
+  unresponsive** - the SalesChain ID field, every button, all of it, ignored every click and
+  keystroke, with no visible error. Root cause: `driver.ManufacturersWithDrivers` returned a nil Go
+  slice for "no manufacturers have drivers yet," which marshals to JSON `null` (not `[]`) across the
+  Wails bridge; `state.manufacturers.map(...)`, building the Manufacturer `<select>`'s options, threw
+  on that `null` as the very next line in `init()`, aborting the rest of startup before
+  `wireEvents()` - which attaches literally every event listener in the app - ever ran. Fixed at the
+  source (`ManufacturersWithDrivers` now returns `[]string{}`), then swept for and fixed the same
+  nil-slice-across-the-bridge pattern in six more spots reachable via ordinary "nothing found"
+  outcomes: `driver.Candidates` (unknown manufacturer), `config.ImportCsv` (nothing to import),
+  `flashdrive.EnumRemovableDrives` (no removable drives mounted), `exportconfigs.go`'s
+  `matchingPreinstallFolders`/`matchingConfigFiles`/`CheckExportCollisions`, and
+  `devmode.go`'s `EnumerateLocalPrinters` (enumeration failure).
+
 ## 2026-09-07 (v0.3.0) - Windows installer; Drivers/Configs now live in %LocalAppData%\PDT
 
 ### Added

@@ -33,7 +33,12 @@ func EnumRemovableDrives() ([]Drive, error) {
 		return nil, err
 	}
 
-	var drives []Drive
+	// []Drive{}, not nil - a nil slice marshals to JSON `null` across the
+	// Wails/JS bridge (see driver.ManufacturersWithDrivers' own comment for
+	// the exact class of bug this avoids); the frontend already guards this
+	// specific call with `result.drives || []`, but there's no reason to
+	// rely on every future caller remembering to.
+	drives := []Drive{}
 	for i := 0; i < 26; i++ {
 		if mask&(1<<uint(i)) == 0 {
 			continue

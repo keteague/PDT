@@ -18,7 +18,14 @@ type candidate struct {
 func Candidates(catalog Catalog, modelIndex map[string]map[string][]string, manufacturer, model, filterText string) []string {
 	mfgCatalog, ok := catalog[manufacturer]
 	if !ok {
-		return nil
+		// []string{}, not nil - a nil slice marshals to JSON `null`, and the
+		// Driver combobox's own render() calls .map() on whatever this
+		// resolves to with no defensive fallback (see
+		// ManufacturersWithDrivers' own comment for the exact same class of
+		// bug) - an unrecognized/not-yet-selected manufacturer (blank, in
+		// particular, when zero manufacturers have any drivers at all) is a
+		// routine "nothing to offer yet" result, not an error.
+		return []string{}
 	}
 
 	var names []string

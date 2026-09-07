@@ -21,7 +21,7 @@
 ; Build with: iscc installer\pdt.iss
 ; (requires a `wails build` first, so build\bin\PDT.exe exists to package)
 
-#define AppVersion "0.3.0"
+#define AppVersion "0.3.1"
 
 [Setup]
 AppId={{40FB3E79-C3DC-4C78-A969-35012251BD36}
@@ -59,4 +59,12 @@ Name: "{autoprograms}\Printer Deployment Tool"; Filename: "{app}\PDT.exe"
 Name: "{autodesktop}\Printer Deployment Tool"; Filename: "{app}\PDT.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\PDT.exe"; Description: "Launch Printer Deployment Tool"; Flags: nowait postinstall skipifsilent
+; shellexec (not the default CreateProcess-based execution) is required here:
+; PDT.exe's own manifest demands elevation (requireAdministrator - see this
+; project's README), and CreateProcess cannot trigger a UAC prompt for that on
+; its own - confirmed live: an unelevated install with "Launch Printer
+; Deployment Tool" left checked failed with "CreateProcess failed; code 740.
+; The requested operation requires elevation." ShellExecute (what double-
+; clicking the exe, or its Start Menu/Desktop shortcut, already does) knows
+; how to prompt for UAC consent instead of just failing.
+Filename: "{app}\PDT.exe"; Description: "Launch Printer Deployment Tool"; Flags: nowait postinstall skipifsilent shellexec

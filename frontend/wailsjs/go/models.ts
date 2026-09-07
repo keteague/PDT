@@ -120,6 +120,7 @@ export namespace main {
 	export class CatalogStatus {
 	    ok: boolean;
 	    error: string;
+	    hasDrivers: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CatalogStatus(source);
@@ -129,6 +130,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ok = source["ok"];
 	        this.error = source["error"];
+	        this.hasDrivers = source["hasDrivers"];
 	    }
 	}
 	export class DeployRowResult {

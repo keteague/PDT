@@ -325,6 +325,10 @@ document.querySelector('#app').innerHTML = `
     </div>
   </div>
 
+  <div class="no-drivers-banner" id="noDriversBanner" hidden>
+    No printer drivers are installed yet. Pick a Manufacturer below, then click <strong>Check for Updates</strong> to open its download page - once a driver package is downloaded into the Drivers folder, it'll show up here automatically.
+  </div>
+
   <div class="defaults-panel">
     <fieldset class="defaults-outer">
       <legend>Defaults (used by "Add Printer")</legend>
@@ -486,7 +490,12 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 // job); Write to Flash Drive and Spooler (also job-independent - stamping
 // out this laptop's whole Drivers/Configs folders, and restarting the one
 // Print Spooler service shared by every queue on the machine, both have
-// nothing to do with one particular SalesChain ID) - each along with
+// nothing to do with one particular SalesChain ID); the Defaults panel's
+// Manufacturer dropdown and Check for Updates button (also job-independent -
+// picking a manufacturer and opening its configured download page touches no
+// SalesChain-ID-named file, and this is exactly how the no-drivers banner's
+// own bootstrap workflow is meant to work on a fresh install, before there's
+// any job to name yet) - each along with
 // everything inside its own modal/dropdown, so it stays fully usable, not
 // just openable; Deploy Checked Printers, whose
 // enabled state is entirely owned by updateDeployButtonEnabled() instead
@@ -511,7 +520,7 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 function applySalesChainGate() {
     const locked = !state.salesChainId;
     document.body.classList.toggle('sales-chain-locked', locked);
-    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnSpooler', 'btnDeploy', 'btnStop']);
+    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
         if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown')) continue;
         c.disabled = locked;
@@ -586,6 +595,8 @@ async function init() {
         const warn = el('catalogWarning');
         warn.hidden = false;
         warn.textContent = `Driver catalog failed to load: ${status.error}`;
+    } else if (!status.hasDrivers) {
+        el('noDriversBanner').hidden = false;
     }
 
     state.settings = await GetSettings();

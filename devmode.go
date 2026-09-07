@@ -186,7 +186,12 @@ func (a *App) EnumerateLocalPrinters() []LocalPrinterCandidate {
 	<-a.ready
 	locals, err := pdtwin.EnumLocalPrinters()
 	if err != nil {
-		return nil
+		// []LocalPrinterCandidate{}, not nil - see
+		// driver.ManufacturersWithDrivers' own comment for why a nil slice
+		// here is a latent frontend crash waiting to happen (the frontend
+		// already guards this specific call with `|| []`, but no reason to
+		// rely on that being the only caller that ever remembers to).
+		return []LocalPrinterCandidate{}
 	}
 	out := make([]LocalPrinterCandidate, 0, len(locals))
 	for _, lp := range locals {

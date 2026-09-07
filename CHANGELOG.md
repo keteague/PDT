@@ -4,6 +4,13 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.3.4) - Settings dialog widened further
+
+### Changed
+- **Settings dialog +50px wider, +20px taller** (`.settings-modal` 500px -> 550px; `.tab-panel` height
+  365px -> 385px) - on top of v0.3.3's own +40px/+15px bump, for more breathing room around its
+  base-path fields and manufacturer URL list.
+
 ## 2026-09-07 (v0.3.3) - Live driver catalog refresh; wider toolbar/Settings; retrofit Archive folders
 
 ### Added

@@ -21,7 +21,7 @@
 ; Build with: iscc installer\pdt.iss
 ; (requires a `wails build` first, so build\bin\PDT.exe exists to package)
 
-#define AppVersion "0.3.3"
+#define AppVersion "0.3.4"
 
 [Setup]
 AppId={{40FB3E79-C3DC-4C78-A969-35012251BD36}

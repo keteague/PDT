@@ -446,13 +446,13 @@ table.grid td.checkbox-cell {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
-/* Settings is +40px wider than every other .modal (the generic 460px width
+/* Settings is +90px wider than every other .modal (the generic 460px width
    above) - its own General/External Sites/About tabs carry more per-row
    content (base-path fields with Browse/Explorer buttons alongside them,
    the manufacturer URL list) than the simple confirm-style dialogs sharing
    .modal, which don't need the extra room. */
 .settings-modal {
-    width: 500px;
+    width: 550px;
 }
 
 .modal h3 {
@@ -502,7 +502,7 @@ table.grid td.checkbox-cell {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    height: 365px;
+    height: 385px;
     max-height: 50vh;
     overflow-y: auto;
 }

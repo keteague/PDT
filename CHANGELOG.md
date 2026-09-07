@@ -4,6 +4,32 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.2.1) - Kyocera driver packages now auto-extract on startup
+
+### Added
+- **Kyocera self-extracting `.exe` driver packages now auto-extract on PDT startup**
+  (`internal/driver/kyoceraexe.go`, `ensureKyoceraExesExtracted`) - manually verified live against a
+  real ~250MB package before automating it: 7-Zip can pull the embedded driver archive straight out of
+  the `.exe`'s own `.text` PE section without ever launching Kyocera's installer, then that extracted
+  `.text` file is itself a normal archive, extracted the same way a second time. `BuildCatalog` now
+  runs this for every `Drivers\Windows\<version>\Kyocera\` folder it scans, alongside the existing
+  `ensureZipsExtracted`/`ensureRarSfxExtracted`/`ensureMsiExtracted` steps: finds every `.exe` matching
+  Kyocera's current naming, pulls its version token out of the filename, and skips it if a sibling
+  folder's name already contains that version (so it's a one-time cost per driver version, not a
+  redo-every-launch one) - same bundled-`7z.exe`/no-op-if-`SevenZipPath`-unset/best-effort-cleanup-on-
+  failure conventions as `ensureRarSfxExtracted`. README's "Kyocera" section now documents this as
+  Method 1 (drop the `.exe` in and start PDT once - no scratch folders, no running the installer), with
+  the two pre-existing manual approaches renumbered to Methods 2 and 3 as fallbacks.
+
+### Verified
+- New tests: `TestKyoceraExeNameRe`, `TestKyoceraVersionAlreadyExtracted`,
+  `TestEnsureKyoceraExesExtracted_NoOpWithoutSevenZipConfigured`,
+  `TestEnsureKyoceraExesExtracted_SkipsAlreadyExtractedVersion`. Full suite (`go build`/`vet`/`test`,
+  `wails build`) clean. Confirmed live: the manual two-stage 7-Zip extraction this automates was run by
+  hand first, against a real Kyocera KX Driver v8.6A.1412 package, producing the expected
+  `32bit`/`64bit`/`arm64`/`Setup.exe`/`KmInstall.exe` layout; PDT.exe then confirmed to start cleanly
+  with the new startup step wired in.
+
 ## 2026-09-07 (v0.2.0) - Spooler control, per-row SNMP community string, window/label polish
 
 ### Added

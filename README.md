@@ -269,14 +269,29 @@ and the README's own note in "Default driver per manufacturer" above).
 
 Kyocera stopped shipping `.zip`-packaged drivers roughly 8 months before this was written; current
 downloads are a self-extracting `.exe` that launches Kyocera's own installer UI instead of just
-unpacking to a folder - `BuildCatalog` has no way to run that `.exe` for you, so getting an
-already-extracted folder onto disk under `Drivers\Windows\<version>\Kyocera\` is a manual, one-time
-step per driver version. Two ways to get there, both ending at the same result - a folder full of
-`.inf` files and friends, exactly like every other manufacturer's already-extracted package:
+unpacking to a folder. Three ways to get an already-extracted folder onto disk under
+`Drivers\Windows\<version>\Kyocera\`, all ending at the same result - a folder full of `.inf` files
+and friends, exactly like every other manufacturer's already-extracted package:
 
-**Method 1 - extract with 7-Zip, no installer run at all.** A Kyocera "self-extracting" `.exe` is
-actually a normal PE executable with a large embedded archive resource; 7-Zip can pull that resource
-out directly without ever launching the installer:
+**Method 1 - automatic (`internal/driver/kyoceraexe.go`).** `BuildCatalog` now does this for you: on
+every PDT startup, `ensureKyoceraExesExtracted` looks directly inside each `Drivers\Windows\<version>\
+Kyocera\` folder for a `.exe` matching Kyocera's current naming (`KXDRIVER 8.6A.1412.exe`,
+`KXDriver_8.6.1022.exe`, etc. - `kyoceraExeNameRe`, case-insensitive), pulls the version token out of
+the filename, and - unless a sibling folder's name already contains that same version token - runs the
+identical two-stage 7-Zip extraction Method 2 describes by hand, landing the result in a new
+`KXDriver_<version>` folder right next to the `.exe`. So the real manual step, in practice, is just:
+drop the freshly downloaded `.exe` directly into the right `Drivers\Windows\<version>\Kyocera\` folder
+and start PDT once - no scratch folders, no running the installer. Uses the same bundled `7z.exe` as
+the Lexmark RAR-SFX auto-extraction (`ensureRarSfxExtracted`) and is equally a no-op if
+`driver.SevenZipPath` isn't set (`go test`, `pdtdebug`, or extraction failing for that one package
+never blocks the rest of the catalog scan - the same "best-effort, clean up and retry next time"
+convention every `ensure*Extracted` helper in this package already follows). Methods 2 and 3 below
+remain useful as a manual fallback (a driver naming variant the regex doesn't recognize, or wanting to
+inspect the raw extraction yourself).
+
+**Method 2 - extract with 7-Zip by hand, no installer run at all.** A Kyocera "self-extracting" `.exe`
+is actually a normal PE executable with a large embedded archive resource; 7-Zip can pull that
+resource out directly without ever launching the installer:
 
 1. Make a scratch folder (e.g. `Downloads\temp`) and copy the downloaded `.exe` into it (e.g.
    `KXDRIVER 8.6A.1412.exe`).
@@ -291,7 +306,7 @@ out directly without ever launching the installer:
 4. Rename that folder to something version-identifying (e.g. `KXDRIVER_8.6A.1412`) and move it into
    `Drivers\Windows\<version>\Kyocera\`.
 
-**Method 2 - let the installer extract, then take its temp copy before it does anything else.**
+**Method 3 - let the installer extract, then take its temp copy before it does anything else.**
 
 1. Run the downloaded `.exe`. When Kyocera's "Product Library" installer window appears, **stop -
    don't proceed with the install.**
@@ -302,12 +317,12 @@ out directly without ever launching the installer:
    version-identifying (e.g. `KXDRIVER_8.6A.1412`).
 4. Exit the Product Library installer without installing anything.
 
-A few things worth knowing before relying on either method:
-- The installer's own temp extraction (Method 2) has been observed to survive under `%LocalAppData%`
+A few things worth knowing before relying on either manual method:
+- The installer's own temp extraction (Method 3) has been observed to survive under `%LocalAppData%`
   even after exiting the installer without installing - useful, since it means you can grab a copy
   after the fact if you forgot to before closing it, but not guaranteed to hold true for every
-  Kyocera installer version; if `KX Driver` isn't there, you'll need Method 1 instead, or to retry
-  Method 2 and copy the folder out *before* exiting the installer.
+  Kyocera installer version; if `KX Driver` isn't there, you'll need Method 2 instead, or to retry
+  Method 3 and copy the folder out *before* exiting the installer.
 - Installers generally extract to `%LocalAppData%\Temp`, not `%LocalAppData%` itself, so if a future
   Kyocera installer version relocates this, checking under `Temp` first (or using Sysinternals'
   Process Monitor to watch what the installer actually writes and where) is the way to re-find it.

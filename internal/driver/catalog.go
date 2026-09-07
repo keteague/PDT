@@ -188,9 +188,15 @@ func scanManufacturerFolders(catalog Catalog, root string) {
 
 		mfgPath := filepath.Join(root, e.Name())
 		ensureZipsExtracted(mfgPath)
+		// Kyocera's own bespoke two-stage extraction runs before the generic
+		// self-extracting-archive scan below - ensureSfxArchivesExtracted
+		// already skips any Kyocera-named exe outright (see its own doc
+		// comment for why order alone wouldn't be enough), but running the
+		// correct extraction first keeps this in the obvious "more specific
+		// before more general" order regardless.
+		ensureKyoceraExesExtracted(mfgPath)
 		ensureSfxArchivesExtracted(mfgPath)
 		ensureMsiExtracted(mfgPath)
-		ensureKyoceraExesExtracted(mfgPath)
 		_ = filepath.WalkDir(mfgPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil

@@ -106,3 +106,34 @@ func TestEnsureSfxArchivesExtracted_SkipsAlreadyExtracted(t *testing.T) {
 		t.Error("expected the already-extracted Foo/ folder to be left alone, not removed")
 	}
 }
+
+// TestEnsureSfxArchivesExtracted_SkipsKyoceraNamedExe guards against a real
+// regression: a Kyocera driver package's raw bytes do contain a real 7z/RAR
+// signature within the scan window (its .text PE section IS the embedded
+// archive), so without this exclusion this function would "successfully"
+// extract it into a same-named sibling folder full of nothing but raw PE
+// sections - and that wrong folder's name would then satisfy
+// kyoceraVersionAlreadyExtracted's own substring check, permanently blocking
+// kyoceraexe.go's correct two-stage extraction from ever running for that
+// version at all.
+func TestEnsureSfxArchivesExtracted_SkipsKyoceraNamedExe(t *testing.T) {
+	old := SevenZipPath
+	SevenZipPath = "some-path-that-would-fail-if-actually-invoked.exe"
+	defer func() { SevenZipPath = old }()
+
+	dir := t.TempDir()
+	kyoceraPath := filepath.Join(dir, "KXDRIVER 8.6A.1412.exe")
+	// A real archive signature, same as any other test file here - the point
+	// is this file WOULD be treated as a self-extracting archive if not for
+	// the name-based exclusion.
+	data := []byte{'R', 'a', 'r', '!', 0x1A, 0x07, 0x01, 0x00}
+	if err := os.WriteFile(kyoceraPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureSfxArchivesExtracted(dir)
+
+	if _, err := os.Stat(filepath.Join(dir, "KXDRIVER 8.6A.1412")); !os.IsNotExist(err) {
+		t.Error("expected a Kyocera-named exe to be left entirely alone by the generic SFX extractor")
+	}
+}

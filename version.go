@@ -5,7 +5,7 @@ package main
 // the compiled exe's own Win32 version resource; Go code has no way to read
 // that back at runtime, hence this separate constant rather than a single
 // source of truth).
-const AppVersion = "0.3.4"
+const AppVersion = "0.3.5"
 
 const (
 	appDisplayName = "Printer Deployment Tool"

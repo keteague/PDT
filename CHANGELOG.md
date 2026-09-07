@@ -4,6 +4,23 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.3.5) - Fix Kyocera extraction regression from generalized SFX detection
+
+### Fixed
+- **Generalizing self-extracting-archive detection to 7z/Zip (v0.3.3) broke Kyocera's own two-stage
+  extraction** - a Kyocera driver package's raw bytes do contain a real archive signature within
+  `ensureSfxArchivesExtracted`'s scan window (its `.text` PE section IS the embedded archive, just not
+  appended cleanly after the PE stub the way RAR/7z/Zip SFX packages are), so it was extracting
+  Kyocera's `.exe` too - wrongly, into a same-named sibling folder containing nothing but raw PE
+  sections (`.text`/`.rsrc`/`.reloc`/`CERTIFICATE`, not a single real driver file). Worse, that wrong
+  folder's name then satisfied `kyoceraVersionAlreadyExtracted`'s own substring check, permanently
+  blocking `kyoceraexe.go`'s correct two-stage extraction from ever running for that version again.
+  Fixed by having `ensureSfxArchivesExtracted` skip any Kyocera-named `.exe` outright (`kyoceraExeNameRe`)
+  rather than relying on call order alone, and reordered `scanManufacturerFolders` to run the
+  Kyocera-specific extraction first regardless. The bad leftover folder in this project's own Drivers
+  folder was removed; a fresh extraction was confirmed byte-identical to the correct one already
+  produced by hand earlier.
+
 ## 2026-09-07 (v0.3.4) - Settings dialog widened further
 
 ### Changed

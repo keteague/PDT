@@ -89,7 +89,19 @@ func isSelfExtractingArchive(path string) bool {
 // (kyoceraexe.go) is the one format seen so far that this can't catch, since
 // its embedded archive sits inside the exe's .text PE section rather than
 // simply appended after the PE stub the way these do - hence its own bespoke
-// two-stage extraction. A no-op if SevenZipPath isn't set.
+// two-stage extraction. Kyocera-named exes are skipped here entirely (see
+// kyoceraExeNameRe below) rather than merely left to fall through: a Kyocera
+// package's raw bytes do contain a real archive signature within the scan
+// window (the .text section IS the archive, just not appended cleanly the
+// way this function assumes), so isSelfExtractingArchive would otherwise
+// return true and this function would extract it - wrongly - into a
+// same-named sibling folder containing nothing but raw PE sections
+// (.text/.rsrc/.reloc/CERTIFICATE, not a single real driver file). Worse,
+// that wrong folder's name then satisfies kyoceraVersionAlreadyExtracted's
+// own substring check, permanently blocking the correct two-stage extraction
+// from ever running for that version - confirmed live as a real regression
+// the first time this generalized beyond RAR/zip. A no-op if SevenZipPath
+// isn't set.
 func ensureSfxArchivesExtracted(root string) {
 	if SevenZipPath == "" {
 		return
@@ -106,6 +118,9 @@ func ensureSfxArchivesExtracted(root string) {
 		}
 		if !strings.EqualFold(filepath.Ext(path), ".exe") {
 			return nil
+		}
+		if kyoceraExeNameRe.MatchString(d.Name()) {
+			return nil // kyoceraexe.go's own two-stage extraction owns this one
 		}
 
 		destDir := strings.TrimSuffix(path, filepath.Ext(path))

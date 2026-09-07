@@ -13,17 +13,56 @@ import (
 // preferences, not something that travels with a particular printer list.
 type Settings struct {
 	SaveFileBasePath   string            `json:"saveFileBasePath"`
+	DriversBasePath    string            `json:"driversBasePath"`
 	PreinstallBasePath string            `json:"preinstallBasePath"`
 	ManufacturerURLs   map[string]string `json:"manufacturerUrls"`
 	ManufacturerOrder  []string          `json:"manufacturerOrder"`
 }
 
-// defaultSaveFileBasePath is Configs/ next to the running executable
-// (configsRoot()'s own resolution - the flash drive's own Configs folder
-// when running from one) - saved JSON configs and captured DEVMODE/driver-
-// data files end up living alongside each other by default, matching how
-// Export Configs already looks for the latter there.
-func defaultSaveFileBasePath() string { return configsRoot() }
+// installedAppDataDir is %LocalAppData%\PDT - where an installed (non-
+// portable) copy of PDT keeps its own Drivers/Configs. Neither
+// installer-chosen exe location (%ProgramFiles%\PDT for an elevated
+// install, %LocalAppData%\Programs\PDT for an unelevated one) is guaranteed
+// writable by whoever actually ends up running PDT day to day, but this is,
+// regardless of which one PDT itself is installed under.
+func installedAppDataDir() string {
+	if lad := os.Getenv("LOCALAPPDATA"); lad != "" {
+		return filepath.Join(lad, "PDT")
+	}
+	return ""
+}
+
+// defaultDriversBasePath and defaultSaveFileBasePath both apply the same
+// rule: prefer a real, already-populated Drivers folder sitting next to the
+// running executable - the portable/flash-drive case, and the tell
+// BuildCatalog itself already used to decide whether Configs was
+// exe-relative too, before DriversBasePath/SaveFileBasePath existed as their
+// own Settings fields - falling back to installedAppDataDir() for an
+// installed copy, where the current user always has write access regardless
+// of whether PDT itself sits under %ProgramFiles% or %LocalAppData%\Programs.
+func defaultDriversBasePath() string {
+	if exe, err := os.Executable(); err == nil {
+		if candidate := filepath.Join(filepath.Dir(exe), "Drivers"); dirExists(candidate) {
+			return candidate
+		}
+	}
+	if dir := installedAppDataDir(); dir != "" {
+		return filepath.Join(dir, "Drivers")
+	}
+	return "Drivers"
+}
+
+func defaultSaveFileBasePath() string {
+	if exe, err := os.Executable(); err == nil {
+		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {
+			return filepath.Join(filepath.Dir(exe), "Configs")
+		}
+	}
+	if dir := installedAppDataDir(); dir != "" {
+		return filepath.Join(dir, "Configs")
+	}
+	return "Configs"
+}
 
 // defaultPreinstallBasePath is Documents\Preinstall under the current user's
 // home directory on THIS computer - created on demand by the OS folder-
@@ -111,6 +150,7 @@ func settingsFilePath() (string, error) {
 func loadSettings() Settings {
 	s := Settings{
 		SaveFileBasePath:   defaultSaveFileBasePath(),
+		DriversBasePath:    defaultDriversBasePath(),
 		PreinstallBasePath: defaultPreinstallBasePath(),
 		ManufacturerURLs:   defaultManufacturerURLs(),
 		ManufacturerOrder:  reconcileManufacturerOrder(nil),
@@ -129,6 +169,9 @@ func loadSettings() Settings {
 	}
 	if loaded.SaveFileBasePath != "" {
 		s.SaveFileBasePath = loaded.SaveFileBasePath
+	}
+	if loaded.DriversBasePath != "" {
+		s.DriversBasePath = loaded.DriversBasePath
 	}
 	if loaded.PreinstallBasePath != "" {
 		s.PreinstallBasePath = loaded.PreinstallBasePath

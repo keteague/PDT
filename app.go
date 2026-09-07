@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -65,6 +64,8 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.settings = loadSettings()
+	currentDriversBasePath = a.settings.DriversBasePath
+	currentConfigsBasePath = a.settings.SaveFileBasePath
 
 	// Best-effort cleanup of a previous update's renamed-aside old exe (see
 	// internal/update.Apply) - by the time this process is running at all,
@@ -74,6 +75,15 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	ensureSevenZipExtracted()
+
+	// A freshly-installed copy's Drivers folder (installedAppDataDir(),
+	// picked by defaultDriversBasePath() when there's no portable copy's
+	// Drivers folder to inherit) starts out completely empty - scaffold the
+	// standard manufacturer subfolders so the Defaults panel's own
+	// Manufacturer dropdown isn't just blank on first launch, and so
+	// there's an obvious, ready-to-use place to drop driver packages into.
+	// A no-op once anything already exists there (see its own doc comment).
+	_ = ensureDriversScaffold(driversRoot())
 
 	catalog, err := driver.BuildCatalog(driversRoot())
 	if err != nil {
@@ -102,6 +112,9 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 	if s.SaveFileBasePath == "" {
 		s.SaveFileBasePath = defaultSaveFileBasePath()
 	}
+	if s.DriversBasePath == "" {
+		s.DriversBasePath = defaultDriversBasePath()
+	}
 	if s.PreinstallBasePath == "" {
 		s.PreinstallBasePath = defaultPreinstallBasePath()
 	}
@@ -118,6 +131,8 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 		return Settings{}, err
 	}
 	a.settings = s
+	currentDriversBasePath = s.DriversBasePath
+	currentConfigsBasePath = s.SaveFileBasePath
 	return a.settings, nil
 }
 
@@ -246,17 +261,25 @@ func (a *App) ApplyUpdate(assetURL string) ApplyUpdateResult {
 	return ApplyUpdateResult{}
 }
 
-// driversRoot resolves the Drivers/ folder next to the running executable
-// (matching the original tool's convention of Drivers/ next to the script) -
-// falling back to ./Drivers under the working directory for `wails dev`,
-// where the built binary lives under build/bin rather than the project root.
+// currentDriversBasePath/currentConfigsBasePath cache the live Settings
+// values driversRoot()/configsRoot() below actually resolve to - set once
+// from a.settings in startup(), and refreshed in SaveSettings() so a change
+// takes effect immediately for anything that resolves its folder mid-
+// session (DEVMODE capture, Export Configs, Write to Flash Drive). The
+// driver *catalog* itself is the one exception: BuildCatalog only ever runs
+// once, at startup, so a changed DriversBasePath needs a PDT restart to
+// actually rescan the new location - Settings' own tooltip says so.
+var currentDriversBasePath string
+var currentConfigsBasePath string
+
+// driversRoot returns the Drivers folder PDT actually uses - Settings'
+// "Drivers Base Path", defaulting to defaultDriversBasePath() if that's
+// somehow still unset (shouldn't happen; loadSettings always seeds it).
 func driversRoot() string {
-	if exe, err := os.Executable(); err == nil {
-		if candidate := filepath.Join(filepath.Dir(exe), "Drivers"); dirExists(candidate) {
-			return candidate
-		}
+	if currentDriversBasePath != "" {
+		return currentDriversBasePath
 	}
-	return "Drivers"
+	return defaultDriversBasePath()
 }
 
 func dirExists(path string) bool {
@@ -264,20 +287,14 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// configsRoot resolves the Configs/ folder next to the running executable,
-// mirroring driversRoot's own real-deployment-vs-`wails dev` detection (does
-// a real Drivers/ folder already sit next to the exe?) rather than its own
-// existence check - unlike Drivers/, Configs/ is expected to start out empty
-// (or not exist at all) and gets created on demand by whatever first needs
-// to write into it (see saveDevModeToConfigsFolder), so its own presence
-// can't be used to detect which mode this is running in.
+// configsRoot returns the Configs folder PDT actually uses - Settings'
+// "Configuration Files Base Path", defaulting to defaultSaveFileBasePath()
+// if somehow still unset.
 func configsRoot() string {
-	if exe, err := os.Executable(); err == nil {
-		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {
-			return filepath.Join(filepath.Dir(exe), "Configs")
-		}
+	if currentConfigsBasePath != "" {
+		return currentConfigsBasePath
 	}
-	return "Configs"
+	return defaultSaveFileBasePath()
 }
 
 // CatalogStatus reports whether the driver catalog loaded at startup, and

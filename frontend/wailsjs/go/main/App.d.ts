@@ -54,6 +54,8 @@ export function NewCsvTemplate():Promise<main.PathResult>;
 
 export function OpenConfiguration():Promise<main.OpenConfigResult>;
 
+export function OpenDriversBasePathInExplorer(arg1:string):Promise<main.OpenFolderResult>;
+
 export function OpenManufacturerURL(arg1:string):Promise<void>;
 
 export function OpenRepoURL():Promise<void>;

@@ -4,7 +4,7 @@ import './app.css';
 import {
     Manufacturers, AllManufacturers, DriverCandidates, DefaultDriverFor, GetCatalogStatus,
     NewCsvTemplate, ImportCsv, OpenConfiguration, SaveConfiguration, Deploy, StopDeploy, ForceQuit,
-    GetSettings, SaveSettings, PickFolder, OpenManufacturerURL,
+    GetSettings, SaveSettings, PickFolder, OpenManufacturerURL, OpenDriversBasePathInExplorer,
     GetAppInfo, OpenRepoURL, CheckForUpdate, ApplyUpdate,
     GetSevenZipVersion, OpenSevenZipHomepage, CheckSevenZipUpdate, UpdateSevenZip,
     CaptureDevModeForPrinter, BrowseDevModeFile, EnumerateLocalPrinters,
@@ -36,7 +36,8 @@ const TIP = {
     name: 'Printer object name.',
     ip: 'Printer\'s IP address, or "NUL" to bind permanently to the local NUL: port.',
     selectAllHeader: 'Check/uncheck every row.',
-    saveFileBasePath: 'The folder Open/Save Configuration start from by default - defaults to Configs\\ on this flash drive.',
+    saveFileBasePath: 'Where PDT keeps saved JSON configs and captured DEVMODE/Device Settings files, and where Open/Save Configuration start from by default. Defaults to Configs\\ on this flash drive when running portably, or %LocalAppData%\\PDT\\Configs for an installed copy.',
+    driversBasePath: 'Where PDT looks for printer drivers (Drivers\\Windows\\<version>\\<Manufacturer>\\...) - takes effect after restarting PDT. Defaults to Drivers\\ on this flash drive when running portably, or %LocalAppData%\\PDT\\Drivers for an installed copy.',
     preinstallBasePath: 'Where site-survey "<SalesChainID> - <Client> - <Address>" subfolders live - Export Configs looks here for the one matching the current SalesChain ID.',
     manufacturerOrder: 'Drag to reorder - controls the Manufacturer dropdown\'s order in Defaults and in the grid. Settings > External Sites is always alphabetical regardless of this order.',
 };
@@ -134,7 +135,7 @@ const state = {
     rows: [],
     deploying: false,
     logLines: [],
-    settings: {saveFileBasePath: '', manufacturerUrls: {}, manufacturerOrder: []},
+    settings: {saveFileBasePath: '', driversBasePath: '', manufacturerUrls: {}, manufacturerOrder: []},
     // Set while Deploy is running: the exact rows submitted, in submission
     // order, plus how many deploy-progress events have arrived so far - since
     // events arrive in that same order, this correlates each event to its
@@ -176,6 +177,14 @@ document.querySelector('#app').innerHTML = `
           <div class="path-row">
             <input type="text" id="settingsBasePath" title="${tip('saveFileBasePath')}">
             <button id="btnBrowseBasePath" title="Browse for a folder...">&hellip;</button>
+          </div>
+        </label>
+        <label class="modal-field" title="${tip('driversBasePath')}">
+          Drivers Base Path
+          <div class="path-row">
+            <input type="text" id="settingsDriversBasePath" title="${tip('driversBasePath')}">
+            <button id="btnBrowseDriversBasePath" title="Browse for a folder...">&hellip;</button>
+            <button id="btnOpenDriversBasePath" title="Open this folder in File Explorer (creating the standard manufacturer subfolders first, if it's empty).">&#8594;</button>
           </div>
         </label>
         <label class="modal-field" title="${tip('preinstallBasePath')}">
@@ -1610,6 +1619,7 @@ async function confirmWriteToFlashDrive() {
 
 function openSettingsModal() {
     el('settingsBasePath').value = state.settings.saveFileBasePath;
+    el('settingsDriversBasePath').value = state.settings.driversBasePath;
     el('settingsPreinstallBasePath').value = state.settings.preinstallBasePath;
     for (const input of el('settingsSitesPanel').querySelectorAll('.settings-url')) {
         input.value = state.settings.manufacturerUrls?.[input.dataset.mfg] || '';
@@ -1848,6 +1858,16 @@ function wireSettingsModal() {
         if (!result.canceled) el('settingsBasePath').value = result.path;
     });
 
+    el('btnBrowseDriversBasePath').addEventListener('click', async () => {
+        const result = await PickFolder(el('settingsDriversBasePath').value);
+        if (!result.canceled) el('settingsDriversBasePath').value = result.path;
+    });
+
+    el('btnOpenDriversBasePath').addEventListener('click', async () => {
+        const result = await OpenDriversBasePathInExplorer(el('settingsDriversBasePath').value);
+        if (result.error) logStatus('ERR', `Could not open Drivers Base Path: ${result.error}`);
+    });
+
     el('btnBrowsePreinstallBasePath').addEventListener('click', async () => {
         const result = await PickFolder(el('settingsPreinstallBasePath').value);
         if (!result.canceled) el('settingsPreinstallBasePath').value = result.path;
@@ -1861,6 +1881,7 @@ function wireSettingsModal() {
         const manufacturerOrder = currentManufacturerOrder();
         const saved = await SaveSettings({
             saveFileBasePath: el('settingsBasePath').value,
+            driversBasePath: el('settingsDriversBasePath').value,
             preinstallBasePath: el('settingsPreinstallBasePath').value,
             manufacturerUrls,
             manufacturerOrder,
@@ -1868,7 +1889,7 @@ function wireSettingsModal() {
         state.settings = saved;
         await refreshManufacturerDropdowns();
         closeSettingsModal();
-        logStatus('OK', 'Settings saved.');
+        logStatus('OK', 'Settings saved. Restart PDT for a changed Drivers Base Path to take effect.');
     });
 
     el('btnCheckUpdates').addEventListener('click', () => {

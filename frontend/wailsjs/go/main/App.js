@@ -102,6 +102,10 @@ export function OpenConfiguration() {
   return window['go']['main']['App']['OpenConfiguration']();
 }
 
+export function OpenDriversBasePathInExplorer(arg1) {
+  return window['go']['main']['App']['OpenDriversBasePathInExplorer'](arg1);
+}
+
 export function OpenManufacturerURL(arg1) {
   return window['go']['main']['App']['OpenManufacturerURL'](arg1);
 }

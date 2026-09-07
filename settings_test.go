@@ -1,11 +1,55 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"PDT/internal/driver"
 )
+
+func TestInstalledAppDataDir(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", `C:\Users\Test\AppData\Local`)
+	want := filepath.Join(`C:\Users\Test\AppData\Local`, "PDT")
+	if got := installedAppDataDir(); got != want {
+		t.Errorf("installedAppDataDir() = %q, want %q", got, want)
+	}
+
+	t.Setenv("LOCALAPPDATA", "")
+	if got := installedAppDataDir(); got != "" {
+		t.Errorf("installedAppDataDir() with no LOCALAPPDATA = %q, want empty", got)
+	}
+}
+
+func TestEnsureDriversScaffold_CreatesManufacturerFolders(t *testing.T) {
+	dir := t.TempDir()
+	if err := ensureDriversScaffold(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, mfg := range driver.Manufacturers {
+		folder := filepath.Join(dir, "Windows", "11", strings.ReplaceAll(mfg, " ", ""))
+		if info, err := os.Stat(folder); err != nil || !info.IsDir() {
+			t.Errorf("expected scaffolded folder %q to exist", folder)
+		}
+	}
+}
+
+func TestEnsureDriversScaffold_LeavesNonEmptyRootAlone(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "SomethingAlreadyHere.txt")
+	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureDriversScaffold(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Windows")); !os.IsNotExist(err) {
+		t.Error("expected no scaffolding to happen when root already has something in it")
+	}
+}
 
 func TestReconcileManufacturerOrder_Nil(t *testing.T) {
 	got := reconcileManufacturerOrder(nil)

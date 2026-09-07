@@ -329,6 +329,18 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class OpenFolderResult {
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpenFolderResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.error = source["error"];
+	    }
+	}
 	export class PathResult {
 	    canceled: boolean;
 	    path: string;
@@ -359,6 +371,7 @@ export namespace main {
 	}
 	export class Settings {
 	    saveFileBasePath: string;
+	    driversBasePath: string;
 	    preinstallBasePath: string;
 	    manufacturerUrls: Record<string, string>;
 	    manufacturerOrder: string[];
@@ -370,6 +383,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.saveFileBasePath = source["saveFileBasePath"];
+	        this.driversBasePath = source["driversBasePath"];
 	        this.preinstallBasePath = source["preinstallBasePath"];
 	        this.manufacturerUrls = source["manufacturerUrls"];
 	        this.manufacturerOrder = source["manufacturerOrder"];

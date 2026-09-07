@@ -10,7 +10,10 @@ that documentation didn't cover it, verified directly against this machine's rea
 
 `PDT.exe` requests elevation on launch (`build/windows/wails.exe.manifest`) - every real operation it
 performs needs Administrator, so Windows prompts for UAC automatically rather than the app starting
-unelevated and failing partway through a deploy. There is no unelevated fallback mode.
+unelevated and failing partway through a deploy. There is no unelevated fallback mode. This is
+unrelated to (and unaffected by) the installer's own elevated-vs-unelevated install choice described
+in "Installing PDT" below - wherever the installed `PDT.exe` ends up sitting, launching it still
+UAC-prompts every time, per its own manifest.
 
 ## Status
 
@@ -557,3 +560,51 @@ go test ./...
 
 `wails dev` / `wails build` build the actual application (see `wails.json`); the Go backend above has
 no dependency on the frontend and is fully testable on its own.
+
+### Building the installer (`installer/pdt.iss`)
+
+```
+wails build
+iscc installer\pdt.iss
+```
+
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`iscc.exe` on `PATH`, or invoke it by full
+path - `winget install JRSoftware.InnoSetup` is the fastest way to get it). Produces
+`build\bin\PDT-Setup-<version>.exe`. Deliberately packages only `PDT.exe` itself - no `Drivers` folder,
+which would bloat the installer for no benefit (driver packages are hundreds of MB each; see "Drivers
+folder layout" above) since PDT already scaffolds an empty `Drivers\Windows\11\<Manufacturer>\`
+structure on first launch regardless (`ensureDriversScaffold`, `driversfolder.go`) ready for a
+technician to drop real packages into. Keep `installer/pdt.iss`'s own `AppVersion` preprocessor define
+in sync with `version.go`/`wails.json`'s `info.productVersion` by hand, the same as those two are kept
+in sync with each other today.
+
+## Installing PDT
+
+The installer is **elevation-optional by design** (Inno Setup's `PrivilegesRequired=lowest` +
+`PrivilegesRequiredOverridesAllowed`, plus `DefaultDirName={autopf}\PDT` - `{autopf}` is Inno Setup's
+own elevation-aware constant, resolving differently depending on how the installer itself ends up
+running): double-clicking it normally runs **unelevated, no UAC prompt**, installing to
+`%LocalAppData%\Programs\PDT`. Explicitly choosing "Run as administrator" instead installs to
+`%ProgramFiles%\PDT`. Neither choice affects whether *PDT itself* elevates once installed - see this
+README's very first section: `PDT.exe`'s own manifest always requests Administrator on launch,
+regardless of which folder it's running from.
+
+Either way, PDT's Drivers and Configs folders (`Settings.DriversBasePath`/`SaveFileBasePath`,
+`settings.go`) default to `%LocalAppData%\PDT\Drivers` / `%LocalAppData%\PDT\Configs` - **not** wherever
+the executable itself landed - since `%ProgramFiles%` isn't writable by an ordinary user, and using the
+same location either way means both install modes behave identically once PDT is actually running (a
+technician can drop a new driver package into `%LocalAppData%\PDT\Drivers` from an ordinary,
+non-elevated Explorer window regardless of which mode PDT itself was installed in). Both paths are
+editable in Settings > General if a different location is ever needed - Drivers Base Path takes effect
+after restarting PDT (`BuildCatalog` only scans once, at startup); Configuration Files Base Path takes
+effect immediately.
+
+This default-path detection is shared with the portable/flash-drive case (see "Write to Flash Drive"):
+`defaultDriversBasePath`/`defaultSaveFileBasePath` (`settings.go`) both check for a real, already-
+populated `Drivers` folder sitting next to the running executable first - true for a flash drive with
+`Drivers`/`Configs` already on it, false for a freshly-installed copy - before falling back to
+`%LocalAppData%\PDT`.
+
+The installer is unsigned (no code-signing certificate) - Windows SmartScreen will likely show an
+"unrecognized app" warning on first run ("More info" -> "Run anyway"). This is expected for a small
+internal tool without a paid signing certificate, not a build error.

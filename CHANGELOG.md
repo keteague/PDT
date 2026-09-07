@@ -4,6 +4,64 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.3.0) - Windows installer; Drivers/Configs now live in %LocalAppData%\PDT
+
+### Added
+- **Windows installer** (`installer/pdt.iss`, built with Inno Setup 6 - `iscc installer\pdt.iss`),
+  published as a GitHub Release asset (`PDT-Setup-<version>.exe`). Deliberately packages only
+  `PDT.exe` - no `Drivers` folder, which would bloat it for no benefit (driver packages are hundreds
+  of MB each) since PDT already scaffolds an empty `Drivers\Windows\11\<Manufacturer>\` structure on
+  first launch regardless. **Elevation-optional by design**
+  (`PrivilegesRequired=lowest`/`PrivilegesRequiredOverridesAllowed` + `DefaultDirName={autopf}\PDT`):
+  double-clicking it normally installs unelevated, no UAC prompt, to
+  `%LocalAppData%\Programs\PDT`; explicitly running it as administrator installs to
+  `%ProgramFiles%\PDT` instead. Live-verified end to end for the elevated path (silent install landed
+  in `C:\Program Files\PDT`, Start Menu/Desktop shortcuts and an HKLM uninstall entry created
+  correctly, launching the installed copy correctly scaffolded
+  `%LocalAppData%\PDT\Drivers\Windows\11\<Manufacturer>\` for every manufacturer, and the generated
+  uninstaller removed everything cleanly); the unelevated path relies on Inno Setup's own
+  well-documented `{autopf}` mechanism and could not be directly exercised in this sandboxed session
+  (repeated attempts to force it via `/CURRENTUSER` from an already-elevated automated shell hung,
+  most likely an artifact of that shell having no interactive desktop session to de-elevate into,
+  not a script defect) - worth a real-world confirmation on an ordinary desktop session.
+- **Settings > General gains "Drivers Base Path"** (label, text field, Browse button, and a
+  right-arrow button that scaffolds-if-empty then opens the folder in File Explorer), positioned
+  between Configuration Files Base Path and Preinstall Base Path. Unlike Preinstall Base Path (a
+  convenience pointer only), this is a **live** setting: `BuildCatalog` now reads
+  `Settings.DriversBasePath` directly, so it actually controls where PDT loads its driver catalog
+  from (takes effect after restarting PDT, since the catalog only scans once at startup).
+
+### Changed
+- **Drivers and Configs for an installed (non-portable) copy of PDT now default to
+  `%LocalAppData%\PDT\Drivers` and `%LocalAppData%\PDT\Configs`**, regardless of whether PDT itself
+  was installed under `%ProgramFiles%` or `%LocalAppData%\Programs` - neither is guaranteed writable
+  by an ordinary user (`%ProgramFiles%` never is), so a single, always-writable, always-the-same
+  location was chosen over forking behavior by install mode. `defaultDriversBasePath`/
+  `defaultSaveFileBasePath` (`settings.go`) both still prefer a real, already-populated `Drivers`
+  folder sitting next to the running executable first (the portable/flash-drive case), matching
+  existing behavior exactly for that case - only a freshly-installed copy with no such folder falls
+  back to the new `%LocalAppData%\PDT` default. **Configuration Files Base Path is now also a live
+  setting** the same way (`configsRoot()`/`driversRoot()` now read `Settings.SaveFileBasePath`/
+  `DriversBasePath` instead of a hardcoded exe-relative-only computation), and takes effect
+  immediately within the same session (DEVMODE capture, Export Configs, Write to Flash Drive) rather
+  than needing a restart.
+- Write to Flash Drive already wrote `Drivers`/`Configs` as siblings of the copied executable on the
+  destination drive regardless of the source machine's own `driversRoot()`/`configsRoot()`
+  resolution (confirmed unchanged, no code needed) - so a portable copy stamped out from an installed
+  PDT (now reading from `%LocalAppData%\PDT`) still gets a normal `<drive>:\Drivers`,
+  `<drive>:\Configs` layout, unaffected by where the source machine keeps its own copies.
+  Preinstall Base Path is untouched by this entirely, as it should be - it's a technician's own
+  laptop-local site-survey folder, never something that belongs on the flash drive itself.
+- Settings dialog is 30px taller (each tab's fixed content height: 320px -> 350px), to fit the new
+  Drivers Base Path field without scrolling.
+
+### Verified
+- New tests: `TestInstalledAppDataDir`, `TestEnsureDriversScaffold_CreatesManufacturerFolders`,
+  `TestEnsureDriversScaffold_LeavesNonEmptyRootAlone`. Full suite (`go build`/`vet`/`test`,
+  `wails build`, `iscc installer\pdt.iss`) clean.
+- Live end to end as described above under "Added" - real silent install/uninstall cycle via the
+  compiled installer, not just a review of the `.iss` script.
+
 ## 2026-09-07 (v0.2.1) - Kyocera driver packages now auto-extract on startup
 
 ### Added

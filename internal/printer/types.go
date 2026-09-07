@@ -21,6 +21,13 @@ type PrinterRow struct {
 	OneSided                 bool
 	UseExistingPort          bool
 	AdvancedPrintingFeatures bool
+	// DevModeFile is the bare filename (not a full path) of a captured raw
+	// DEVMODE under the Configs folder, e.g. "18455-1-Copy Room.bin" - a
+	// pointer, never the DEVMODE bytes themselves (which never travel through
+	// JSON at all - see ResolveDevModePath). Empty means no DEVMODE was
+	// explicitly captured/browsed for this row; Deploy still checks the
+	// Configs folder by convention as a fallback in that case.
+	DevModeFile string
 }
 
 // NulPortName is the local Windows port every NUL-bound printer is created

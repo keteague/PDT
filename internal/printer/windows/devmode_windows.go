@@ -82,6 +82,28 @@ func devModeView(buf []byte) *DevMode {
 	return (*DevMode)(unsafe.Pointer(&buf[0]))
 }
 
+// setDevModeEverywhere commits validated as both the printer's global
+// default (SetGlobalDevMode, Level 8 - what "Printing Defaults" on the
+// Advanced tab shows, and what any user without their own override
+// inherits) and the calling account's own per-user default (SetPerUserDevMode,
+// Level 2 - what "Preferences" on the General tab shows for that same
+// account). These are two independent stores on Windows (see
+// OpenedPrinter.SetPerUserDevMode's own comment) - writing only one leaves
+// the other showing stale/factory settings, which is exactly what was
+// observed testing against only the global write. The global write is
+// authoritative for success/failure, since it's what actually matters for
+// whoever eventually prints from this machine; the per-user write is
+// best-effort so it never fails deploy over what's ultimately just a
+// convenience for whichever account happens to be looking at Preferences
+// right after.
+func setDevModeEverywhere(p *OpenedPrinter, validated []byte) error {
+	if err := p.SetGlobalDevMode(validated); err != nil {
+		return err
+	}
+	_ = p.SetPerUserDevMode(validated)
+	return nil
+}
+
 // SetDuplexAndColor ports the duplex/color half of Deploy-PrinterRow's print
 // configuration step, going straight to DEVMODE instead of the original
 // tool's two-tier Set-PrintConfiguration + PrintTicket-XML-fallback dance -
@@ -119,14 +141,34 @@ func SetDuplexAndColor(name string, oneSided, mono bool) error {
 		return err
 	}
 
-	info, err := p.GetInfo2()
+	return setDevModeEverywhere(p, validated)
+}
+
+// ApplyCapturedDevMode sets name's DEVMODE to a previously-captured raw
+// DEVMODE (from GetDevMode against some other, manually-configured printer -
+// see App.CaptureDevModeForPrinter) - the deploy-time counterpart to
+// SetDuplexAndColor above, mirroring its exact shape, but replaying a whole
+// human-configured DEVMODE instead of only setting the duplex/color fields
+// programmatically. Always round-trips data through this printer's own
+// driver via ValidateDevMode first - a captured DEVMODE was validated by a
+// (possibly different) machine's copy of the same driver, and drivers are
+// free to normalize/reject fields on their own.
+func ApplyCapturedDevMode(name string, data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("ApplyCapturedDevMode(%q): empty DEVMODE data", name)
+	}
+	p, err := OpenPrinter(name, PrinterAllAccess)
 	if err != nil {
 		return err
 	}
-	info.Info.DevMode = uintptr(unsafe.Pointer(&validated[0]))
-	err = p.SetInfo2(info)
-	runtime.KeepAlive(validated)
-	return err
+	defer p.Close()
+
+	validated, err := ValidateDevMode(p.Handle, name, data)
+	if err != nil {
+		return err
+	}
+
+	return setDevModeEverywhere(p, validated)
 }
 
 // GetActualDuplexColor re-queries the driver's current DEVMODE fresh (not

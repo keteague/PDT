@@ -12,15 +12,26 @@ import (
 // (rather than folding into config.SavedConfig) since these are app-wide
 // preferences, not something that travels with a particular printer list.
 type Settings struct {
-	SaveFileBasePath  string            `json:"saveFileBasePath"`
-	ManufacturerURLs  map[string]string `json:"manufacturerUrls"`
-	ManufacturerOrder []string          `json:"manufacturerOrder"`
+	SaveFileBasePath   string            `json:"saveFileBasePath"`
+	PreinstallBasePath string            `json:"preinstallBasePath"`
+	ManufacturerURLs   map[string]string `json:"manufacturerUrls"`
+	ManufacturerOrder  []string          `json:"manufacturerOrder"`
 }
 
-// defaultSaveFileBasePath is Documents\Preinstall under the current user's
-// home directory - created on demand by the OS folder-picker/save dialog if
-// it doesn't already exist, never eagerly by this tool itself.
-func defaultSaveFileBasePath() string {
+// defaultSaveFileBasePath is Configs/ next to the running executable
+// (configsRoot()'s own resolution - the flash drive's own Configs folder
+// when running from one) - saved JSON configs and captured DEVMODE/driver-
+// data files end up living alongside each other by default, matching how
+// Export Configs already looks for the latter there.
+func defaultSaveFileBasePath() string { return configsRoot() }
+
+// defaultPreinstallBasePath is Documents\Preinstall under the current user's
+// home directory on THIS computer - created on demand by the OS folder-
+// picker dialog if it doesn't already exist, never eagerly by this tool
+// itself. Unlike SaveFileBasePath, this is never exe-relative: it names a
+// technician's own site-survey notes folder, which lives on their laptop
+// regardless of which flash drive PDT happens to be running from.
+func defaultPreinstallBasePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -99,9 +110,10 @@ func settingsFilePath() (string, error) {
 // blanked out, still gets sensible defaults for the rest.
 func loadSettings() Settings {
 	s := Settings{
-		SaveFileBasePath:  defaultSaveFileBasePath(),
-		ManufacturerURLs:  defaultManufacturerURLs(),
-		ManufacturerOrder: reconcileManufacturerOrder(nil),
+		SaveFileBasePath:   defaultSaveFileBasePath(),
+		PreinstallBasePath: defaultPreinstallBasePath(),
+		ManufacturerURLs:   defaultManufacturerURLs(),
+		ManufacturerOrder:  reconcileManufacturerOrder(nil),
 	}
 	path, err := settingsFilePath()
 	if err != nil {
@@ -117,6 +129,9 @@ func loadSettings() Settings {
 	}
 	if loaded.SaveFileBasePath != "" {
 		s.SaveFileBasePath = loaded.SaveFileBasePath
+	}
+	if loaded.PreinstallBasePath != "" {
+		s.PreinstallBasePath = loaded.PreinstallBasePath
 	}
 	for mfg, url := range loaded.ManufacturerURLs {
 		if url != "" {

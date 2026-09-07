@@ -10,6 +10,18 @@ export function ApplyUpdate(arg1) {
   return window['go']['main']['App']['ApplyUpdate'](arg1);
 }
 
+export function BrowseDevModeFile(arg1, arg2) {
+  return window['go']['main']['App']['BrowseDevModeFile'](arg1, arg2);
+}
+
+export function CaptureDevModeForPrinter(arg1, arg2) {
+  return window['go']['main']['App']['CaptureDevModeForPrinter'](arg1, arg2);
+}
+
+export function CheckExportCollisions(arg1, arg2) {
+  return window['go']['main']['App']['CheckExportCollisions'](arg1, arg2);
+}
+
 export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
@@ -30,6 +42,22 @@ export function DriverCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['DriverCandidates'](arg1, arg2, arg3);
 }
 
+export function EnumerateLocalPrinters() {
+  return window['go']['main']['App']['EnumerateLocalPrinters']();
+}
+
+export function ExportConfigs(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ExportConfigs'](arg1, arg2, arg3);
+}
+
+export function ForceQuit() {
+  return window['go']['main']['App']['ForceQuit']();
+}
+
+export function FormatDrives(arg1) {
+  return window['go']['main']['App']['FormatDrives'](arg1);
+}
+
 export function GetAppInfo() {
   return window['go']['main']['App']['GetAppInfo']();
 }
@@ -48,6 +76,14 @@ export function GetSevenZipVersion() {
 
 export function ImportCsv() {
   return window['go']['main']['App']['ImportCsv']();
+}
+
+export function ListPreinstallFolders(arg1) {
+  return window['go']['main']['App']['ListPreinstallFolders'](arg1);
+}
+
+export function ListRemovableDrives() {
+  return window['go']['main']['App']['ListRemovableDrives']();
 }
 
 export function Manufacturers() {
@@ -90,6 +126,14 @@ export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
+export function StopDeploy() {
+  return window['go']['main']['App']['StopDeploy']();
+}
+
 export function UpdateSevenZip(arg1) {
   return window['go']['main']['App']['UpdateSevenZip'](arg1);
+}
+
+export function WritePortablePDT(arg1) {
+  return window['go']['main']['App']['WritePortablePDT'](arg1);
 }

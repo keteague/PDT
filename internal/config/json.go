@@ -27,6 +27,10 @@ type SavedRow struct {
 	OneSided                 bool   `json:"OneSided"`
 	UseExistingPort          bool   `json:"UseExistingPort"`
 	AdvancedPrintingFeatures bool   `json:"AdvancedPrintingFeatures"`
+	// DevModeFile is a pointer (bare filename under the Configs folder) to a
+	// captured raw DEVMODE, not the DEVMODE bytes themselves - see
+	// printer.PrinterRow's own DevModeFile field and printer.ResolveDevModePath.
+	DevModeFile string `json:"DevModeFile"`
 }
 
 func (r SavedRow) ToPrinterRow() printer.PrinterRow {
@@ -34,6 +38,7 @@ func (r SavedRow) ToPrinterRow() printer.PrinterRow {
 		Name: r.Name, IP: r.IP, Manufacturer: r.Manufacturer, Model: r.Model, Driver: r.Driver,
 		SNMP: r.SNMP, Mono: r.Mono, OneSided: r.OneSided,
 		UseExistingPort: r.UseExistingPort, AdvancedPrintingFeatures: r.AdvancedPrintingFeatures,
+		DevModeFile: r.DevModeFile,
 	}
 }
 
@@ -42,6 +47,7 @@ func RowFromPrinterRow(row printer.PrinterRow, selected bool) SavedRow {
 		Select: selected, Name: row.Name, IP: row.IP, Manufacturer: row.Manufacturer, Model: row.Model,
 		Driver: row.Driver, SNMP: row.SNMP, Mono: row.Mono, OneSided: row.OneSided,
 		UseExistingPort: row.UseExistingPort, AdvancedPrintingFeatures: row.AdvancedPrintingFeatures,
+		DevModeFile: row.DevModeFile,
 	}
 }
 

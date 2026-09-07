@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -45,6 +46,16 @@ type App struct {
 	modelIndex map[string]map[string][]string
 	catalogErr error
 	settings   Settings
+
+	// deployCancel is set for the duration of a running Deploy call (nil
+	// otherwise) - guarded by deployMu since StopDeploy can be called from a
+	// different goroutine than the one running Deploy itself. Canceling it
+	// is exactly what printer.DeployAllWithProgress already documents as its
+	// only early-exit path: the row currently in progress still finishes
+	// (safer than aborting a printer/port/driver change half-applied), but
+	// no further row starts.
+	deployMu     sync.Mutex
+	deployCancel context.CancelFunc
 }
 
 func NewApp() *App {
@@ -90,6 +101,9 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 	<-a.ready
 	if s.SaveFileBasePath == "" {
 		s.SaveFileBasePath = defaultSaveFileBasePath()
+	}
+	if s.PreinstallBasePath == "" {
+		s.PreinstallBasePath = defaultPreinstallBasePath()
 	}
 	if s.ManufacturerURLs == nil {
 		s.ManufacturerURLs = map[string]string{}
@@ -248,6 +262,22 @@ func driversRoot() string {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// configsRoot resolves the Configs/ folder next to the running executable,
+// mirroring driversRoot's own real-deployment-vs-`wails dev` detection (does
+// a real Drivers/ folder already sit next to the exe?) rather than its own
+// existence check - unlike Drivers/, Configs/ is expected to start out empty
+// (or not exist at all) and gets created on demand by whatever first needs
+// to write into it (see saveDevModeToConfigsFolder), so its own presence
+// can't be used to detect which mode this is running in.
+func configsRoot() string {
+	if exe, err := os.Executable(); err == nil {
+		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {
+			return filepath.Join(filepath.Dir(exe), "Configs")
+		}
+	}
+	return "Configs"
 }
 
 // CatalogStatus reports whether the driver catalog loaded at startup, and
@@ -467,9 +497,10 @@ func toDeployRowResult(r printer.DeployResult) DeployRowResult {
 // single HP row alone can take several minutes even with the NUL: workaround
 // declined, so the frontend needs live per-row updates, not just a final
 // batch result) and also returning every result once the whole run - or an
-// earlier cancellation - completes. A failure to create one row's printer
-// object is fatal for that row alone; the run always continues to the next
-// row regardless (see internal/printer.DeployAllWithProgress).
+// earlier cancellation via StopDeploy - completes. A failure to create one
+// row's printer object is fatal for that row alone; the run always
+// continues to the next row regardless (see
+// internal/printer.DeployAllWithProgress).
 func (a *App) Deploy(rows []printer.PrinterRow, salesChainID, portNamePrefix string) []DeployRowResult {
 	<-a.ready
 	reqs := make([]printer.DeployRequest, len(rows))
@@ -480,8 +511,23 @@ func (a *App) Deploy(rows []printer.PrinterRow, salesChainID, portNamePrefix str
 	setTitleBarBusy()
 	defer resetTitleBarColor()
 
-	deployer := pdtwin.NewDeployer(a.catalog)
-	results := printer.DeployAllWithProgress(a.ctx, deployer, reqs, a.confirm, func(r printer.DeployResult) {
+	// A cancellable child of a.ctx, not a.ctx itself - a.ctx lives for the
+	// whole app, so canceling it directly would take down every other
+	// in-flight Wails call along with this one deploy. StopDeploy only ever
+	// touches this derived context.
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.deployMu.Lock()
+	a.deployCancel = cancel
+	a.deployMu.Unlock()
+	defer func() {
+		a.deployMu.Lock()
+		a.deployCancel = nil
+		a.deployMu.Unlock()
+		cancel()
+	}()
+
+	deployer := pdtwin.NewDeployer(a.catalog, configsRoot())
+	results := printer.DeployAllWithProgress(ctx, deployer, reqs, a.confirm, func(r printer.DeployResult) {
 		runtime.EventsEmit(a.ctx, deployProgressEvent, toDeployRowResult(r))
 	})
 
@@ -490,6 +536,37 @@ func (a *App) Deploy(rows []printer.PrinterRow, salesChainID, portNamePrefix str
 		out[i] = toDeployRowResult(r)
 	}
 	return out
+}
+
+// StopDeploy cancels the currently-running Deploy, if any (a no-op
+// otherwise) - the row already in progress still finishes rather than being
+// torn down mid-step, since aborting a printer/port/driver change half-
+// applied would risk leaving that one printer object in a broken,
+// partially-configured state; no further row starts afterward.
+func (a *App) StopDeploy() {
+	a.deployMu.Lock()
+	cancel := a.deployCancel
+	a.deployMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// ForceQuit immediately terminates this process - the emergency escape
+// hatch for "PDT is locked up mid-deploy". A single Win32 call blocked
+// forever (a hung driver install, a printer-object call that never returns)
+// has no safe way to be canceled from Go once it's started - context
+// cancellation only ever helps at a checkpoint the code itself checks
+// between steps, which is exactly the checkpoint that's unreachable if the
+// app is genuinely hung. Deliberately bypasses every graceful-shutdown path
+// (Wails' own runtime.Quit, deferred cleanup, Go's finalizers) rather than
+// attempting any of them first - if the hang is real, anything that assumes
+// the app is still responsive enough to participate in its own shutdown
+// could just as easily hang too. Whatever was mid-flight is abandoned
+// exactly as if the process had been ended from Task Manager, because this
+// is that, from inside the app instead of outside it.
+func (a *App) ForceQuit() {
+	os.Exit(1)
 }
 
 // confirm implements printer.Confirm via a native OS Yes/No message box -

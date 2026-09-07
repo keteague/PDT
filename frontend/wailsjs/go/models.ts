@@ -12,6 +12,7 @@ export namespace config {
 	    OneSided: boolean;
 	    UseExistingPort: boolean;
 	    AdvancedPrintingFeatures: boolean;
+	    DevModeFile: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SavedRow(source);
@@ -30,6 +31,7 @@ export namespace config {
 	        this.OneSided = source["OneSided"];
 	        this.UseExistingPort = source["UseExistingPort"];
 	        this.AdvancedPrintingFeatures = source["AdvancedPrintingFeatures"];
+	        this.DevModeFile = source["DevModeFile"];
 	    }
 	}
 	export class SavedConfig {
@@ -99,6 +101,20 @@ export namespace main {
 	        this.error = source["error"];
 	    }
 	}
+	export class BatchDriveResult {
+	    succeeded: string[];
+	    failed: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new BatchDriveResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.succeeded = source["succeeded"];
+	        this.failed = source["failed"];
+	    }
+	}
 	export class CatalogStatus {
 	    ok: boolean;
 	    error: string;
@@ -126,6 +142,72 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.rowName = source["rowName"];
 	        this.log = source["log"];
+	        this.error = source["error"];
+	    }
+	}
+	export class DevModeResult {
+	    fileName: string;
+	    canceled: boolean;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DevModeResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.fileName = source["fileName"];
+	        this.canceled = source["canceled"];
+	        this.error = source["error"];
+	    }
+	}
+	export class DriveInfo {
+	    letter: string;
+	    label: string;
+	    totalBytes: number;
+	    freeBytes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DriveInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.letter = source["letter"];
+	        this.label = source["label"];
+	        this.totalBytes = source["totalBytes"];
+	        this.freeBytes = source["freeBytes"];
+	    }
+	}
+	export class ExportCollisionResult {
+	    sourceFiles: string[];
+	    colliding: string[];
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExportCollisionResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sourceFiles = source["sourceFiles"];
+	        this.colliding = source["colliding"];
+	        this.error = source["error"];
+	    }
+	}
+	export class ExportResult {
+	    destPath: string;
+	    copied: string[];
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ExportResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.destPath = source["destPath"];
+	        this.copied = source["copied"];
 	        this.error = source["error"];
 	    }
 	}
@@ -160,6 +242,58 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class ListDrivesResult {
+	    drives: DriveInfo[];
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ListDrivesResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.drives = this.convertValues(source["drives"], DriveInfo);
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LocalPrinterCandidate {
+	    name: string;
+	    ip: string;
+	    manufacturer: string;
+	    driver: string;
+	    physical: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new LocalPrinterCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.ip = source["ip"];
+	        this.manufacturer = source["manufacturer"];
+	        this.driver = source["driver"];
+	        this.physical = source["physical"];
+	    }
 	}
 	export class OpenConfigResult {
 	    canceled: boolean;
@@ -207,8 +341,23 @@ export namespace main {
 	        this.path = source["path"];
 	    }
 	}
+	export class PreinstallFoldersResult {
+	    folders: string[];
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PreinstallFoldersResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.folders = source["folders"];
+	        this.error = source["error"];
+	    }
+	}
 	export class Settings {
 	    saveFileBasePath: string;
+	    preinstallBasePath: string;
 	    manufacturerUrls: Record<string, string>;
 	    manufacturerOrder: string[];
 	
@@ -219,6 +368,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.saveFileBasePath = source["saveFileBasePath"];
+	        this.preinstallBasePath = source["preinstallBasePath"];
 	        this.manufacturerUrls = source["manufacturerUrls"];
 	        this.manufacturerOrder = source["manufacturerOrder"];
 	    }
@@ -261,6 +411,7 @@ export namespace printer {
 	    OneSided: boolean;
 	    UseExistingPort: boolean;
 	    AdvancedPrintingFeatures: boolean;
+	    DevModeFile: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new PrinterRow(source);
@@ -278,6 +429,7 @@ export namespace printer {
 	        this.OneSided = source["OneSided"];
 	        this.UseExistingPort = source["UseExistingPort"];
 	        this.AdvancedPrintingFeatures = source["AdvancedPrintingFeatures"];
+	        this.DevModeFile = source["DevModeFile"];
 	    }
 	}
 

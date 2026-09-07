@@ -25,4 +25,6 @@ var (
 	procXcvDataW            = modwinspool.NewProc("XcvDataW")
 	procEnumPortsW          = modwinspool.NewProc("EnumPortsW")
 	procDocumentPropertiesW = modwinspool.NewProc("DocumentPropertiesW")
+	procEnumPrinterDataExW  = modwinspool.NewProc("EnumPrinterDataExW")
+	procSetPrinterDataExW   = modwinspool.NewProc("SetPrinterDataExW")
 )

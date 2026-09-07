@@ -48,3 +48,29 @@ func FindTcpIpPortByHost(hostAddress string) (portName string, found bool, err e
 	}
 	return "", false, nil
 }
+
+// FindHostByTcpIpPortName is FindTcpIpPortByHost in reverse - given a port
+// name already known to be a Standard TCP/IP port (e.g. from
+// EnumLocalPrinters' own PortName), reads its target address directly rather
+// than scanning every port. Used for Import Printers' best-effort IP
+// enrichment: a printer already deployed and manually configured on this
+// reference machine already has its real target IP on its own port.
+func FindHostByTcpIpPortName(portName string) (host string, found bool, err error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, tcpipPortsRegPath+`\`+portName, registry.QUERY_VALUE)
+	if err != nil {
+		if errors.Is(err, registry.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	defer key.Close()
+
+	host, _, err = key.GetStringValue("HostName")
+	if err != nil {
+		if errors.Is(err, registry.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return host, true, nil
+}

@@ -38,12 +38,6 @@
     flex: 1;
 }
 
-.status-label {
-    font-size: 12px;
-    color: #9fb3c8;
-    padding: 0 8px;
-}
-
 button {
     background: #2d425c;
     color: white;
@@ -72,6 +66,17 @@ button.primary:hover:not(:disabled) {
     background: #38835d;
 }
 
+button.danger {
+    background: #8f2f2f;
+    border-color: #b33f3f;
+    color: #fff;
+    font-weight: 600;
+}
+
+button.danger:hover:not(:disabled) {
+    background: #a53838;
+}
+
 input[type="text"], input[type="number"], select {
     background: #f0f0f0;
     color: #111;
@@ -79,6 +84,11 @@ input[type="text"], input[type="number"], select {
     border-radius: 3px;
     padding: 5px 7px;
     font-size: 13px;
+}
+
+input:disabled, select:disabled {
+    opacity: 0.5;
+    cursor: default;
 }
 
 .defaults-panel select {
@@ -92,6 +102,14 @@ input[type="text"], input[type="number"], select {
 
 .input-invalid-flash {
     animation: flash-red 0.3s ease;
+}
+
+/* Flags a required text field/select yellow while it's missing valid data -
+   SalesChain ID, and (Defaults panel and per-row) Manufacturer, Driver,
+   Name, and IP - back to the normal color as soon as it's filled in
+   correctly. */
+input.input-needs-value, select.input-needs-value {
+    background: #ffe066;
 }
 
 label {
@@ -307,6 +325,12 @@ table.grid td.checkbox-cell {
     padding: 4px 9px;
 }
 
+.icon-btn-inline {
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px 9px;
+}
+
 /* Settings modal */
 /* :not([hidden]), not a bare .modal-backdrop rule - a plain `display: flex`
    here would have equal specificity to the browser's default
@@ -395,6 +419,14 @@ table.grid td.checkbox-cell {
     margin: 0;
     color: #9fb3c8;
     font-size: 12px;
+}
+
+/* #confirmMessage's own text is built with literal \n's for paragraph
+   breaks (see showConfirm) - textContent doesn't collapse those into <br>
+   the way innerHTML would, so this is what actually renders them as line
+   breaks instead of one run-on line. */
+#confirmMessage {
+    white-space: pre-line;
 }
 
 /* #settingsSitesPanel's own children (.modal-field labels) each have their
@@ -501,4 +533,57 @@ table.grid td.checkbox-cell {
     justify-content: flex-end;
     gap: 8px;
     margin-top: 18px;
+}
+
+.modal-field-inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
+}
+
+/* Import Printers dialog's checklist - same visual language as
+   .mfg-order-list/.mfg-order-item (scrollable bordered box of rows), minus
+   the drag handle since these rows aren't reorderable. */
+.import-printers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid #33455c;
+    border-radius: 4px;
+    background: #16202e;
+}
+
+.import-printer-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 5px 8px;
+    background: #223247;
+    border: 1px solid #3f5978;
+    border-radius: 3px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.import-printer-name {
+    font-weight: 600;
+}
+
+.import-printer-detail {
+    color: #9fb3c8;
+    font-size: 12px;
+}
+
+/* Per-row DEVMODE button - unset looks like any other button; once a
+   DEVMODE is captured/assigned it turns green (button.primary's own
+   colors), same visual language used for "this row is fully set up"
+   elsewhere. */
+.row-devmode.set {
+    background: #2f6f4f;
+    border-color: #3f8f66;
+    color: #fff;
 }

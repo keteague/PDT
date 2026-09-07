@@ -159,3 +159,31 @@ type PrinterInfo2 struct {
 	CJobs              uint32
 	AveragePPM         uint32
 }
+
+// PrinterEnumValues mirrors PRINTER_ENUM_VALUES - one name/type/data entry
+// from EnumPrinterDataEx. Field order and widths must match the C struct
+// exactly (this is overlaid directly onto memory returned by the API, the
+// same technique PrinterInfo2 already uses for its own string fields) -
+// ValueName/Data point into the same buffer this entry itself lives in.
+type PrinterEnumValues struct {
+	ValueName   *uint16
+	ValueNameSz uint32
+	Type        uint32
+	Data        *byte
+	DataSz      uint32
+}
+
+// PrinterDriverDataKeyName is the registry key most print drivers use to
+// store Device Settings tab data (installable options, form-to-tray
+// assignment) - entirely separately from DEVMODE. See CaptureDriverData.
+const PrinterDriverDataKeyName = "PrinterDriverData"
+
+// PrinterInfo8 mirrors PRINTER_INFO_8W - the printer's GLOBAL default DEVMODE
+// (what the Advanced tab's "Printing Defaults" button edits, applying to any
+// user without their own per-user override). Deliberately not called
+// PrinterInfo9 (PRINTER_INFO_9, the other per-user-affecting level alongside
+// SetInfo2/PRINTER_INFO_2) - see SetGlobalDevMode's own comment for why this
+// package only ever needs level 8, never level 9.
+type PrinterInfo8 struct {
+	DevMode uintptr
+}

@@ -4,6 +4,117 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 - Captured DEVMODE/Device Settings, Export Configs, portable flash drives, deploy safeguards
+
+### Added
+- **Captured-DEVMODE workflow**, replacing programmatic duplex/color guessing with real driver-produced
+  settings replayed verbatim: a per-row "Get DEVMODE" button (green "DEVMODE SET" once captured) tries a
+  live capture from a local printer of the same name first, falling back to browsing for an existing
+  `.bin`; a toolbar "Get DEVMODE" bulk-captures every checked row; an "Import Printers" dialog lists
+  already-configured local printers (physical ones checked by default, software/virtual ones like PDF
+  printers unchecked) with an optional immediate capture on import. Captured DEVMODE is stored in a
+  `Configs` folder as `<SalesChainID>-<PrinterName>.bin` - the saved JSON config only ever holds a
+  filename pointer (`PrinterRow.DevModeFile`/`SavedRow.DevModeFile`), never the raw bytes - and resolves
+  at deploy time via `printer.ResolveDevModePath` (explicit pointer first, falling back to the
+  conventional filename so forgetting to re-save the JSON after capturing still works). Applied as the
+  very last deploy step, after everything else, so nothing else can override it.
+- **Device Settings capture**, alongside DEVMODE: most print drivers keep tray assignments and
+  installable options (a duplexer, extra trays, a finisher) entirely outside DEVMODE, in a
+  `PrinterDriverData` registry key instead (confirmed live: a captured printer's `DeviceOption01`/
+  `DeviceOptionSize` values differ from an unconfigured one). `windows.EnumPrinterDataEx`/
+  `SetPrinterDataEx`/`CaptureDriverData`/`ApplyDriverData` capture/replay this key verbatim as an opaque
+  `<SalesChainID>-<PrinterName>.driverdata.json` sidecar alongside the `.bin`, applied at the same final
+  deploy step.
+- **Both a per-user AND a global DEVMODE write** (`OpenedPrinter.SetPerUserDevMode` via `SetPrinter`
+  Level 2, `SetGlobalDevMode` via the simpler, single-field `PRINTER_INFO_8`/Level 8) - per Microsoft's
+  own "Per-User DEVMODE" documentation these are two independent stores Windows never keeps in sync:
+  Level 2 is what the General tab's "Preferences" button reads for the calling account, Level 8 is the
+  actual admin-set default (Advanced tab's "Printing Defaults", and what Device Settings reads too, for
+  most drivers) inherited by any user without their own override. `SetDuplexAndColor`/
+  `ApplyCapturedDevMode` now write both, having previously only written Level 2 (nothing else ever
+  showed the change) and, briefly, only Level 8 (Preferences stopped reflecting it).
+- **Export Configs**: copies every `Configs/<SalesChainID>*` file (saved JSON, captured DEVMODE/driver
+  data) to a technician's site-survey folder on their own laptop - locates the
+  `"<SalesChainID> - <Client> - <Address>"` subfolder under a new **Preinstall Base Path** setting
+  (prompting to pick one if more than one matches), creates a `PDT` subfolder inside it, and copies
+  everything over. Warns first that this only makes sense run on the technician's own laptop, and offers
+  Overwrite vs. a freshly timestamped subfolder (`PDT\2026-09-06_1622`) if any destination file already
+  exists.
+- **Write to Flash Drive**: lists currently-mounted USB flash drives (`GetLogicalDrives`/
+  `GetDriveType`'s `DRIVE_REMOVABLE`, excluding fixed/network/optical drives), with an opt-in "Format as
+  exFAT first" (via PowerShell's `Format-Volume`, with an explicit erase-everything warning naming the
+  exact drives) before copying the running executable plus this computer's own `Drivers`/`Configs`
+  folders onto each selected drive - the other half of "install PDT once on a laptop, then stamp out
+  portable copies."
+- **SalesChain ID interaction gate**: every control except the field itself, Open Configuration,
+  Settings, and Write to Flash Drive is disabled until SalesChain ID has a value, ruling out ever
+  configuring/deploying under the wrong job's ID by mistake. Applied synchronously at first paint (not
+  only once `init()`'s async catalog/settings loading finishes) so nothing is briefly clickable before
+  the gate takes effect.
+- **Required-field yellow highlighting**: SalesChain ID, Manufacturer, and Driver (Defaults panel and
+  per row), plus per-row Name (whitespace-only counts as empty) and IP (a real IPv4 address or the
+  literal "NUL" - anything else, including a bare subnet prefix missing its last octet).
+- **Deploy Checked Printers stays disabled** until every checked row's IP is one of those valid port
+  values, decided independently of the SalesChain ID gate (`updateDeployButtonEnabled`) so IP validity
+  and SalesChain ID can't fight each other over the button's state.
+- **Red STOP button**, enabled only while a deploy is running. Its warning dialog offers a graceful
+  **Stop** (cancels between rows - the row already in progress always finishes, since aborting a
+  printer/port/driver change half-applied risks leaving it broken) and a **Force Stop** for when PDT is
+  genuinely locked up: `App.ForceQuit` immediately terminates the process (`os.Exit`), bypassing every
+  graceful-shutdown path on purpose, since a single hung Win32 call has no safe way to be canceled from
+  Go once started.
+- **Reset Configuration** button: takes the whole app - every row, SalesChain ID, and the Defaults panel
+  - back to its fresh-launch state, confirming first whenever there's anything to lose.
+- **Double-click (not a confirm dialog) to remove a row** - a stray single click can no longer delete a
+  row by accident, without needing a popup for something this frequent.
+- An in-app **Warning/Confirm modal** replacing every `window.confirm()` - a native confirm's title bar
+  ("wails.localhost says") is fixed browser/WebView2 chrome that can't be reworded or removed, and read
+  as an unbranded, out-of-place popup inside an otherwise normal desktop app.
+- **Kyocera now gets the create-against-`NUL:`-then-rebind treatment** `RequiresNulPortWorkaround`
+  already gave HP's Universal Print Driver family - applied manufacturer-wide (Kyocera has no single
+  "universal" driver name to key off the way HP does) after live testing showed Kyocera deploying
+  noticeably slower against a live TCP/IP port than Canon or Ricoh; confirmed much faster afterward.
+
+### Changed
+- **Model field removed** from the Defaults panel and the grid - the Driver combobox's own text filter
+  already does the same narrowing (typing part of a model name finds a model-specific driver name
+  directly, which is the only case Model ever mattered for - Kyocera, mainly). The underlying
+  `PrinterRow.Model`/`SavedRow.Model` fields still round-trip silently for backward compatibility with
+  configs saved before this change; nothing reads them for driver filtering anymore.
+- **No more `SalesChain: <id>` printer Comment** - PDT no longer writes this field at all; an existing
+  printer's own comment (from before this change, or set by hand) is left alone.
+- **"Save File Base Path" renamed to "Configuration Files Base Path"** and now defaults to `Configs\`
+  next to the running executable (matching where DEVMODE captures and saved JSON configs already live)
+  instead of `Documents\Preinstall`.
+- Every frontend-originated log line now timestamps with the same `YYYY-MM-DD HH:MM:SS` format the Go
+  side's own log lines use, instead of `toLocaleString()`'s locale-dependent (en-US: `M/D/YYYY, H:MM:SS
+  AM/PM`) format, which made the two visibly inconsistent in the same log panel.
+- Every one-off status message (a save/load result, a validation warning) now goes to the log panel
+  instead of a separate status bar - a long bulk-operation summary ("Captured DEVMODE for N of M checked
+  row(s)") could push Deploy Checked Printers onto its own line in the toolbar.
+
+### Fixed
+- The SalesChain ID gate's "only re-enable what I disabled" bookkeeping (a `dataset.gateLocked` marker)
+  could end up never re-enabling controls at all, depending on call order, when composed with a control
+  that had its own independent disable logic elsewhere (`portPrefixText`, disabled both by its own
+  checkbox handler and, redundantly, on every `resetDefaultsPanel()`/`wireEvents()` call) - replaced with
+  an unconditional, history-independent sweep (every non-exempt control's `disabled` is recomputed fresh
+  on every call) plus one explicit re-assertion pass for `portPrefixText`'s own extra condition, rather
+  than trying to track "did the gate itself do this."
+
+### Verified
+- New tests: `TestDevModeFileName`/`ResolveDevModePath` (+ driver-data equivalents), `TestFileExists`,
+  `TestMatchingConfigFiles`/`MatchingPreinstallFolders`, `TestIsPhysicalPrinterGuess`,
+  `TestFindManufacturerForDriver`, and updated `TestRequiresNulPortWorkaround` for Kyocera (plus a
+  regression case confirming Ricoh's own "UniversalDriver" naming doesn't accidentally match HP's
+  manufacturer-specific check). Full suite (`go build`/`vet`/`test`, `wails build`) clean throughout.
+- Live end to end on real hardware across this session: Canon, Kyocera, and Ricoh MFDs deployed
+  successfully, including the full capture-on-a-reference-printer -> deploy-to-a-fresh-printer DEVMODE/
+  Device Settings round trip (confirmed via Printer Properties' Preferences, Printing Defaults, and
+  Device Settings tabs all reflecting the captured configuration) and the Configs-folder fallback path.
+  Flash drive enumeration confirmed live (correctly reports zero drives with none plugged in); the
+  format and copy-to-drive paths are implemented but not yet exercised against real removable media.
+
 ## 2026-09-06 - Lexmark default is now the XL driver; 7-Zip credit + self-update in About
 
 ### Changed

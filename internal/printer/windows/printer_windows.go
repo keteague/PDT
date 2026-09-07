@@ -78,9 +78,61 @@ func (p *OpenedPrinter) GetInfo2() (*PrinterInfo2Buffer, error) {
 // SetInfo2 commits a (possibly-modified) PRINTER_INFO_2 back via SetPrinter
 // Level 2. b must have come from this same handle's GetInfo2 (or from
 // CreatePrinter's own info) so every pointer field still points at live memory.
+//
+// NOTE: per Microsoft's own "Per-User DEVMODE" documentation, SetPrinter
+// Level 2's DevMode field is NOT the printer's global default despite
+// PRINTER_INFO_2 looking like "the" printer info structure - it sets the
+// per-user DEVMODE for whichever account is calling it. Never touch
+// b.Info.DevMode here for anything Deploy needs visible to other users; use
+// SetGlobalDevMode instead. This method still exists for every other
+// PRINTER_INFO_2 field (Comment, ShareName, PortName, ...), which really are
+// machine-wide and have nothing to do with per-user DEVMODE.
 func (p *OpenedPrinter) SetInfo2(b *PrinterInfo2Buffer) error {
 	r1, _, callErr := procSetPrinterW.Call(uintptr(p.Handle), 2, uintptr(unsafe.Pointer(b.Info)), printerControlNone)
 	runtime.KeepAlive(b.buf)
+	if r1 == 0 {
+		return callErr
+	}
+	return nil
+}
+
+// SetPerUserDevMode commits dm as the CALLING USER's own per-user default
+// DEVMODE, via SetPrinter Level 2 (PRINTER_INFO_2) - per Microsoft's "Per-
+// User DEVMODE" documentation, that's what Level 2's DevMode field actually
+// controls despite PRINTER_INFO_2 looking like "the" printer info structure
+// (see SetInfo2's own note). It's what the General tab's "Preferences"
+// button reads back for whoever has it open. Round-trips through GetInfo2
+// first so every other PRINTER_INFO_2 field (Comment, PortName, ...) is
+// preserved exactly as-is.
+func (p *OpenedPrinter) SetPerUserDevMode(dm []byte) error {
+	if len(dm) == 0 {
+		return fmt.Errorf("SetPerUserDevMode(%q): empty DEVMODE data", p.Name)
+	}
+	info, err := p.GetInfo2()
+	if err != nil {
+		return err
+	}
+	info.Info.DevMode = uintptr(unsafe.Pointer(&dm[0]))
+	err = p.SetInfo2(info)
+	runtime.KeepAlive(dm)
+	return err
+}
+
+// SetGlobalDevMode commits dm as the printer's GLOBAL default DEVMODE, via
+// SetPrinter Level 8 (PRINTER_INFO_8) - the "administrator" default an
+// end user actually gets on a freshly-deployed machine, visible via the
+// Advanced tab's "Printing Defaults" button (and, for most drivers, the
+// Device Settings tab's installable options too, which live in the same
+// buffer's driver-private dmDriverExtra data). Unlike PRINTER_INFO_2,
+// PRINTER_INFO_8 has no other fields to preserve, so there's no GetInfo8
+// round-trip needed - just build the one-field struct and set it directly.
+func (p *OpenedPrinter) SetGlobalDevMode(dm []byte) error {
+	if len(dm) == 0 {
+		return fmt.Errorf("SetGlobalDevMode(%q): empty DEVMODE data", p.Name)
+	}
+	info := PrinterInfo8{DevMode: uintptr(unsafe.Pointer(&dm[0]))}
+	r1, _, callErr := procSetPrinterW.Call(uintptr(p.Handle), 8, uintptr(unsafe.Pointer(&info)), printerControlNone)
+	runtime.KeepAlive(dm)
 	if r1 == 0 {
 		return callErr
 	}
@@ -169,4 +221,49 @@ func EnumLocalPrinterNames() ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// LocalPrinterInfo is one locally-installed printer's identifying info, for
+// the Import Printers dialog's physical-vs-virtual classification and
+// best-effort field enrichment.
+type LocalPrinterInfo struct {
+	Name       string
+	PortName   string
+	DriverName string
+}
+
+// EnumLocalPrinters lists every locally-installed printer with enough detail
+// to guess whether it's a real network printer or a virtual/software one
+// (e.g. "Microsoft Print to PDF") - the same EnumPrinters Level-2 call as
+// EnumLocalPrinterNames, just reading PortName/DriverName off each entry too
+// instead of only PrinterName.
+func EnumLocalPrinters() ([]LocalPrinterInfo, error) {
+	const printerEnumLocal = 0x00000002
+	var needed, returned uint32
+	procEnumPrintersW.Call(printerEnumLocal, 0, 2, 0, 0, uintptr(unsafe.Pointer(&needed)), uintptr(unsafe.Pointer(&returned)))
+	if needed == 0 {
+		return nil, nil
+	}
+	buf := make([]byte, needed)
+	r1, _, callErr := procEnumPrintersW.Call(printerEnumLocal, 0, 2, uintptr(unsafe.Pointer(&buf[0])), uintptr(needed), uintptr(unsafe.Pointer(&needed)), uintptr(unsafe.Pointer(&returned)))
+	if r1 == 0 {
+		return nil, fmt.Errorf("EnumPrinters: %w", callErr)
+	}
+	out := make([]LocalPrinterInfo, 0, returned)
+	entrySize := unsafe.Sizeof(PrinterInfo2{})
+	for i := uint32(0); i < returned; i++ {
+		info := (*PrinterInfo2)(unsafe.Pointer(&buf[uintptr(i)*entrySize]))
+		if info.PrinterName == nil {
+			continue
+		}
+		lp := LocalPrinterInfo{Name: windows.UTF16PtrToString(info.PrinterName)}
+		if info.PortName != nil {
+			lp.PortName = windows.UTF16PtrToString(info.PortName)
+		}
+		if info.DriverName != nil {
+			lp.DriverName = windows.UTF16PtrToString(info.DriverName)
+		}
+		out = append(out, lp)
+	}
+	return out, nil
 }

@@ -333,10 +333,11 @@ simplification versus the original: there is no `BindNulPort` checkbox. Instead:
 
 - Typing `NUL` (or `NUL:`) as a row's IP permanently binds it to the local `NUL:` port (no network
   I/O at all) - for a placeholder/test row.
-- Any row whose resolved driver is HP's Universal Print Driver family automatically gets the
-  create-against-`NUL:`-then-rebind-to-the-real-port treatment with **no user toggle** -
-  `printer.RequiresNulPortWorkaround` - since that HP driver family has been directly observed to
-  take several minutes to create against a live TCP/IP port versus a few seconds against `NUL:`.
+- Any row whose resolved driver is HP's Universal Print Driver family, or whose manufacturer is
+  Kyocera (any driver), automatically gets the create-against-`NUL:`-then-rebind-to-the-real-port
+  treatment with **no user toggle** - `printer.RequiresNulPortWorkaround` - since both have been
+  directly observed to take noticeably longer to create against a live TCP/IP port than against
+  `NUL:` (HP's Universal family: several minutes vs. a few seconds).
 
 **Fatal vs. warning, per spec**: creating or updating the printer object itself (port resolution,
 driver install, `CreatePrinter`/`SetInfo2`, the NUL:-to-real-port rebind) is the one thing that

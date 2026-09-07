@@ -624,7 +624,7 @@ func cmdDeployRow(driversRoot, manufacturer, driverSelection, ip string, cleanup
 		return fmt.Errorf("BuildCatalog: %w", err)
 	}
 
-	deployer := pdtwin.NewDeployer(catalog)
+	deployer := pdtwin.NewDeployer(catalog, "") // no captured-DEVMODE testing from this debug CLI
 	req := printer.DeployRequest{
 		Row: printer.PrinterRow{
 			Name:                     "PDT Debug Test Printer",

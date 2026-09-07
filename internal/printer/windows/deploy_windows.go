@@ -2,7 +2,10 @@ package windows
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -14,13 +17,16 @@ import (
 // Deployer implements printer.Deployer against the real Windows print
 // spooler, using the low-level winspool.drv/registry bindings verified
 // elsewhere in this package. Catalog is built once (BuildCatalog) and shared
-// across every row in a run.
+// across every row in a run. ConfigsRoot is where captured-DEVMODE .bin
+// files live (see printer.ResolveDevModePath) - resolved once by app.go, the
+// same way driversRoot() is.
 type Deployer struct {
-	Catalog driver.Catalog
+	Catalog     driver.Catalog
+	ConfigsRoot string
 }
 
-func NewDeployer(catalog driver.Catalog) *Deployer {
-	return &Deployer{Catalog: catalog}
+func NewDeployer(catalog driver.Catalog, configsRoot string) *Deployer {
+	return &Deployer{Catalog: catalog, ConfigsRoot: configsRoot}
 }
 
 // Deploy ports Create-Printers.ps1's Deploy-PrinterRow, in the same overall
@@ -88,10 +94,6 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 	}
 
 	// --- Printer object ---
-	comment := ""
-	if req.SalesChainID != "" {
-		comment = "SalesChain: " + req.SalesChainID
-	}
 
 	// Tracks whether THIS run actually (re)bound the printer to NUL: - the
 	// rebind step below must only fire when that's true, not just because
@@ -125,7 +127,6 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 
 		currentDriver := utf16PtrToStringSafe(info.Info.DriverName)
 		currentPort := utf16PtrToStringSafe(info.Info.PortName)
-		currentComment := utf16PtrToStringSafe(info.Info.Comment)
 
 		var changes []string
 		if currentDriver != resolved.Name {
@@ -139,12 +140,9 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 		if currentPort != finalTargetPort {
 			changes = append(changes, fmt.Sprintf("Port: %q -> %q", currentPort, finalTargetPort))
 		}
-		if currentComment != comment {
-			changes = append(changes, fmt.Sprintf("Comment: %q -> %q", currentComment, comment))
-		}
 
 		if len(changes) == 0 {
-			log.Info("Printer %q already exists; no driver/port/comment changes needed.", row.Name)
+			log.Info("Printer %q already exists; no driver/port changes needed.", row.Name)
 			p.Close()
 		} else {
 			ok, cerr := confirm(ctx, "Confirm printer update",
@@ -154,19 +152,17 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 				return fatal(fmt.Errorf("confirming update to printer %q: %w", row.Name, cerr))
 			}
 			if !ok {
-				log.Warn("Printer %q already exists; user declined to apply changes - %s. Leaving driver/port/comment as-is.", row.Name, strings.Join(changes, "; "))
+				log.Warn("Printer %q already exists; user declined to apply changes - %s. Leaving driver/port as-is.", row.Name, strings.Join(changes, "; "))
 				p.Close()
 			} else {
 				driverPtr, derr := windows.UTF16PtrFromString(resolved.Name)
 				portPtr, perr := windows.UTF16PtrFromString(createPortName)
-				commentPtr, cmerr := windows.UTF16PtrFromString(comment)
-				if derr != nil || perr != nil || cmerr != nil {
+				if derr != nil || perr != nil {
 					p.Close()
 					return fatal(fmt.Errorf("encoding updated printer fields for %q", row.Name))
 				}
 				info.Info.DriverName = driverPtr
 				info.Info.PortName = portPtr
-				info.Info.Comment = commentPtr
 				if err := p.SetInfo2(info); err != nil {
 					p.Close()
 					return fatal(fmt.Errorf("applying update to printer %q: %w", row.Name, err))
@@ -179,7 +175,7 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 			}
 		}
 	} else {
-		p, err := CreatePrinter(row.Name, resolved.Name, createPortName, comment)
+		p, err := CreatePrinter(row.Name, resolved.Name, createPortName, "")
 		if err != nil {
 			return fatal(fmt.Errorf("creating printer %q: %w", row.Name, err))
 		}
@@ -271,6 +267,44 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 		log.Warn("Could not enable \"Print spooled documents first\": %v", err)
 	} else {
 		log.OK("\"Print spooled documents first\" enabled.")
+	}
+
+	// --- Captured DEVMODE (manually-configured reference printer) - applied
+	// strictly last, after everything above, so nothing above it can
+	// override the human-configured settings it was captured from. See
+	// printer.ResolveDevModePath for the pointer-then-convention-fallback
+	// lookup (row.DevModeFile, or Configs/<SalesChainID>-<row.Name>.bin).
+	if path, ok := printer.ResolveDevModePath(d.ConfigsRoot, req.SalesChainID, row); ok {
+		if data, err := os.ReadFile(path); err != nil {
+			log.Warn("Could not read captured DEVMODE file %q: %v", path, err)
+		} else if err := ApplyCapturedDevMode(row.Name, data); err != nil {
+			log.Warn("Could not apply captured DEVMODE: %v", err)
+		} else {
+			log.OK("Applied captured DEVMODE from %q.", filepath.Base(path))
+		}
+	}
+
+	// --- Captured driver data (Device Settings tab) - same reference-machine
+	// capture, same "applied strictly last" reasoning as the DEVMODE step
+	// above, but a completely separate store (see PrinterDataValue) that most
+	// drivers keep outside DEVMODE entirely. Optional: plenty of rows will
+	// have a DEVMODE but no driver-data sidecar, since it's only written when
+	// CaptureDevModeForPrinter's own best-effort registry read actually found
+	// something.
+	if path, ok := printer.ResolveDriverDataPath(d.ConfigsRoot, req.SalesChainID, row); ok {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			log.Warn("Could not read captured driver data file %q: %v", path, err)
+		} else {
+			var values []PrinterDataValue
+			if err := json.Unmarshal(data, &values); err != nil {
+				log.Warn("Could not parse captured driver data file %q: %v", path, err)
+			} else if err := ApplyDriverData(row.Name, values); err != nil {
+				log.Warn("Could not apply captured driver data: %v", err)
+			} else {
+				log.OK("Applied captured driver data (Device Settings) from %q.", filepath.Base(path))
+			}
+		}
 	}
 
 	log.OK("Deployment finished for %q.", row.Name)

@@ -1,6 +1,9 @@
 package driver
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDefaultDriverNameFor(t *testing.T) {
 	cat := testCatalog(t)
@@ -16,7 +19,7 @@ func TestDefaultDriverNameFor(t *testing.T) {
 		{"Toshiba", "TOSHIBA Universal Printer 2"},
 		{"Xerox", "Xerox GPD PCL6 V5.1076.4.0"},
 		{"Konica Minolta", "KONICA MINOLTA Universal PCL v3.9.13"},
-		{"Lexmark", "Lexmark Universal v2"},
+		{"Lexmark", "Lexmark Universal v2 XL"},
 		{"Kyocera", ""}, // no rule defined for Kyocera
 	}
 	for _, c := range cases {
@@ -91,21 +94,51 @@ func TestXeroxGenericAliasIsSelectableButNotDefault(t *testing.T) {
 	}
 }
 
-// TestDefaultDriverNameFor_PrefersBaseNameOverNewerSpecializedVariant covers
-// the real Lexmark surprise found live, after the .msi auto-extraction
-// pipeline picked up every package in the tree at once: "Lexmark Universal
-// v2 XL" (an extra-large-format variant, testdata's LexmarkXLPkg fixture)
-// has a genuinely newer INF-declared date than the base "Lexmark Universal
-// v2" (LexmarkPkg) - two days newer - but it's a different, more
-// specialized product, not a newer version of the base driver, and the
-// Defaults panel's default should still be the base name despite the date.
-func TestDefaultDriverNameFor_PrefersBaseNameOverNewerSpecializedVariant(t *testing.T) {
+// TestDefaultDriverNameFor_LexmarkXLIsSelectedOverBase confirms the real
+// Lexmark preference directly: both "Lexmark Universal v2" and "Lexmark
+// Universal v2 XL" (testdata's LexmarkPkg/LexmarkXLPkg fixtures) are present
+// and match "Universal"/"v2", but only XL also matches the "XL" token
+// defaultDriverTokens now requires for Lexmark - confirming the token
+// tightening (not the general shorter-name tie-break, covered separately
+// below) is what actually decides this case.
+func TestDefaultDriverNameFor_LexmarkXLIsSelectedOverBase(t *testing.T) {
 	cat := testCatalog(t)
 	lexmark := cat["Lexmark"]
-	if _, ok := lexmark["Lexmark Universal v2 XL"]; !ok {
-		t.Fatal("expected the XL variant to be present in the catalog too (not filtered out - it's still a valid, selectable candidate)")
+	if _, ok := lexmark["Lexmark Universal v2"]; !ok {
+		t.Fatal("expected the base Lexmark name to be present in the catalog too (not filtered out - it's still a valid, selectable candidate)")
 	}
-	if got, want := DefaultDriverNameFor(cat, "Lexmark"), "Lexmark Universal v2"; got != want {
-		t.Errorf("DefaultDriverNameFor(Lexmark) = %q, want %q (should not be swayed by the XL variant's newer date)", got, want)
+	if got, want := DefaultDriverNameFor(cat, "Lexmark"), "Lexmark Universal v2 XL"; got != want {
+		t.Errorf("DefaultDriverNameFor(Lexmark) = %q, want %q", got, want)
+	}
+}
+
+// TestDefaultDriverNameFor_PrefersShorterNameOverNewerUnversionedVariant
+// covers the tie-break tier itself, decoupled from Lexmark's own real data
+// (which no longer exercises it, now that Lexmark's tokens require "XL"
+// specifically) - using a synthetic manufacturer/catalog built directly
+// in-memory, not real testdata fixtures, so this stays valid regardless of
+// what any real manufacturer's tokens require. Mirrors the real scenario
+// that motivated this tier: two names both match the same tokens, neither
+// carries a dotted version number, and the longer one happens to have a
+// newer date - the shorter, more general name should still win.
+func TestDefaultDriverNameFor_PrefersShorterNameOverNewerUnversionedVariant(t *testing.T) {
+	const testMfg = "TestMfgForTieBreak"
+	defaultDriverTokens[testMfg] = []string{"Foo"}
+	defer delete(defaultDriverTokens, testMfg)
+
+	older := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := time.Date(2020, 1, 3, 0, 0, 0, 0, time.UTC)
+	cat := Catalog{
+		testMfg: {
+			"Foo Base": {
+				"1.0|2020-01-01": {"any": {Date: older, Version: "1.0"}},
+			},
+			"Foo Base Extra": {
+				"1.0|2020-01-03": {"any": {Date: newer, Version: "1.0"}},
+			},
+		},
+	}
+	if got, want := DefaultDriverNameFor(cat, testMfg), "Foo Base"; got != want {
+		t.Errorf("DefaultDriverNameFor(%s) = %q, want %q (shorter name should win despite the longer one's newer date)", testMfg, got, want)
 	}
 }

@@ -6,6 +6,7 @@ import {
     NewCsvTemplate, ImportCsv, OpenConfiguration, SaveConfiguration, Deploy,
     GetSettings, SaveSettings, PickFolder, OpenManufacturerURL,
     GetAppInfo, OpenRepoURL, CheckForUpdate, ApplyUpdate,
+    GetSevenZipVersion, OpenSevenZipHomepage, CheckSevenZipUpdate, UpdateSevenZip,
 } from '../wailsjs/go/main/App';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 
@@ -162,6 +163,17 @@ document.querySelector('#app').innerHTML = `
           <button type="button" id="btnCheckUpdate" title="Check this project's GitHub Releases for a newer version.">Check for Updates</button>
           <button type="button" class="primary" id="btnApplyUpdate" hidden title="Download and install the update, then relaunch.">Update Now</button>
           <span class="modal-hint" id="updateStatus"></span>
+        </div>
+        <p class="modal-hint">Self-extracting driver packages (Lexmark's own) are unpacked using
+          <a href="#" id="sevenZipCreditLink" title="Open 7-zip.org in your browser">7-Zip</a>, by Igor
+          Pavlov, bundled with PDT under its own license.</p>
+        <div class="about-panel">
+          <div class="about-row"><span class="about-label">7-Zip</span><span id="aboutSevenZipVersion"></span></div>
+        </div>
+        <div class="about-update">
+          <button type="button" id="btnCheckSevenZipUpdate" title="Check 7-Zip's own releases for a newer version.">Check for 7-Zip Updates</button>
+          <button type="button" class="primary" id="btnApplySevenZipUpdate" hidden title="Download and install the update.">Update 7-Zip Now</button>
+          <span class="modal-hint" id="sevenZipUpdateStatus"></span>
         </div>
       </div>
       <div class="modal-actions">
@@ -864,6 +876,12 @@ async function renderAboutPanel() {
         e.preventDefault();
         OpenRepoURL();
     });
+
+    el('aboutSevenZipVersion').textContent = (await GetSevenZipVersion()) || 'unavailable';
+    el('sevenZipCreditLink').addEventListener('click', (e) => {
+        e.preventDefault();
+        OpenSevenZipHomepage();
+    });
 }
 
 // The asset URL from the most recent CheckForUpdate result with an update
@@ -913,6 +931,53 @@ async function applyUpdate() {
     }
 }
 
+// Same pattern as pendingUpdateAssetUrl/checkForUpdate/applyUpdate above,
+// just for the bundled 7-Zip tool instead of PDT itself.
+let pendingSevenZipAssetUrl = '';
+
+async function checkSevenZipUpdate() {
+    const btn = el('btnCheckSevenZipUpdate');
+    const status = el('sevenZipUpdateStatus');
+    btn.disabled = true;
+    el('btnApplySevenZipUpdate').hidden = true;
+    status.textContent = 'Checking...';
+    try {
+        const result = await CheckSevenZipUpdate();
+        if (result.error) {
+            status.textContent = result.error;
+        } else if (result.available) {
+            status.textContent = `Version ${result.latestVersion} is available (you have ${result.currentVersion}).`;
+            pendingSevenZipAssetUrl = result.assetUrl;
+            el('btnApplySevenZipUpdate').hidden = !result.assetUrl;
+        } else {
+            status.textContent = 'You have the latest version of 7-Zip.';
+        }
+    } catch (e) {
+        status.textContent = `Update check failed: ${e}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function applySevenZipUpdate() {
+    const btn = el('btnApplySevenZipUpdate');
+    btn.disabled = true;
+    el('sevenZipUpdateStatus').textContent = 'Downloading and installing the update...';
+    try {
+        const result = await UpdateSevenZip(pendingSevenZipAssetUrl);
+        if (result.error) {
+            el('sevenZipUpdateStatus').textContent = result.error;
+        } else {
+            el('sevenZipUpdateStatus').textContent = 'Updated successfully.';
+            el('aboutSevenZipVersion').textContent = (await GetSevenZipVersion()) || 'unavailable';
+        }
+    } catch (e) {
+        el('sevenZipUpdateStatus').textContent = `Update failed: ${e}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
 function wireSettingsModal() {
     renderSettingsSitesPanel();
     renderAboutPanel();
@@ -921,6 +986,8 @@ function wireSettingsModal() {
     el('btnSettingsCancel').addEventListener('click', closeSettingsModal);
     el('btnCheckUpdate').addEventListener('click', checkForUpdate);
     el('btnApplyUpdate').addEventListener('click', applyUpdate);
+    el('btnCheckSevenZipUpdate').addEventListener('click', checkSevenZipUpdate);
+    el('btnApplySevenZipUpdate').addEventListener('click', applySevenZipUpdate);
 
     for (const btn of document.querySelectorAll('.tab-btn')) {
         btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab));

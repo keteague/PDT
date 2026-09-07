@@ -28,7 +28,12 @@ var defaultDriverTokens = map[string][]string{
 	"Toshiba":        {"Universal", "Printer", "2"},
 	"Xerox":          {"GPD", "PCL", "6"},
 	"Konica Minolta": {"Universal", "PCL"},
-	"Lexmark":        {"Universal", "v2"},
+	// "XL" is required, not just "Universal"/"v2" - the base "Lexmark
+	// Universal v2" driver also matches those two tokens, but the XL
+	// (extra-large-format) variant is the one actually preferred; see
+	// DefaultDriverNameFor's own doc comment for how these two ever ended up
+	// distinguishable at all (neither carries a dotted version number).
+	"Lexmark": {"Universal", "v2", "XL"},
 }
 
 func normalizeDriverNameForMatch(s string) string {
@@ -57,12 +62,18 @@ var versionSuffixRe = regexp.MustCompile(`\d+\.\d+`)
 //     name rather than just a different version-group under one name; Konica
 //     Minolta's INF additionally registers the exact same driver under both a
 //     plain and a version-suffixed name, with an identical date.
-//   - A vendor ships multiple real product *variants* that happen to share
-//     the same base name (confirmed against the real Lexmark package: the
-//     base "Lexmark Universal v2" alongside "Lexmark Universal v2 XL", an
-//     extra-large-format variant, built two days apart) - here the *newer*
-//     one is very much the wrong default; "XL" isn't a newer version of the
-//     base driver, it's a different, more specialized one.
+//   - A vendor ships multiple real product *variants* that happen to share a
+//     base name and match the same tokens (confirmed against the real
+//     Lexmark package: "Lexmark Universal v2" alongside "Lexmark Universal v2
+//     XL", an extra-large-format variant, built two days apart - a genuinely
+//     different, more specialized product, not a newer version of the base
+//     one, even though its file date is newer). Lexmark's own
+//     defaultDriverTokens entry requires "XL" specifically now, since XL -
+//     not the base driver - is the one actually wanted here; the tie-break
+//     below still matters generally (a future manufacturer might ship a
+//     similar surprise before its tokens get tightened the same way), and is
+//     covered by its own test using a synthetic name pair rather than relying
+//     on Lexmark's real data, which no longer exercises it.
 //
 // Tie-break, in order:
 //  1. A name that visibly carries a version number wins outright - it's
@@ -70,11 +81,11 @@ var versionSuffixRe = regexp.MustCompile(`\d+\.\d+`)
 //     different variant (Xerox, Konica Minolta).
 //  2. Otherwise, the shorter name wins - a name that's a superset of another
 //     matching name (an extra qualifier tacked on, like "XL") is presumed to
-//     be the more specialized variant; the shorter, more general one is the
-//     more sensible default (Lexmark). Deliberately checked before date,
-//     since a specialized variant can easily have a newer build date than
-//     the base one without being "the newer version" of it in any sense a
-//     user would want defaulted to.
+//     be the more specialized variant, and the shorter, more general one the
+//     more sensible default. Deliberately checked before date, since a
+//     specialized variant can easily have a newer build date than the base
+//     one without being "the newer version" of it in any sense a user would
+//     want defaulted to.
 //  3. Otherwise, newest INF-declared date wins - genuinely the same name
 //     family with more than one build present.
 //  4. Alphabetical is the final fallback, only to stay deterministic on a

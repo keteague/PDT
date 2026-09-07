@@ -4,6 +4,48 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-06 - Lexmark default is now the XL driver; 7-Zip credit + self-update in About
+
+### Changed
+- **Lexmark's Defaults-panel default is now "Lexmark Universal v2 XL"**, not the base driver -
+  `defaultDriverTokens["Lexmark"]` now requires "XL" specifically (alongside "Universal"/"v2", which
+  the base driver also matches) so the token match itself picks XL directly, rather than relying on
+  the shorter-name tie-break to settle it. The base driver stays fully selectable in the Driver
+  dropdown; this only changes which one is pre-filled. Updated `TestDefaultDriverNameFor`'s Lexmark
+  case and replaced the Lexmark-specific tie-break test with
+  `TestDefaultDriverNameFor_PrefersShorterNameOverNewerUnversionedVariant`, a synthetic,
+  manufacturer-agnostic test of the tie-break tier itself (added directly to `defaultDriverTokens` and
+  removed after, not real testdata) - it should keep covering that logic regardless of what any real
+  manufacturer's own tokens require going forward.
+
+### Added
+- **Settings > About now credits 7-Zip** (by Igor Pavlov) - the tool bundled to auto-extract
+  self-extracting RAR driver packages - shows the version currently cached, and links to 7-zip.org.
+- **Check for 7-Zip Updates / Update 7-Zip Now**, mirroring PDT's own self-update UI exactly: queries
+  7-Zip's own GitHub Releases (development now lives at `ip7z/7zip`) via `internal/update.FetchLatest`
+  - already generic enough to reuse as-is for a different project's releases, needing only one small
+    addition, `Release.AssetMatching(re)`, since 7-Zip's own asset names embed a version number
+    ("7z2603-x64.exe") `Asset`'s exact-name lookup can't match. Downloads the latest x64 GUI installer
+    and uses the *currently cached* `7z.exe` to pull `7z.exe`/`7z.dll`/`License.txt` back out of it
+    directly - confirmed the installer is itself an extractable 7-Zip archive (it can list and extract
+    from itself without ever being run as an installer) - then overwrites the cached copies. Extracts
+    to a scratch folder first and only overwrites the real cached files once that fully succeeds, so a
+    bad download or failed extraction never touches the existing, working files.
+
+### Verified
+- New tests: `TestRelease_AssetMatching`, `TestDefaultDriverNameFor_LexmarkXLIsSelectedOverBase`,
+  `TestDefaultDriverNameFor_PrefersShorterNameOverNewerUnversionedVariant`. Full suite
+  (`go build`/`vet`/`test`, `wails build`) clean.
+- Live end to end against the real, current `ip7z/7zip` release: screenshot-confirmed the About tab
+  shows "7-Zip 26.03" and "Check for 7-Zip Updates" correctly reports "You have the latest version of
+  7-Zip" (accurate - the bundled copy already is 26.03). Since there was nothing newer to test the
+  actual download/apply path against live through the UI, called `App.UpdateSevenZip` directly in a
+  throwaway test (removed after) with the real, current release's asset URL: it downloaded, extracted,
+  and overwrote the cached `7z.exe` successfully (confirmed via the file's updated modtime), then
+  confirmed no leftover temp/extraction files remained in the cache folder afterward.
+- Screenshot-confirmed the About tab's added content doesn't disturb the Settings modal's fixed size -
+  still lands at the same height as before, no scrolling needed.
+
 ## 2026-09-06 - Auto-extract .msi drivers too; fix a real default-driver bug it surfaced
 
 ### Added

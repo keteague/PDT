@@ -10,6 +10,8 @@ export function ApplyUpdate(arg1:string):Promise<main.ApplyUpdateResult>;
 
 export function CheckForUpdate():Promise<main.UpdateCheckResult>;
 
+export function CheckSevenZipUpdate():Promise<main.UpdateCheckResult>;
+
 export function DefaultDriverFor(arg1:string):Promise<string>;
 
 export function Deploy(arg1:Array<printer.PrinterRow>,arg2:string,arg3:string):Promise<Array<main.DeployRowResult>>;
@@ -21,6 +23,8 @@ export function GetAppInfo():Promise<main.AppInfo>;
 export function GetCatalogStatus():Promise<main.CatalogStatus>;
 
 export function GetSettings():Promise<main.Settings>;
+
+export function GetSevenZipVersion():Promise<string>;
 
 export function ImportCsv():Promise<main.ImportResult>;
 
@@ -36,8 +40,12 @@ export function OpenManufacturerURL(arg1:string):Promise<void>;
 
 export function OpenRepoURL():Promise<void>;
 
+export function OpenSevenZipHomepage():Promise<void>;
+
 export function PickFolder(arg1:string):Promise<main.PathResult>;
 
 export function SaveConfiguration(arg1:config.SavedConfig):Promise<main.PathResult>;
 
 export function SaveSettings(arg1:main.Settings):Promise<main.Settings>;
+
+export function UpdateSevenZip(arg1:string):Promise<main.ApplyUpdateResult>;

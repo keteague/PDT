@@ -1,10 +1,13 @@
-// Package update checks GitHub Releases for a newer version of this app and
-// can install it. PDT has no separate installer: "applying" an update means
-// replacing the running executable's own file directly. Confirmed on a real
-// machine before writing this: Windows lets a running .exe's file be renamed
-// out of the way while it keeps executing from the renamed file (only the
-// *name* needs to be freed, not the file itself), which is enough to drop a
-// new exe in at the original path with no helper process or installer needed.
+// Package update checks GitHub Releases for a newer version of something and
+// can download it - written for PDT's own self-update (see App.CheckForUpdate/
+// ApplyUpdate), where "applying" means replacing the running executable's own
+// file directly (confirmed on a real machine before writing this: Windows
+// lets a running .exe's file be renamed out of the way while it keeps
+// executing from the renamed file, which is enough to drop a new exe in at
+// the original path with no helper process or installer needed), but generic
+// enough that FetchLatest/Download are reused as-is for checking and
+// downloading updates to the bundled 7z.exe/7z.dll too (see sevenzip.go) -
+// GitHub's release API doesn't care whose repository it is.
 package update
 
 import (
@@ -13,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"time"
 )
 
@@ -35,6 +39,20 @@ type ReleaseAsset struct {
 func (r Release) Asset(name string) *ReleaseAsset {
 	for i := range r.Assets {
 		if r.Assets[i].Name == name {
+			return &r.Assets[i]
+		}
+	}
+	return nil
+}
+
+// AssetMatching returns the first release asset whose name matches re, or
+// nil if none does - for a release whose asset filenames embed a version
+// number and so can't be looked up by exact name the way Asset can (e.g.
+// 7-Zip's own releases name their x64 installer "7z2603-x64.exe", where
+// "2603" changes every release).
+func (r Release) AssetMatching(re *regexp.Regexp) *ReleaseAsset {
+	for i := range r.Assets {
+		if re.MatchString(r.Assets[i].Name) {
 			return &r.Assets[i]
 		}
 	}

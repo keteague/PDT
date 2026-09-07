@@ -14,6 +14,10 @@ export function CheckForUpdate() {
   return window['go']['main']['App']['CheckForUpdate']();
 }
 
+export function CheckSevenZipUpdate() {
+  return window['go']['main']['App']['CheckSevenZipUpdate']();
+}
+
 export function DefaultDriverFor(arg1) {
   return window['go']['main']['App']['DefaultDriverFor'](arg1);
 }
@@ -36,6 +40,10 @@ export function GetCatalogStatus() {
 
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
+}
+
+export function GetSevenZipVersion() {
+  return window['go']['main']['App']['GetSevenZipVersion']();
 }
 
 export function ImportCsv() {
@@ -66,6 +74,10 @@ export function OpenRepoURL() {
   return window['go']['main']['App']['OpenRepoURL']();
 }
 
+export function OpenSevenZipHomepage() {
+  return window['go']['main']['App']['OpenSevenZipHomepage']();
+}
+
 export function PickFolder(arg1) {
   return window['go']['main']['App']['PickFolder'](arg1);
 }
@@ -76,4 +88,8 @@ export function SaveConfiguration(arg1) {
 
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
+}
+
+export function UpdateSevenZip(arg1) {
+  return window['go']['main']['App']['UpdateSevenZip'](arg1);
 }

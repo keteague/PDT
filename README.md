@@ -148,13 +148,15 @@ shows for that INF:
   it on disk, with no code change needed. The same holds for Ricoh and any other manufacturer whose
   preferred driver's own name embeds a version number.
 - **A newer date doesn't always mean "the newer version of the same driver."** Confirmed against the
-  real Lexmark package: alongside the base "Lexmark Universal v2" there's a genuinely different,
-  more specialized "Lexmark Universal v2 XL" (an extra-large-format variant) built two days later -
-  a different product, not a newer build of the base one. Since neither name carries a version number
-  of its own, the tie-break here falls to preferring the *shorter* matching name (a name that's a
-  superset of another, with an extra qualifier tacked on, is presumed to be the more specialized
-  variant) before ever considering date - see `DefaultDriverNameFor`'s doc comment in `default.go`
-  for the complete tie-break order.
+  real Lexmark package: alongside "Lexmark Universal v2" there's a genuinely different, more
+  specialized "Lexmark Universal v2 XL" (an extra-large-format variant, and the one actually
+  preferred here) built two days later - a different product, not a newer build of the other one.
+  Lexmark's own token rule requires "XL" specifically to settle which one is meant, but for a
+  *future* manufacturer with a similar surprise before its tokens get tightened the same way,
+  `DefaultDriverNameFor`'s tie-break still matters: when neither name carries a version number of its
+  own, it prefers the *shorter* matching name (a name that's a superset of another, with an extra
+  qualifier tacked on, is presumed to be the more specialized variant) before ever considering date -
+  see its doc comment in `default.go` for the complete tie-break order.
 
 **Default driver per manufacturer** (`internal/driver/default.go`, `DefaultDriverNameFor`): the
 Defaults panel pre-selects a specific driver name when a manufacturer is chosen, matched by token
@@ -172,7 +174,7 @@ reversed from how "PCL 6 UD3" reads out loud). Today's rules:
 | Toshiba | TOSHIBA Universal Printer 2 | Universal, Printer, 2 |
 | Xerox | Xerox GPD PCL6 V*x.xxxx.x.x* | GPD, PCL, 6 |
 | Konica Minolta | KONICA MINOLTA Universal PCL v*x.x.xx* | Universal, PCL |
-| Lexmark | Lexmark Universal v2 | Universal, v2 |
+| Lexmark | Lexmark Universal v2 XL | Universal, v2, XL |
 | Kyocera | *(no rule - pick per model instead; see below)* | - |
 
 Kyocera has no manufacturer-wide default: its driver *names* are per-model (`"Kyocera <model> KX"`),
@@ -253,12 +255,15 @@ Lexmark-specific code needed).
 **One real surprise worth knowing about**: Lexmark's package contains more than one product variant
 sharing a base name - alongside `print64PCL.msi`'s "Lexmark Universal v2" there's also
 `print64XL.msi`'s "Lexmark Universal v2 XL" (an extra-large-format variant), built two days later.
-Auto-extracting *all* the `.msi` files in the tree means both show up in the catalog - and the
-XL variant's newer date isn't "a newer version of the base driver," it's a different, more
-specialized product, so `DefaultDriverNameFor`'s tie-break was corrected to prefer the shorter,
-non-variant name over a merely-newer one that carries no version number of its own (see its doc
-comment in `default.go` for the full tie-break order, and the README's own note in "Default driver
-per manufacturer" below).
+Auto-extracting *all* the `.msi` files in the tree means both show up in the catalog, and **XL is the
+one actually preferred** here, so `defaultDriverTokens["Lexmark"]` requires "XL" specifically (not
+just "Universal"/"v2", which the base driver also matches) to select it. The base driver stays fully
+selectable in the Driver dropdown either way - this only decides which one is pre-filled. Finding this
+also exercised a real, more general tie-break question worth knowing about for any *future*
+manufacturer with a similar surprise: `DefaultDriverNameFor` prefers the shorter of two
+same-token-matching names over a merely-newer one that carries no version number of its own, rather
+than trusting "newest date" blindly (see its doc comment in `default.go` for the full tie-break order,
+and the README's own note in "Default driver per manufacturer" above).
 
 ### Kyocera: self-extracting `.exe` packages
 
@@ -486,6 +491,25 @@ the next time the app starts.
 `wails.json`'s `info.productVersion` together, `wails build`, then create a GitHub Release tagged
 `v<AppVersion>` with `build/bin/PDT.exe` uploaded as a release asset named exactly `PDT.exe` (the exact
 name `CheckForUpdate` looks for).
+
+### Keeping the bundled 7-Zip up to date (`sevenzip.go`, About tab)
+
+About also credits 7-Zip (by Igor Pavlov) - the tool bundled to auto-extract self-extracting RAR
+driver packages, see "Lexmark" above - and shows the version currently cached
+(`GetSevenZipVersion`, parsed from `7z.exe i`'s own startup banner). **Check for 7-Zip Updates**
+queries 7-Zip's own GitHub Releases (development now lives at `ip7z/7zip`, not `7-zip.org` directly)
+via the exact same `internal/update.FetchLatest` PDT's own update check uses - the package was
+already generic enough that checking a *different* project's releases needed no changes to it beyond
+adding `Release.AssetMatching(re)`, since 7-Zip's own release asset names embed a version number
+("7z2603-x64.exe") that can't be looked up by exact name the way PDT's own "PDT.exe" can.
+
+**Update 7-Zip Now** does exactly what was tested by hand first: downloads that release's x64 GUI
+installer, then uses the *currently cached* `7z.exe` to pull `7z.exe`/`7z.dll`/`License.txt` back out
+of it directly - confirmed the installer is itself an extractable 7-Zip archive, no need to actually
+run it as an installer - and overwrites the cached copies with the result. Extracts to a scratch
+folder first and only overwrites the real cached files once that fully succeeds, so a bad download or
+a failed extraction never touches the existing, working files. Verified end to end against the real,
+live release.
 
 ### App identity (titlebar, icon, version)
 

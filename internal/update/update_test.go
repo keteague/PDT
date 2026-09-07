@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 )
 
@@ -19,6 +20,22 @@ func TestRelease_Asset(t *testing.T) {
 	}
 	if a := rel.Asset("missing.zip"); a != nil {
 		t.Fatalf("Asset(missing.zip) = %+v, want nil", a)
+	}
+}
+
+func TestRelease_AssetMatching(t *testing.T) {
+	rel := Release{Assets: []ReleaseAsset{
+		{Name: "7z2603-x64.exe", DownloadURL: "https://example.com/7z2603-x64.exe"},
+		{Name: "7z2603-extra.7z", DownloadURL: "https://example.com/7z2603-extra.7z"},
+	}}
+	re := regexp.MustCompile(`^7z\d+-x64\.exe$`)
+	if a := rel.AssetMatching(re); a == nil || a.Name != "7z2603-x64.exe" {
+		t.Fatalf("AssetMatching = %+v, want a match on 7z2603-x64.exe", a)
+	}
+
+	noMatch := regexp.MustCompile(`^nothing-like-this\.exe$`)
+	if a := rel.AssetMatching(noMatch); a != nil {
+		t.Fatalf("AssetMatching(no match) = %+v, want nil", a)
 	}
 }
 

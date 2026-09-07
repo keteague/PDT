@@ -34,7 +34,7 @@ func TestEnsureDriversScaffold_CreatesManufacturerFolders(t *testing.T) {
 			t.Errorf("expected scaffolded folder %q to exist", folder)
 		}
 
-		archiveReadme := filepath.Join(folder, "Archive", "README.md")
+		archiveReadme := filepath.Join(folder, "Archive", "README.txt")
 		data, err := os.ReadFile(archiveReadme)
 		if err != nil {
 			t.Errorf("expected %q to exist: %v", archiveReadme, err)
@@ -46,7 +46,7 @@ func TestEnsureDriversScaffold_CreatesManufacturerFolders(t *testing.T) {
 	}
 }
 
-func TestEnsureDriversScaffold_LeavesNonEmptyRootAlone(t *testing.T) {
+func TestEnsureDriversScaffold_LeavesFlatLegacyLayoutAlone(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "SomethingAlreadyHere.txt")
 	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
@@ -57,7 +57,52 @@ func TestEnsureDriversScaffold_LeavesNonEmptyRootAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "Windows")); !os.IsNotExist(err) {
-		t.Error("expected no scaffolding to happen when root already has something in it")
+		t.Error("expected no scaffolding to happen against a non-empty root with no Windows subfolder (the old flat layout)")
+	}
+}
+
+func TestEnsureDriversScaffold_RetrofitsExistingManufacturerFolder(t *testing.T) {
+	dir := t.TempDir()
+	canonDir := filepath.Join(dir, "Windows", "11", "Canon")
+	if err := os.MkdirAll(canonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canonDir, "SomeRealDriver.zip"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a manufacturer folder created by an older PDT version that
+	// used README.md instead of README.txt.
+	staleArchive := filepath.Join(canonDir, "Archive")
+	if err := os.MkdirAll(staleArchive, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleArchive, "README.md"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureDriversScaffold(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(canonDir, "SomeRealDriver.zip")); err != nil {
+		t.Error("expected the pre-existing real driver file to be left alone")
+	}
+	if _, err := os.Stat(filepath.Join(staleArchive, "README.md")); !os.IsNotExist(err) {
+		t.Error("expected the stale README.md to be removed")
+	}
+	data, err := os.ReadFile(filepath.Join(staleArchive, "README.txt"))
+	if err != nil {
+		t.Fatalf("expected README.txt to be created: %v", err)
+	}
+	if string(data) != archiveReadmeContent {
+		t.Errorf("README.txt content = %q, want %q", data, archiveReadmeContent)
+	}
+
+	// A manufacturer with no folder at all yet should also get scaffolded,
+	// since Windows/11 already being present marks this as the nested (not
+	// flat-legacy) layout.
+	if _, err := os.Stat(filepath.Join(dir, "Windows", "11", "HP", "Archive", "README.txt")); err != nil {
+		t.Errorf("expected HP to be scaffolded too: %v", err)
 	}
 }
 

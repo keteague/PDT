@@ -122,6 +122,10 @@ export function PickFolder(arg1) {
   return window['go']['main']['App']['PickFolder'](arg1);
 }
 
+export function RefreshDriverCatalog() {
+  return window['go']['main']['App']['RefreshDriverCatalog']();
+}
+
 export function RestartSpooler() {
   return window['go']['main']['App']['RestartSpooler']();
 }

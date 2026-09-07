@@ -27,7 +27,7 @@ var kyoceraExeNameRe = regexp.MustCompile(`(?i)^kxdriver[ _](.+)\.exe$`)
 // without ever running the installer, and that extracted ".text" file is
 // itself a normal archive, extracted the same way a second time. A no-op if
 // SevenZipPath isn't set (see its own doc comment) - same convention as
-// ensureRarSfxExtracted.
+// ensureSfxArchivesExtracted.
 func ensureKyoceraExesExtracted(root string) {
 	if SevenZipPath == "" {
 		return

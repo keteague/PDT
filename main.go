@@ -19,7 +19,7 @@ func main() {
 	// Create application with options
 	err := wails.Run(&options.App{
 		Title:  fmt.Sprintf("%s v%s", appDisplayName, AppVersion),
-		Width:  1054,
+		Width:  1204,
 		Height: 768,
 		// The window is otherwise freely resizable (and correctly per-monitor
 		// DPI-aware - see build/windows/wails.exe.manifest's dpiAwareness

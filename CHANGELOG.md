@@ -4,6 +4,74 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.3.3) - Live driver catalog refresh; wider toolbar/Settings; retrofit Archive folders
+
+### Added
+- **Toolbar Refresh button (🔄)** rescans the Drivers folder in place (`RefreshDriverCatalog`) - no
+  more restarting PDT just to pick up a newly downloaded or extracted driver package. The driver
+  catalog (`App.catalog`/`modelIndex`) is now guarded by a real lock (`catalogMu`) rather than being
+  build-once-at-startup-only, since a `DriverCandidates`/`Deploy` call can now land at the same moment
+  as a refresh. The no-drivers banner's wording points at this button instead of suggesting a restart:
+  "...once a driver package is downloaded into the Drivers folder, press the Refresh button (🔄) to
+  make it available."
+- **Self-extracting archive auto-extraction now also handles 7z and Zip, not just RAR** - what used to
+  be `internal/driver/rarsfx.go` (`ensureRarSfxExtracted`, RAR-signature-only) is now
+  `internal/driver/sfx.go` (`ensureSfxArchivesExtracted`), matching any of the three signatures within a
+  candidate `.exe` and letting the bundled `7z.exe` auto-detect the exact format itself. Confirmed live
+  against a real Konica Minolta driver package (`KM_UPD_pcl6_win64_...inst.exe`) that ships as a 7z SFX
+  stub with the archive simply appended after it - same layout as Lexmark's RAR, different signature -
+  extracted correctly with no manufacturer-specific handling needed, unlike Kyocera's own packaging
+  (its embedded archive sits inside the `.text` PE section instead, so it keeps its bespoke two-stage
+  extraction in `kyoceraexe.go`).
+- **Installer's Programs and Features (appwiz.cpl) entry now reads just "Printer Deployment Tool"**,
+  not "Printer Deployment Tool 0.3.1" - added an explicit `UninstallDisplayName` (Inno Setup otherwise
+  defaults that to AppName + AppVersion). The version is still visible in that same dialog's own
+  "Version" column, and the installer wizard's own title bar is unaffected.
+- **Toolbar Drivers-folder button (📂)** opens the current Drivers Base Path in File Explorer directly
+  from the toolbar (`OpenDriversBasePathInExplorer`, scaffolding it first if it's empty) - Settings >
+  General's own equivalent right-arrow button was removed as redundant now that this exists.
+
+### Changed
+- **Main window widened 1054px -> 1204px** - the top toolbar had grown (Spooler dropdown, then Refresh
+  and Drivers-folder buttons added this same release) to where it was only ~18px away from wrapping
+  onto a second line at the old width; confirmed via direct measurement of each button's own on-screen
+  position that this now leaves roughly 150px of slack instead, enough headroom to absorb a
+  wider-than-usual system font/DPI rendering the button row's own gap can't otherwise account for.
+- **Settings dialog +40px wider, +15px taller** (`.settings-modal` override of the shared `.modal`
+  width; `.tab-panel` height 350px -> 365px) - its General/External Sites/About tabs carry more
+  per-row content than the simple confirm-style dialogs that share the base `.modal` class, which stay
+  at their original size.
+
+### Fixed
+- **Extracting a self-extracting `.exe` or `.zip` whose own internal content was already a single
+  top-level folder produced a redundant `Foo/Foo/...` nesting** instead of the intended `Foo/...` -
+  confirmed against a real Konica Minolta package (`KM_UPD_pcl6_win64_...inst.exe`) that packages
+  itself this way. `flattenRedundantWrapperDir` (`internal/driver/flatten.go`) now collapses that
+  extra level after `ensureZipsExtracted`/`ensureSfxArchivesExtracted` run - but only when the single
+  top-level entry's name actually matches the destination folder's own name, so a package whose
+  genuine, intentional layout happens to be a single folder (a plain "Driver" subfolder, say) is left
+  exactly as it was; a real regression caught in this package's own test suite while implementing this
+  is what led to that narrower, name-matched condition instead of a blanket "always hoist a lone
+  subfolder" rule. The already-broken KM extraction left over from testing this before the fix
+  existed was removed so the next scan re-extracts it correctly.
+- Confirmed the toolbar's Refresh button already re-runs every archive auto-extraction step
+  (zip/self-extracting-archive/msi/Kyocera), not just re-scanning already-extracted `.inf` files -
+  `RefreshDriverCatalog` calls the exact same `driver.BuildCatalog` startup does, so dropping in a
+  raw, never-extracted driver package and clicking Refresh is enough on its own. Documented explicitly
+  on `RefreshDriverCatalog` itself, since it wasn't obvious this fell out for free.
+- **`ensureDriversScaffold` never actually added `Archive` folders to a manufacturer that already had
+  real driver packages in it** - the "only scaffold if root is completely empty" check operated on the
+  whole Drivers root, so it silently no-opped for every already-populated install, including this
+  project's own real Drivers folder. It's now unconditional and idempotent (safe on every startup):
+  every manufacturer in `driver.Manufacturers` gets its `Archive` folder and README ensured, whether
+  its own top-level folder is brand new or has been populated by hand for months - the one case still
+  left alone entirely is an older flat-layout Drivers folder (no `Windows` subfolder at all), so this
+  can't accidentally trip `BuildCatalog`'s own flat-vs-nested back-compat detection.
+- Archive folder's placeholder file is now `README.txt` (was `README.md`) - a stale `README.md` from
+  an earlier PDT version is removed the next time this scaffold step runs. Wording also changed from
+  "The script never scans this folder..." to "The program never scans this folder..." (PDT is a
+  compiled program, not the PowerShell script - `Create-Printers.ps1` - it replaced).
+
 ## 2026-09-07 (v0.3.1) - Zero-driver first run now actually usable; installer launch-after-install fix
 
 ### Added

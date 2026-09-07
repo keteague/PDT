@@ -21,7 +21,7 @@
 ; Build with: iscc installer\pdt.iss
 ; (requires a `wails build` first, so build\bin\PDT.exe exists to package)
 
-#define AppVersion "0.3.1"
+#define AppVersion "0.3.3"
 
 [Setup]
 AppId={{40FB3E79-C3DC-4C78-A969-35012251BD36}
@@ -30,6 +30,13 @@ AppVersion={#AppVersion}
 AppPublisher=Ken Teague
 AppPublisherURL=https://github.com/keteague/PDT
 VersionInfoVersion={#AppVersion}
+; Without this, Inno Setup's default Programs and Features (appwiz.cpl)
+; listing falls back to AppName + AppVersion (e.g. "Printer Deployment Tool
+; 0.3.1") - just the bare app name there instead, matching every other
+; normally-packaged Windows app; the version is still visible in that same
+; dialog's own "Version" column, and the installer's wizard title bar still
+; shows AppVerName (AppName + AppVersion) as before.
+UninstallDisplayName=Printer Deployment Tool
 DefaultDirName={autopf}\PDT
 DefaultGroupName=Printer Deployment Tool
 DisableProgramGroupPage=yes

@@ -28,7 +28,7 @@ var compressedSiblingRe = regexp.MustCompile(`(?i)\.[a-z0-9]{2}_(64)?$`)
 // names/paths rather than installing anything), then decompresses every
 // Microsoft legacy-compressed sibling file the install produces. Confirmed
 // necessary against a real package (Lexmark's driver ships its .inf and
-// companion files this way, reachable only after ensureRarSfxExtracted has
+// companion files this way, reachable only after ensureSfxArchivesExtracted has
 // already unpacked its outer self-extracting RAR wrapper) - BuildCatalog
 // only ever looks for .inf files already sitting on disk in their real,
 // uncompressed form. Uses msiexec.exe/expand.exe directly (both are part of

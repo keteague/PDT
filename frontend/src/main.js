@@ -11,6 +11,7 @@ import {
     ListPreinstallFolders, CheckExportCollisions, ExportConfigs,
     ListRemovableDrives, FormatDrives, WritePortablePDT,
     StartSpooler, StopSpooler, RestartSpooler, SpoolerStatus,
+    RefreshDriverCatalog,
 } from '../wailsjs/go/main/App';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 
@@ -37,7 +38,7 @@ const TIP = {
     ip: 'Printer\'s IP address, or "NUL" to bind permanently to the local NUL: port.',
     selectAllHeader: 'Check/uncheck every row.',
     saveFileBasePath: 'Where PDT keeps saved JSON configs and captured DEVMODE/Device Settings files, and where Open/Save Configuration start from by default. Defaults to Configs\\ on this flash drive when running portably, or %LocalAppData%\\PDT\\Configs for an installed copy.',
-    driversBasePath: 'Where PDT looks for printer drivers (Drivers\\Windows\\<version>\\<Manufacturer>\\...) - takes effect after restarting PDT. Defaults to Drivers\\ on this flash drive when running portably, or %LocalAppData%\\PDT\\Drivers for an installed copy.',
+    driversBasePath: 'Where PDT looks for printer drivers (Drivers\\Windows\\<version>\\<Manufacturer>\\...) - click Refresh (or restart PDT) after changing this to rescan the new location. Defaults to Drivers\\ on this flash drive when running portably, or %LocalAppData%\\PDT\\Drivers for an installed copy.',
     preinstallBasePath: 'Where site-survey "<SalesChainID> - <Client> - <Address>" subfolders live - Export Configs looks here for the one matching the current SalesChain ID.',
     manufacturerOrder: 'Drag to reorder - controls the Manufacturer dropdown\'s order in Defaults and in the grid. Settings > External Sites is always alphabetical regardless of this order.',
 };
@@ -159,12 +160,14 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
     <button id="btnFlashDrive" class="icon-btn-inline" title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">&#128190;</button>
+    <button id="btnRefreshDrivers" class="icon-btn-inline" title="Rescan the Drivers folder for newly added or extracted driver packages, without restarting PDT.">&#128260;</button>
+    <button id="btnOpenDriversFolder" class="icon-btn-inline" title="Open the Drivers folder in File Explorer.">&#128194;</button>
     <span class="catalog-warning" id="catalogWarning" hidden></span>
     <button id="btnSettings" class="icon-btn" title="Settings">&#9881;</button>
   </div>
 
   <div class="modal-backdrop" id="settingsBackdrop" hidden>
-    <div class="modal">
+    <div class="modal settings-modal">
       <h3>Settings</h3>
       <div class="tabs">
         <button type="button" class="tab-btn active" data-tab="general">General</button>
@@ -184,7 +187,6 @@ document.querySelector('#app').innerHTML = `
           <div class="path-row">
             <input type="text" id="settingsDriversBasePath" title="${tip('driversBasePath')}">
             <button id="btnBrowseDriversBasePath" title="Browse for a folder...">&hellip;</button>
-            <button id="btnOpenDriversBasePath" title="Open this folder in File Explorer (creating the standard manufacturer subfolders first, if it's empty).">&#8594;</button>
           </div>
         </label>
         <label class="modal-field" title="${tip('preinstallBasePath')}">
@@ -326,7 +328,7 @@ document.querySelector('#app').innerHTML = `
   </div>
 
   <div class="no-drivers-banner" id="noDriversBanner" hidden>
-    No printer drivers are installed yet. Pick a Manufacturer below, then click <strong>Check for Updates</strong> to open its download page - once a driver package is downloaded into the Drivers folder, it'll show up here automatically.
+    No printer drivers are installed yet. Pick a Manufacturer below, then click <strong>Check for Updates</strong> to open its download page - once a driver package is downloaded into the Drivers folder, press the Refresh button (&#128260;) to make it available.
   </div>
 
   <div class="defaults-panel">
@@ -487,15 +489,18 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 // Configuration (which can load a value from a saved file); Settings
 // (app-wide preferences - Preinstall/Configuration Files Base Path,
 // manufacturer URLs/order - that have nothing to do with any particular
-// job); Write to Flash Drive and Spooler (also job-independent - stamping
-// out this laptop's whole Drivers/Configs folders, and restarting the one
-// Print Spooler service shared by every queue on the machine, both have
-// nothing to do with one particular SalesChain ID); the Defaults panel's
-// Manufacturer dropdown and Check for Updates button (also job-independent -
-// picking a manufacturer and opening its configured download page touches no
-// SalesChain-ID-named file, and this is exactly how the no-drivers banner's
-// own bootstrap workflow is meant to work on a fresh install, before there's
-// any job to name yet) - each along with
+// job); Write to Flash Drive, Spooler, Refresh, and the Drivers-folder
+// button (also job-independent - stamping out this laptop's whole
+// Drivers/Configs folders, restarting the one Print Spooler service shared
+// by every queue on the machine, rescanning the Drivers folder in place, and
+// opening it in File Explorer all have nothing to do with one particular
+// SalesChain ID); the Defaults panel's Manufacturer dropdown and
+// Check for Updates button (also job-independent - picking a manufacturer
+// and opening its configured download page touches no SalesChain-ID-named
+// file, and this is exactly how the no-drivers banner's own bootstrap
+// workflow - pick a Manufacturer, Check for Updates, Refresh - is meant to
+// work on a fresh install, before there's any job to name yet) - each along
+// with
 // everything inside its own modal/dropdown, so it stays fully usable, not
 // just openable; Deploy Checked Printers, whose
 // enabled state is entirely owned by updateDeployButtonEnabled() instead
@@ -520,7 +525,7 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 function applySalesChainGate() {
     const locked = !state.salesChainId;
     document.body.classList.toggle('sales-chain-locked', locked);
-    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
+    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnOpenDriversFolder', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
         if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown')) continue;
         c.disabled = locked;
@@ -1874,11 +1879,6 @@ function wireSettingsModal() {
         if (!result.canceled) el('settingsDriversBasePath').value = result.path;
     });
 
-    el('btnOpenDriversBasePath').addEventListener('click', async () => {
-        const result = await OpenDriversBasePathInExplorer(el('settingsDriversBasePath').value);
-        if (result.error) logStatus('ERR', `Could not open Drivers Base Path: ${result.error}`);
-    });
-
     el('btnBrowsePreinstallBasePath').addEventListener('click', async () => {
         const result = await PickFolder(el('settingsPreinstallBasePath').value);
         if (!result.canceled) el('settingsPreinstallBasePath').value = result.path;
@@ -1900,11 +1900,49 @@ function wireSettingsModal() {
         state.settings = saved;
         await refreshManufacturerDropdowns();
         closeSettingsModal();
-        logStatus('OK', 'Settings saved. Restart PDT for a changed Drivers Base Path to take effect.');
+        logStatus('OK', 'Settings saved. Click Refresh (or restart PDT) for a changed Drivers Base Path to take effect.');
     });
 
     el('btnCheckUpdates').addEventListener('click', () => {
         OpenManufacturerURL(el('defMfg').value);
+    });
+
+    // Refresh: rescans the Drivers folder in place (RefreshDriverCatalog),
+    // no restart needed - what the no-drivers banner points at once a
+    // downloaded driver package has been dropped into the Drivers folder.
+    // DriverCandidates/DefaultDriverFor are always called fresh from Go on
+    // every dropdown interaction, so the driver lists themselves need no
+    // extra refreshing here - only things this snapshots at fetch time
+    // (the banner, and the Defaults panel's currently-shown Driver value)
+    // need an explicit nudge.
+    el('btnRefreshDrivers').addEventListener('click', async () => {
+        const btn = el('btnRefreshDrivers');
+        btn.disabled = true;
+        try {
+            const status = await RefreshDriverCatalog();
+            el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
+            if (!status.ok) {
+                logStatus('ERR', `Driver catalog refresh failed: ${status.error}`);
+            } else {
+                const mfgSelect = el('defMfg');
+                if (mfgSelect.value) {
+                    el('defDriver').value = await DefaultDriverFor(mfgSelect.value);
+                }
+                logStatus('OK', status.hasDrivers
+                    ? 'Driver catalog refreshed.'
+                    : 'Driver catalog refreshed - still no drivers found in the Drivers folder.');
+            }
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    // Opens the current Drivers Base Path in File Explorer - the same
+    // scaffold-then-open call Settings' own right-arrow button uses, just
+    // reachable straight from the toolbar without opening Settings first.
+    el('btnOpenDriversFolder').addEventListener('click', async () => {
+        const result = await OpenDriversBasePathInExplorer(state.settings.driversBasePath);
+        if (result.error) logStatus('ERR', `Could not open Drivers folder: ${result.error}`);
     });
 }
 

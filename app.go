@@ -41,6 +41,13 @@ type App struct {
 	// silently see catalog/modelIndex still at their nil zero value.
 	ready chan struct{}
 
+	// catalogMu guards catalog/modelIndex/catalogErr below. Built once at
+	// startup and read-only from then on for most of this app's life, but
+	// RefreshDriverCatalog (the toolbar's Refresh button) can now replace all
+	// three live, without restarting PDT - a real lock, not just the one-time
+	// <-a.ready happens-before startup already relied on, is what keeps that
+	// safe against a DriverCandidates/Deploy call landing at the same moment.
+	catalogMu  sync.RWMutex
 	catalog    driver.Catalog
 	modelIndex map[string]map[string][]string
 	catalogErr error
@@ -86,14 +93,58 @@ func (a *App) startup(ctx context.Context) {
 	_ = ensureDriversScaffold(driversRoot())
 
 	catalog, err := driver.BuildCatalog(driversRoot())
+	a.catalogMu.Lock()
 	if err != nil {
 		a.catalogErr = err
+		a.catalogMu.Unlock()
 		close(a.ready)
 		return
 	}
 	a.catalog = catalog
 	a.modelIndex = driver.BuildModelIndex(catalog)
+	a.catalogMu.Unlock()
 	close(a.ready)
+}
+
+// catalogSnapshot returns the current catalog/modelIndex/catalogErr under
+// catalogMu's read lock - every method below that reads any of the three
+// goes through this rather than touching the fields directly, so a
+// RefreshDriverCatalog call landing concurrently can't be observed half
+// swapped-in.
+func (a *App) catalogSnapshot() (driver.Catalog, map[string]map[string][]string, error) {
+	a.catalogMu.RLock()
+	defer a.catalogMu.RUnlock()
+	return a.catalog, a.modelIndex, a.catalogErr
+}
+
+// RefreshDriverCatalog re-scans the Drivers folder in place - the toolbar's
+// Refresh button, for picking up a driver package dropped in (or downloaded
+// via Check for Updates) without restarting PDT, which was previously the
+// only way (BuildCatalog only ever ran once, at startup). This calls the
+// exact same driver.BuildCatalog startup already does, so it also re-runs
+// every auto-extraction step (zip/self-extracting-archive/msi/Kyocera) on
+// whatever's newly sitting in the Drivers folder, not just re-scanning
+// already-extracted .inf files - dropping in a raw, never-extracted .zip or
+// driver .exe and clicking Refresh is enough, no manual extraction needed
+// first. Returns the same CatalogStatus shape GetCatalogStatus does, so the
+// frontend can drive its no-drivers banner and re-populate any open Driver
+// dropdowns from one call.
+func (a *App) RefreshDriverCatalog() CatalogStatus {
+	<-a.ready
+	catalog, err := driver.BuildCatalog(driversRoot())
+
+	a.catalogMu.Lock()
+	if err != nil {
+		a.catalogErr = err
+		a.catalogMu.Unlock()
+		return CatalogStatus{OK: false, Error: err.Error()}
+	}
+	a.catalog = catalog
+	a.modelIndex = driver.BuildModelIndex(catalog)
+	a.catalogErr = nil
+	a.catalogMu.Unlock()
+
+	return CatalogStatus{OK: true, HasDrivers: len(driver.ManufacturersWithDrivers(catalog)) > 0}
 }
 
 // GetSettings returns the current persisted preferences.
@@ -266,9 +317,10 @@ func (a *App) ApplyUpdate(assetURL string) ApplyUpdateResult {
 // from a.settings in startup(), and refreshed in SaveSettings() so a change
 // takes effect immediately for anything that resolves its folder mid-
 // session (DEVMODE capture, Export Configs, Write to Flash Drive). The
-// driver *catalog* itself is the one exception: BuildCatalog only ever runs
-// once, at startup, so a changed DriversBasePath needs a PDT restart to
-// actually rescan the new location - Settings' own tooltip says so.
+// driver *catalog* itself only rescans when explicitly asked to - at
+// startup, or via the toolbar's Refresh button (RefreshDriverCatalog) - so a
+// changed DriversBasePath needs one of those two before it's actually
+// reflected, not automatically on save; Settings' own tooltip says so.
 var currentDriversBasePath string
 var currentConfigsBasePath string
 
@@ -313,9 +365,10 @@ type CatalogStatus struct {
 
 func (a *App) GetCatalogStatus() CatalogStatus {
 	<-a.ready
-	hasDrivers := len(driver.ManufacturersWithDrivers(a.catalog)) > 0
-	if a.catalogErr != nil {
-		return CatalogStatus{OK: false, Error: a.catalogErr.Error(), HasDrivers: hasDrivers}
+	catalog, _, catalogErr := a.catalogSnapshot()
+	hasDrivers := len(driver.ManufacturersWithDrivers(catalog)) > 0
+	if catalogErr != nil {
+		return CatalogStatus{OK: false, Error: catalogErr.Error(), HasDrivers: hasDrivers}
 	}
 	return CatalogStatus{OK: true, HasDrivers: hasDrivers}
 }
@@ -377,7 +430,8 @@ func applyManufacturerOrder(items []string, order []string) []string {
 // manufacturers' driver names aren't model-specific; see driver.ModelFromDriverName).
 func (a *App) Models(manufacturer string) []string {
 	<-a.ready
-	byModel, ok := a.modelIndex[manufacturer]
+	_, modelIndex, _ := a.catalogSnapshot()
+	byModel, ok := modelIndex[manufacturer]
 	if !ok {
 		return nil
 	}
@@ -395,7 +449,8 @@ func (a *App) Models(manufacturer string) []string {
 // re-ranks when non-empty (free-text typing in the dropdown).
 func (a *App) DriverCandidates(manufacturer, model, filterText string) []string {
 	<-a.ready
-	return driver.Candidates(a.catalog, a.modelIndex, manufacturer, model, filterText)
+	catalog, modelIndex, _ := a.catalogSnapshot()
+	return driver.Candidates(catalog, modelIndex, manufacturer, model, filterText)
 }
 
 // DefaultDriverFor is the Defaults panel's pre-selected driver name for
@@ -403,7 +458,8 @@ func (a *App) DriverCandidates(manufacturer, model, filterText string) []string 
 // rule for manufacturer or no matching driver is present locally.
 func (a *App) DefaultDriverFor(manufacturer string) string {
 	<-a.ready
-	return driver.DefaultDriverNameFor(a.catalog, manufacturer)
+	catalog, _, _ := a.catalogSnapshot()
+	return driver.DefaultDriverNameFor(catalog, manufacturer)
 }
 
 // PathResult is a file dialog's outcome: Canceled is true (with Path empty)
@@ -554,7 +610,8 @@ func (a *App) Deploy(rows []printer.PrinterRow, salesChainID, portNamePrefix str
 		cancel()
 	}()
 
-	deployer := pdtwin.NewDeployer(a.catalog, configsRoot())
+	catalog, _, _ := a.catalogSnapshot()
+	deployer := pdtwin.NewDeployer(catalog, configsRoot())
 	results := printer.DeployAllWithProgress(ctx, deployer, reqs, a.confirm, func(r printer.DeployResult) {
 		runtime.EventsEmit(a.ctx, deployProgressEvent, toDeployRowResult(r))
 	})

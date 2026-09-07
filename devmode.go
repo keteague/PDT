@@ -193,12 +193,13 @@ func (a *App) EnumerateLocalPrinters() []LocalPrinterCandidate {
 		// rely on that being the only caller that ever remembers to).
 		return []LocalPrinterCandidate{}
 	}
+	catalog, _, _ := a.catalogSnapshot()
 	out := make([]LocalPrinterCandidate, 0, len(locals))
 	for _, lp := range locals {
 		cand := LocalPrinterCandidate{
 			Name:         lp.Name,
 			Driver:       lp.DriverName,
-			Manufacturer: findManufacturerForDriver(a.catalog, lp.DriverName),
+			Manufacturer: findManufacturerForDriver(catalog, lp.DriverName),
 			Physical:     isPhysicalPrinterGuess(lp.DriverName),
 		}
 		if host, found, _ := pdtwin.FindHostByTcpIpPortName(lp.PortName); found {

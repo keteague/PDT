@@ -64,6 +64,8 @@ export function OpenSevenZipHomepage():Promise<void>;
 
 export function PickFolder(arg1:string):Promise<main.PathResult>;
 
+export function RefreshDriverCatalog():Promise<main.CatalogStatus>;
+
 export function RestartSpooler():Promise<main.SpoolerResult>;
 
 export function SaveConfiguration(arg1:config.SavedConfig):Promise<main.PathResult>;

@@ -8,6 +8,9 @@ real-world use already proved out - the Win32 mechanics below are ported (not re
 that tool's own hard-won findings, cross-checked against Microsoft's documentation and, wherever
 that documentation didn't cover it, verified directly against this machine's real print spooler.
 
+**[Download the latest installer](https://github.com/keteague/PDT/releases/latest)** - see
+"Installing PDT" below for what the installer does and does not do.
+
 `PDT.exe` requests elevation on launch (`build/windows/wails.exe.manifest`) - every real operation it
 performs needs Administrator, so Windows prompts for UAC automatically rather than the app starting
 unelevated and failing partway through a deploy. There is no unelevated fallback mode. This is
@@ -198,7 +201,7 @@ were.
 Lexmark's package is a **self-extracting RAR archive** (confirmed by its `Rar!` signature, not a ZIP
 or 7z) with its actual driver files packaged inside `.msi` installers one level in.
 
-**The RAR layer is auto-extracted** (`internal/driver/rarsfx.go`, `ensureRarSfxExtracted`) - unlike
+**The RAR layer is auto-extracted** (`internal/driver/sfx.go`, `ensureSfxArchivesExtracted`) - unlike
 `.zip` extraction, this can't use Go's standard library (it has no RAR reader at all), and the one
 pure-Go RAR library evaluated (`nwaples/rardecode`) was found to silently corrupt exactly the `.msi`
 files this needs (confirmed by feeding its output to `msiexec`, which rejected it as an invalid
@@ -208,10 +211,14 @@ archive"; only the full `7z.dll` does). What actually works, and is what PDT bun
 `7z.dll` (~2.5MB total) copied out of a full 7-Zip install with no installer needed - confirmed these
 two files run completely standalone. They're embedded directly into `PDT.exe` (`sevenzip.go`,
 `go:embed third_party/7zip/...`) and extracted once to `%LocalAppData%\PDT\tools\7zip\` at startup;
-`BuildCatalog` then auto-detects any `.exe` containing a RAR signature (`isSelfExtractingRar` - a
-byte-signature scan, not a naming convention, so it works for a future self-extracting package from
-any manufacturer, not just Lexmark) and extracts it via the bundled `7z.exe`, the same
-skip-if-already-extracted convention as `.zip` auto-extraction. Redistributing `7z.exe`/`7z.dll` is
+`BuildCatalog` then auto-detects any `.exe` containing a RAR, 7z, or Zip signature
+(`isSelfExtractingArchive` - a byte-signature scan, not a naming convention, so it works for a future
+self-extracting package from any manufacturer) and extracts it via the bundled `7z.exe` - which
+auto-detects the exact format itself, so nothing downstream needs to know which one matched - the same
+skip-if-already-extracted convention as `.zip` auto-extraction. Confirmed live against a real
+self-extracting **7z** package too: Konica Minolta's own driver ships as a `7z.sfx.exe` stub with the
+real archive simply appended after it (same layout as Lexmark's RAR, different signature), extracted
+correctly with no Kyocera-style special casing needed (see below). Redistributing `7z.exe`/`7z.dll` is
 permitted under 7-Zip's own license (LGPL + an "unRAR restriction" that only bars using the code to
 build a RAR *compressor*, not redistributing the decoder) - `third_party/7zip/License.txt` travels
 with the binaries per that license's own terms.
@@ -286,7 +293,8 @@ identical two-stage 7-Zip extraction Method 2 describes by hand, landing the res
 `KXDriver_<version>` folder right next to the `.exe`. So the real manual step, in practice, is just:
 drop the freshly downloaded `.exe` directly into the right `Drivers\Windows\<version>\Kyocera\` folder
 and start PDT once - no scratch folders, no running the installer. Uses the same bundled `7z.exe` as
-the Lexmark RAR-SFX auto-extraction (`ensureRarSfxExtracted`) and is equally a no-op if
+the Lexmark/Konica Minolta self-extracting-archive auto-extraction (`ensureSfxArchivesExtracted`) and
+is equally a no-op if
 `driver.SevenZipPath` isn't set (`go test`, `pdtdebug`, or extraction failing for that one package
 never blocks the rest of the catalog scan - the same "best-effort, clean up and retry next time"
 convention every `ensure*Extracted` helper in this package already follows). Methods 2 and 3 below
@@ -514,7 +522,7 @@ name `CheckForUpdate` looks for).
 
 ### Keeping the bundled 7-Zip up to date (`sevenzip.go`, About tab)
 
-About also credits 7-Zip (by Igor Pavlov) - the tool bundled to auto-extract self-extracting RAR
+About also credits 7-Zip (by Igor Pavlov) - the tool bundled to auto-extract self-extracting RAR/7z/Zip
 driver packages, see "Lexmark" above - and shows the version currently cached
 (`GetSevenZipVersion`, parsed from `7z.exe i`'s own startup banner). **Check for 7-Zip Updates**
 queries 7-Zip's own GitHub Releases (development now lives at `ip7z/7zip`, not `7-zip.org` directly)

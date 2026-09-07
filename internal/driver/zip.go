@@ -13,13 +13,15 @@ import (
 // ensureZipsExtracted finds every .zip directly under root (skipping "etc"/
 // "Archive" paths, same as the main driver scan) and extracts each one into a
 // sibling folder named after it - Foo.zip -> Foo/ - if that folder doesn't
-// already exist. Confirmed necessary against a real package (Sharp's UD3
-// driver ships as a .zip): BuildCatalog only ever looks for .inf files
-// already sitting on disk, so a driver that's never been extracted is
-// otherwise completely invisible to it. Extraction is skipped (not retried)
-// once the destination folder exists, however it got there - manually by the
-// user or by an earlier run of this - so this is cheap to call on every
-// catalog build.
+// already exist (flattenRedundantWrapperDir then collapses that back down to
+// just Foo/ if the zip's own content was already a single top-level folder,
+// rather than leaving Foo/Foo/...). Confirmed necessary against a real
+// package (Sharp's UD3 driver ships as a .zip): BuildCatalog only ever looks
+// for .inf files already sitting on disk, so a driver that's never been
+// extracted is otherwise completely invisible to it. Extraction is skipped
+// (not retried) once the destination folder exists, however it got there -
+// manually by the user or by an earlier run of this - so this is cheap to
+// call on every catalog build.
 func ensureZipsExtracted(root string) {
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -47,7 +49,9 @@ func ensureZipsExtracted(root string) {
 			// whatever's wrong with this zip is fixed - retries instead of
 			// mistaking a partial extraction for a complete one.
 			os.RemoveAll(destDir)
+			return nil
 		}
+		flattenRedundantWrapperDir(destDir)
 		return nil
 	})
 }

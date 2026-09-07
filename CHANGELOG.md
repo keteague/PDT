@@ -4,6 +4,41 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.2.0) - Spooler control, per-row SNMP community string, window/label polish
+
+### Added
+- **Spooler button** (top bar, between Export Configs and Write to Flash Drive) with a Restart/Start/
+  Stop dropdown for the Windows Print Spooler service - `internal/spooler` (`golang.org/x/sys/windows/
+  svc/mgr`), a manual escape hatch for a stuck print object or jammed queue, the same fix a technician
+  would reach for via services.msc or `net stop/start spooler`. The button itself colors live to match
+  the service's actual state: green running, red stopped, yellow while settling (including for the
+  duration of Restart's own stop-then-start sequence) - checked once at startup and refreshed after
+  every action. Job-independent, so it's exempt from the SalesChain ID gate like Settings/Write to Flash
+  Drive.
+- **Per-row SNMP community string**: the grid's SNMP column is now a text field, not a checkbox - blank
+  disables SNMP monitoring on that row's port, any text enables it and is the community string used
+  (`PrinterRow`/`SavedRow` gain `SNMPCommunity` alongside the existing `SNMP` bool). The Defaults panel
+  keeps its SNMP checkbox, now paired with its own community field (defaults to "public", disabled until
+  checked) used as the template for "Add Printer." A config saved before this field existed (bare
+  `Snmp: true`, no community) still infers "public" on load, matching `AddStandardTcpIpPort`'s own
+  existing empty-community default instead of silently disabling SNMP for it.
+
+### Changed
+- Main window is 30px wider (1024 -> 1054).
+- "SalesChain ID" field label reads "Save ID" (the field's id, tooltips, log messages, and the
+  `<SalesChainID>-...` filename convention are all unchanged - display label only).
+
+### Fixed
+- The Spooler dropdown menu had the same specificity bug this codebase already fixed once for
+  `.modal-backdrop`: a plain `.dropdown-menu { display: flex; }` has equal CSS specificity to the
+  browser's own `[hidden] { display: none }` and, coming later in the cascade, always won - the menu
+  showed permanently open regardless of its `hidden` attribute, making the Spooler button appear stuck.
+  Fixed the same way: `.dropdown-menu:not([hidden])`.
+
+### Verified
+- `go build`/`vet`/`test` and `wails build` clean. Version bumped to 0.2.0 (`version.go`,
+  `wails.json`'s `info.productVersion`).
+
 ## 2026-09-07 - Captured DEVMODE/Device Settings, Export Configs, portable flash drives, deploy safeguards
 
 ### Added

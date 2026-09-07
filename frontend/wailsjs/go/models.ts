@@ -8,6 +8,7 @@ export namespace config {
 	    Model: string;
 	    Driver: string;
 	    Snmp: boolean;
+	    SnmpCommunity: string;
 	    Mono: boolean;
 	    OneSided: boolean;
 	    UseExistingPort: boolean;
@@ -27,6 +28,7 @@ export namespace config {
 	        this.Model = source["Model"];
 	        this.Driver = source["Driver"];
 	        this.Snmp = source["Snmp"];
+	        this.SnmpCommunity = source["SnmpCommunity"];
 	        this.Mono = source["Mono"];
 	        this.OneSided = source["OneSided"];
 	        this.UseExistingPort = source["UseExistingPort"];
@@ -373,6 +375,20 @@ export namespace main {
 	        this.manufacturerOrder = source["manufacturerOrder"];
 	    }
 	}
+	export class SpoolerResult {
+	    state: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SpoolerResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.error = source["error"];
+	    }
+	}
 	export class UpdateCheckResult {
 	    available: boolean;
 	    currentVersion: string;
@@ -407,6 +423,7 @@ export namespace printer {
 	    Model: string;
 	    Driver: string;
 	    SNMP: boolean;
+	    SNMPCommunity: string;
 	    Mono: boolean;
 	    OneSided: boolean;
 	    UseExistingPort: boolean;
@@ -425,6 +442,7 @@ export namespace printer {
 	        this.Model = source["Model"];
 	        this.Driver = source["Driver"];
 	        this.SNMP = source["SNMP"];
+	        this.SNMPCommunity = source["SNMPCommunity"];
 	        this.Mono = source["Mono"];
 	        this.OneSided = source["OneSided"];
 	        this.UseExistingPort = source["UseExistingPort"];

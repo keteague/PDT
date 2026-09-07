@@ -10,6 +10,7 @@ import {
     CaptureDevModeForPrinter, BrowseDevModeFile, EnumerateLocalPrinters,
     ListPreinstallFolders, CheckExportCollisions, ExportConfigs,
     ListRemovableDrives, FormatDrives, WritePortablePDT,
+    StartSpooler, StopSpooler, RestartSpooler, SpoolerStatus,
 } from '../wailsjs/go/main/App';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 
@@ -25,7 +26,9 @@ const TIP = {
     portPrefixEnabled: 'When creating a new Standard TCP/IP port, prefix its name with the text to the right instead of using the bare IP address.',
     portPrefixText: 'Prefix text used when Port name prefix is checked, e.g. "IP_" - the port would be named "IP_10.1.1.50".',
     useExistingPort: 'Reuse the Standard TCP/IP port already configured for this row\'s IP instead of creating a new one. Falls back to creating a new port if none already targets the IP.',
-    snmp: 'Enable SNMP status monitoring on this printer\'s port (only applies when a new port is created).',
+    snmp: 'Enable SNMP status monitoring on new rows\' ports by default (only applies when a new port is actually created) - the community string to the right is used when checked.',
+    snmpCommunity: 'SNMP community string used on new rows\' ports when SNMP is checked - defaults to "public". Disabled until SNMP is checked.',
+    snmpGrid: 'This row\'s SNMP community string - blank disables SNMP monitoring on this row\'s port; any text enables it and is the community string used (only applies when a new port is actually created).',
     mono: 'Deploy this printer set to monochrome (black & white) printing by default.',
     oneSided: 'Deploy this printer set to simplex (single-sided) printing by default.',
     apf: 'Enable "Advanced printing features" on the printer\'s Advanced tab.',
@@ -64,7 +67,11 @@ function newRow(overrides = {}) {
     return Object.assign({
         _id: nextRowId++,
         select: true, name: '', ip: '', manufacturer: '', model: '', driver: '',
-        snmp: false, mono: false, oneSided: false, useExistingPort: false, advancedPrintingFeatures: false,
+        // '' disables SNMP on this row's port; any other text enables it and
+        // is the community string used (only applies when a new port is
+        // actually created) - see tip('snmpGrid').
+        snmpCommunity: '',
+        mono: false, oneSided: false, useExistingPort: false, advancedPrintingFeatures: false,
         // Bare filename under the Configs folder (e.g. "18455-1-Copy Room.bin")
         // pointing at a captured/browsed raw DEVMODE - never the DEVMODE
         // bytes themselves, which never travel through this frontend at all.
@@ -74,10 +81,19 @@ function newRow(overrides = {}) {
     }, overrides);
 }
 
+// A pre-existing saved config from before the SNMP community field existed
+// only ever had a bare Snmp bool, no community string - "public" (matching
+// AddStandardTcpIpPort's own default for an empty community) preserves that
+// file's original behavior instead of silently turning SNMP off for it.
+function inferSnmpCommunity(snmpEnabled, community) {
+    if (community) return community;
+    return snmpEnabled ? 'public' : '';
+}
+
 function rowToPrinterRow(r) {
     return {
         Name: r.name, IP: r.ip, Manufacturer: r.manufacturer, Model: r.model, Driver: r.driver,
-        SNMP: r.snmp, Mono: r.mono, OneSided: r.oneSided,
+        SNMP: !!r.snmpCommunity, SNMPCommunity: r.snmpCommunity, Mono: r.mono, OneSided: r.oneSided,
         UseExistingPort: r.useExistingPort, AdvancedPrintingFeatures: r.advancedPrintingFeatures,
         DevModeFile: r.devModeFile,
     };
@@ -86,7 +102,7 @@ function rowToPrinterRow(r) {
 function printerRowToRow(pr, select = true) {
     return newRow({
         select, name: pr.Name, ip: pr.IP, manufacturer: pr.Manufacturer, model: pr.Model, driver: pr.Driver,
-        snmp: pr.SNMP, mono: pr.Mono, oneSided: pr.OneSided,
+        snmpCommunity: inferSnmpCommunity(pr.SNMP, pr.SNMPCommunity), mono: pr.Mono, oneSided: pr.OneSided,
         useExistingPort: pr.UseExistingPort, advancedPrintingFeatures: pr.AdvancedPrintingFeatures,
         devModeFile: pr.DevModeFile || '',
     });
@@ -95,7 +111,7 @@ function printerRowToRow(pr, select = true) {
 function rowToSavedRow(r) {
     return {
         Select: r.select, Name: r.name, IP: r.ip, Manufacturer: r.manufacturer, Model: r.model, Driver: r.driver,
-        Snmp: r.snmp, Mono: r.mono, OneSided: r.oneSided,
+        Snmp: !!r.snmpCommunity, SnmpCommunity: r.snmpCommunity, Mono: r.mono, OneSided: r.oneSided,
         UseExistingPort: r.useExistingPort, AdvancedPrintingFeatures: r.advancedPrintingFeatures,
         DevModeFile: r.devModeFile,
     };
@@ -104,7 +120,7 @@ function rowToSavedRow(r) {
 function savedRowToRow(sr) {
     return newRow({
         select: sr.Select, name: sr.Name, ip: sr.IP, manufacturer: sr.Manufacturer, model: sr.Model, driver: sr.Driver,
-        snmp: sr.Snmp, mono: sr.Mono, oneSided: sr.OneSided,
+        snmpCommunity: inferSnmpCommunity(sr.Snmp, sr.SnmpCommunity), mono: sr.Mono, oneSided: sr.OneSided,
         useExistingPort: sr.UseExistingPort, advancedPrintingFeatures: sr.AdvancedPrintingFeatures,
         devModeFile: sr.DevModeFile || '',
     });
@@ -128,11 +144,19 @@ const state = {
 
 document.querySelector('#app').innerHTML = `
   <div class="top-bar">
-    <label title="${tip('salesChainId')}">SalesChain ID <input type="text" id="salesChainId" class="input-needs-value" size="14" title="${tip('salesChainId')}"></label>
+    <label title="${tip('salesChainId')}">Save ID <input type="text" id="salesChainId" class="input-needs-value" size="14" title="${tip('salesChainId')}"></label>
     <button id="btnOpenConfig" title="Load a previously saved JSON configuration (rows + SalesChain ID).">Open Configuration</button>
     <button id="btnSaveConfig" title="Save the current rows and SalesChain ID to a JSON configuration file.">Save Configuration</button>
     <button id="btnResetConfig" title="Reset PDT to its default settings - clears every row, the SalesChain ID, and the Defaults panel.">Reset Configuration</button>
     <button id="btnExportConfigs" title="Copy this SalesChain ID's Configs files (saved JSON config, captured DEVMODE/Device Settings) to its Preinstall subfolder on this computer.">Export Configs</button>
+    <div class="dropdown" id="spoolerDropdown">
+      <button id="btnSpooler" title="Control the Windows Print Spooler service.">Spooler &#9662;</button>
+      <div class="dropdown-menu" id="spoolerMenu" hidden>
+        <button type="button" class="dropdown-item" data-spooler-action="restart">Restart</button>
+        <button type="button" class="dropdown-item" data-spooler-action="start">Start</button>
+        <button type="button" class="dropdown-item" data-spooler-action="stop">Stop</button>
+      </div>
+    </div>
     <button id="btnFlashDrive" class="icon-btn-inline" title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">&#128190;</button>
     <span class="catalog-warning" id="catalogWarning" hidden></span>
     <button id="btnSettings" class="icon-btn" title="Settings">&#9881;</button>
@@ -307,6 +331,7 @@ document.querySelector('#app').innerHTML = `
         <input type="text" id="portPrefixText" size="6" placeholder="IP_" title="${tip('portPrefixText')}">
         <label title="${tip('useExistingPort')}"><input type="checkbox" id="defUseExistingPort" title="${tip('useExistingPort')}"> Use existing port</label>
         <label title="${tip('snmp')}"><input type="checkbox" id="defSnmp" title="${tip('snmp')}"> SNMP</label>
+        <input type="text" id="defSnmpCommunity" size="8" placeholder="public" title="${tip('snmpCommunity')}">
       </fieldset>
       <fieldset class="defaults-sub">
         <legend>Print Defaults</legend>
@@ -341,7 +366,7 @@ document.querySelector('#app').innerHTML = `
           <th title="${tip('ip')}">IP</th>
           <th title="${tip('manufacturer')}">Manufacturer</th>
           <th title="${tip('driver')}">Driver</th>
-          <th title="${tip('snmp')}">SNMP</th>
+          <th title="${tip('snmpGrid')}">SNMP</th>
           <th title="${tip('mono')}">Mono</th>
           <th title="${tip('oneSided')}">1-sided</th>
           <th title="${tip('useExistingPort')}">UEP</th>
@@ -449,10 +474,12 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 // Configuration (which can load a value from a saved file); Settings
 // (app-wide preferences - Preinstall/Configuration Files Base Path,
 // manufacturer URLs/order - that have nothing to do with any particular
-// job); Write to Flash Drive (also job-independent - it stamps out this
-// laptop's whole Drivers/Configs folders, not anything specific to one
-// SalesChain ID) - each along with everything inside its own modal, so it
-// stays fully usable, not just openable; Deploy Checked Printers, whose
+// job); Write to Flash Drive and Spooler (also job-independent - stamping
+// out this laptop's whole Drivers/Configs folders, and restarting the one
+// Print Spooler service shared by every queue on the machine, both have
+// nothing to do with one particular SalesChain ID) - each along with
+// everything inside its own modal/dropdown, so it stays fully usable, not
+// just openable; Deploy Checked Printers, whose
 // enabled state is entirely owned by updateDeployButtonEnabled() instead
 // (IP-validity, not just SalesChain ID, decides that button - see its own
 // comment for why that needs to be fully separate from this generic sweep);
@@ -475,12 +502,13 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 function applySalesChainGate() {
     const locked = !state.salesChainId;
     document.body.classList.toggle('sales-chain-locked', locked);
-    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnDeploy', 'btnStop']);
+    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnSpooler', 'btnDeploy', 'btnStop']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
-        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop')) continue;
+        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown')) continue;
         c.disabled = locked;
     }
     updatePortPrefixTextEnabled();
+    updateSnmpCommunityEnabled();
 }
 
 // portPrefixText is enabled only when BOTH SalesChain ID is set (the
@@ -490,6 +518,15 @@ function applySalesChainGate() {
 function updatePortPrefixTextEnabled() {
     const input = el('portPrefixText');
     if (input) input.disabled = !state.salesChainId || !state.portPrefixEnabled;
+}
+
+// Same reasoning as updatePortPrefixTextEnabled(), for the Defaults panel's
+// own SNMP community string field: enabled only when SalesChain ID is set
+// AND the SNMP checkbox next to it is checked.
+function updateSnmpCommunityEnabled() {
+    const input = el('defSnmpCommunity');
+    const checkbox = el('defSnmp');
+    if (input && checkbox) input.disabled = !state.salesChainId || !checkbox.checked;
 }
 
 let audioCtx = null;
@@ -547,6 +584,7 @@ async function init() {
     renderGrid();
     wireEvents();
     setupDefaultsComboboxes();
+    refreshSpoolerButtonState(); // not awaited - shouldn't delay the rest of startup
 
     EventsOn('deploy-progress', (result) => onDeployProgress(result));
 }
@@ -756,7 +794,7 @@ function rowHtml(r) {
       <td><input type="text" class="row-ip${isValidPortValue(r.ip) ? '' : ' input-needs-value'}" value="${attr(r.ip)}" placeholder="or NUL" title="${tip('ip')}"></td>
       <td>${mfgSelectHtml(r)}</td>
       <td><div class="combo"><input type="text" class="row-driver${r.driver ? '' : ' input-needs-value'}" value="${attr(r.driver)}" title="${tip('driver')}"><div class="combo-list" hidden></div></div></td>
-      <td class="checkbox-cell"><input type="checkbox" class="row-snmp" ${r.snmp ? 'checked' : ''} title="${tip('snmp')}"></td>
+      <td><input type="text" class="row-snmp" value="${attr(r.snmpCommunity)}" placeholder="off" title="${tip('snmpGrid')}"></td>
       <td class="checkbox-cell"><input type="checkbox" class="row-mono" ${r.mono ? 'checked' : ''} title="${tip('mono')}"></td>
       <td class="checkbox-cell"><input type="checkbox" class="row-onesided" ${r.oneSided ? 'checked' : ''} title="${tip('oneSided')}"></td>
       <td class="checkbox-cell"><input type="checkbox" class="row-uep" ${r.useExistingPort ? 'checked' : ''} title="${tip('useExistingPort')}"></td>
@@ -844,7 +882,7 @@ function wireRowEvents() {
                 target.setSelectionRange(end, end);
             }, 0);
         });
-        tr.querySelector('.row-snmp').addEventListener('change', (e) => { row.snmp = e.target.checked; });
+        tr.querySelector('.row-snmp').addEventListener('input', (e) => { row.snmpCommunity = e.target.value; });
         tr.querySelector('.row-mono').addEventListener('change', (e) => { row.mono = e.target.checked; });
         tr.querySelector('.row-onesided').addEventListener('change', (e) => { row.oneSided = e.target.checked; });
         tr.querySelector('.row-uep').addEventListener('change', (e) => { row.useExistingPort = e.target.checked; });
@@ -972,6 +1010,8 @@ async function resetDefaultsPanel() {
     updatePortPrefixTextEnabled();
     el('defUseExistingPort').checked = false;
     el('defSnmp').checked = false;
+    el('defSnmpCommunity').value = 'public';
+    updateSnmpCommunityEnabled();
     el('defMono').checked = true;
     el('defOneSided').checked = true;
     el('defApf').checked = false;
@@ -1010,7 +1050,7 @@ function addPrinterRow(focusNewRow = false) {
         ip,
         manufacturer: el('defMfg').value,
         driver: el('defDriver').value,
-        snmp: el('defSnmp').checked,
+        snmpCommunity: el('defSnmp').checked ? el('defSnmpCommunity').value : '',
         mono: el('defMono').checked,
         oneSided: el('defOneSided').checked,
         useExistingPort: el('defUseExistingPort').checked,
@@ -1051,6 +1091,8 @@ function wireEvents() {
         updatePortPrefixTextEnabled();
     });
     el('portPrefixText').addEventListener('input', (e) => { state.portPrefixText = e.target.value; });
+
+    el('defSnmp').addEventListener('change', updateSnmpCommunityEnabled);
 
     el('defMfg').addEventListener('change', async (e) => {
         e.target.classList.toggle('input-needs-value', !e.target.value);
@@ -1127,6 +1169,25 @@ function wireEvents() {
 
     el('btnResetConfig').addEventListener('click', resetConfiguration);
     el('btnExportConfigs').addEventListener('click', exportConfigs);
+
+    el('btnSpooler').addEventListener('click', (e) => {
+        e.stopPropagation();
+        el('spoolerMenu').hidden = !el('spoolerMenu').hidden;
+    });
+    for (const item of document.querySelectorAll('#spoolerMenu .dropdown-item')) {
+        item.addEventListener('click', () => {
+            el('spoolerMenu').hidden = true;
+            controlSpooler(item.dataset.spoolerAction);
+        });
+    }
+    // Closes the Spooler dropdown on any click outside it - the stopPropagation()
+    // above on btnSpooler's own click keeps opening it from immediately
+    // closing itself via this same listener.
+    document.addEventListener('click', (e) => {
+        if (!el('spoolerMenu').hidden && !e.target.closest('#spoolerDropdown')) {
+            el('spoolerMenu').hidden = true;
+        }
+    });
 
     el('btnFlashDrive').addEventListener('click', openFlashDriveModal);
     el('btnFlashDriveCancel').addEventListener('click', closeFlashDriveModal);
@@ -1417,6 +1478,48 @@ async function exportConfigs() {
         return;
     }
     logStatus('OK', `Exported ${result.copied.length} file(s) to ${result.destPath}. Configs files can now be deleted from this flash drive.`);
+}
+
+// --- Spooler ---
+
+// Colors btnSpooler to match the service's actual state - green running,
+// red stopped, yellow for anything still settling (a pending transition, or
+// a query that failed and left the state simply unknown - treated the same
+// as "don't claim it's definitely up or definitely down").
+function applySpoolerButtonState(state) {
+    const btn = el('btnSpooler');
+    btn.classList.remove('spooler-running', 'spooler-stopped', 'spooler-pending');
+    if (state === 'running') btn.classList.add('spooler-running');
+    else if (state === 'stopped') btn.classList.add('spooler-stopped');
+    else btn.classList.add('spooler-pending');
+}
+
+async function refreshSpoolerButtonState() {
+    const result = await SpoolerStatus();
+    applySpoolerButtonState(result.error ? 'pending' : result.state);
+}
+
+// controlSpooler: action is 'restart'/'start'/'stop', matching each dropdown
+// item's data-spooler-action and the Go method name directly. Job-independent
+// (this affects every print queue on the machine, not just PDT's own rows),
+// so it needs no SalesChain ID and isn't gated by it - same reasoning as
+// Settings/Write to Flash Drive. Shows pending (yellow) for the duration of
+// the call itself - Restart in particular takes a real, visible moment -
+// then the actual resulting state the Go side already re-queried once it
+// resolves.
+async function controlSpooler(action) {
+    const fns = {restart: RestartSpooler, start: StartSpooler, stop: StopSpooler};
+    const pastTense = {restart: 'restarted', start: 'started', stop: 'stopped'};
+    const fn = fns[action];
+    if (!fn) return;
+    applySpoolerButtonState('pending');
+    const result = await fn();
+    applySpoolerButtonState(result.error ? 'pending' : result.state);
+    if (result.error) {
+        logStatus('ERR', `Could not ${action} the Print Spooler service: ${result.error}`);
+        return;
+    }
+    logStatus('OK', `Print Spooler service ${pastTense[action]}.`);
 }
 
 // --- Write to Flash Drive ---

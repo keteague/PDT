@@ -68,7 +68,7 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 	// --- Port ---
 	var realPortName string // stays "" for a permanent NUL: row (isNul); that's the only case with no real port at all.
 	if !isNul {
-		realPortName, err = d.ensureRealPort(ip, row.UseExistingPort, req.PortNamePrefix, row.SNMP, log)
+		realPortName, err = d.ensureRealPort(ip, row.UseExistingPort, req.PortNamePrefix, row.SNMP, row.SNMPCommunity, log)
 		if err != nil {
 			return fatal(fmt.Errorf("resolving port for %s: %w", ip, err))
 		}
@@ -321,7 +321,7 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 // no existing port targets this IP: that's a fallback to creating one, not a
 // failure, since the row's intent ("give me a working port for this IP") is
 // still satisfiable.
-func (d *Deployer) ensureRealPort(ip string, useExisting bool, prefix string, snmpEnabled bool, log *printer.Logger) (string, error) {
+func (d *Deployer) ensureRealPort(ip string, useExisting bool, prefix string, snmpEnabled bool, snmpCommunity string, log *printer.Logger) (string, error) {
 	if existingName, found, err := FindTcpIpPortByHost(ip); err != nil {
 		return "", err
 	} else if found {
@@ -348,7 +348,7 @@ func (d *Deployer) ensureRealPort(ip string, useExisting bool, prefix string, sn
 		name = fmt.Sprintf("%s_%d", base, i)
 	}
 
-	if err := AddStandardTcpIpPort(name, ip, 9100, snmpEnabled, ""); err != nil {
+	if err := AddStandardTcpIpPort(name, ip, 9100, snmpEnabled, snmpCommunity); err != nil {
 		return "", err
 	}
 	log.OK("Created Standard TCP/IP port %q -> %s:9100.", name, ip)

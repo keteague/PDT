@@ -23,6 +23,7 @@ type SavedRow struct {
 	Model                    string `json:"Model"`
 	Driver                   string `json:"Driver"`
 	SNMP                     bool   `json:"Snmp"`
+	SNMPCommunity            string `json:"SnmpCommunity"`
 	Mono                     bool   `json:"Mono"`
 	OneSided                 bool   `json:"OneSided"`
 	UseExistingPort          bool   `json:"UseExistingPort"`
@@ -36,7 +37,7 @@ type SavedRow struct {
 func (r SavedRow) ToPrinterRow() printer.PrinterRow {
 	return printer.PrinterRow{
 		Name: r.Name, IP: r.IP, Manufacturer: r.Manufacturer, Model: r.Model, Driver: r.Driver,
-		SNMP: r.SNMP, Mono: r.Mono, OneSided: r.OneSided,
+		SNMP: r.SNMP, SNMPCommunity: r.SNMPCommunity, Mono: r.Mono, OneSided: r.OneSided,
 		UseExistingPort: r.UseExistingPort, AdvancedPrintingFeatures: r.AdvancedPrintingFeatures,
 		DevModeFile: r.DevModeFile,
 	}
@@ -45,7 +46,7 @@ func (r SavedRow) ToPrinterRow() printer.PrinterRow {
 func RowFromPrinterRow(row printer.PrinterRow, selected bool) SavedRow {
 	return SavedRow{
 		Select: selected, Name: row.Name, IP: row.IP, Manufacturer: row.Manufacturer, Model: row.Model,
-		Driver: row.Driver, SNMP: row.SNMP, Mono: row.Mono, OneSided: row.OneSided,
+		Driver: row.Driver, SNMP: row.SNMP, SNMPCommunity: row.SNMPCommunity, Mono: row.Mono, OneSided: row.OneSided,
 		UseExistingPort: row.UseExistingPort, AdvancedPrintingFeatures: row.AdvancedPrintingFeatures,
 		DevModeFile: row.DevModeFile,
 	}

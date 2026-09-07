@@ -62,11 +62,19 @@ export function OpenSevenZipHomepage():Promise<void>;
 
 export function PickFolder(arg1:string):Promise<main.PathResult>;
 
+export function RestartSpooler():Promise<main.SpoolerResult>;
+
 export function SaveConfiguration(arg1:config.SavedConfig):Promise<main.PathResult>;
 
 export function SaveSettings(arg1:main.Settings):Promise<main.Settings>;
 
+export function SpoolerStatus():Promise<main.SpoolerResult>;
+
+export function StartSpooler():Promise<main.SpoolerResult>;
+
 export function StopDeploy():Promise<void>;
+
+export function StopSpooler():Promise<main.SpoolerResult>;
 
 export function UpdateSevenZip(arg1:string):Promise<main.ApplyUpdateResult>;
 

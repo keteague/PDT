@@ -77,6 +77,79 @@ button.danger:hover:not(:disabled) {
     background: #a53838;
 }
 
+/* Spooler button's dropdown menu - plain position:relative/absolute, no
+   library, same spirit as the Model/Driver combobox's own small
+   self-contained dropdown. */
+.dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+/* :not([hidden]), not a bare .dropdown-menu - see .modal-backdrop's own
+   comment above for why a plain `display: flex` here would have equal
+   specificity to the browser's default `[hidden] { display: none }` and,
+   coming later in the cascade, always win and defeat `hidden` entirely
+   (confirmed: this exact bug left the Spooler dropdown permanently open,
+   with no visible effect from toggling its hidden attribute). */
+.dropdown-menu:not([hidden]) {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 2px;
+    display: flex;
+    flex-direction: column;
+    min-width: 110px;
+    background: #2d425c;
+    border: 1px solid #3f5978;
+    border-radius: 4px;
+    overflow: hidden;
+    z-index: 20;
+}
+
+.dropdown-item {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    text-align: left;
+    padding: 7px 12px;
+}
+
+.dropdown-item:hover:not(:disabled) {
+    background: #3a577a;
+}
+
+/* Spooler button's own status color - independent of button.primary/danger
+   (which mean "the main action"/"a destructive action" elsewhere), since
+   here the color reports live service state rather than an action's
+   importance. */
+button#btnSpooler.spooler-running {
+    background: #2f6f4f;
+    border-color: #3f8f66;
+}
+
+button#btnSpooler.spooler-running:hover:not(:disabled) {
+    background: #38835d;
+}
+
+button#btnSpooler.spooler-stopped {
+    background: #8f2f2f;
+    border-color: #b33f3f;
+}
+
+button#btnSpooler.spooler-stopped:hover:not(:disabled) {
+    background: #a53838;
+}
+
+button#btnSpooler.spooler-pending {
+    background: #a68b1f;
+    border-color: #c9a72a;
+    color: #1a1a1a;
+}
+
+button#btnSpooler.spooler-pending:hover:not(:disabled) {
+    background: #bfa025;
+}
+
 input[type="text"], input[type="number"], select {
     background: #f0f0f0;
     color: #111;

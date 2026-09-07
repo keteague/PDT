@@ -118,6 +118,10 @@ export function PickFolder(arg1) {
   return window['go']['main']['App']['PickFolder'](arg1);
 }
 
+export function RestartSpooler() {
+  return window['go']['main']['App']['RestartSpooler']();
+}
+
 export function SaveConfiguration(arg1) {
   return window['go']['main']['App']['SaveConfiguration'](arg1);
 }
@@ -126,8 +130,20 @@ export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
+export function SpoolerStatus() {
+  return window['go']['main']['App']['SpoolerStatus']();
+}
+
+export function StartSpooler() {
+  return window['go']['main']['App']['StartSpooler']();
+}
+
 export function StopDeploy() {
   return window['go']['main']['App']['StopDeploy']();
+}
+
+export function StopSpooler() {
+  return window['go']['main']['App']['StopSpooler']();
 }
 
 export function UpdateSevenZip(arg1) {

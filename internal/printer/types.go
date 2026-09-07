@@ -11,12 +11,21 @@ import (
 // in service.go) and no Select field (that's frontend/JSON-only UI state, never
 // part of the data a deploy actually needs).
 type PrinterRow struct {
-	Name                     string
-	IP                       string
-	Manufacturer             string
-	Model                    string
-	Driver                   string
-	SNMP                     bool
+	Name         string
+	IP           string
+	Manufacturer string
+	Model        string
+	Driver       string
+	SNMP         bool
+	// SNMPCommunity is the community string used when SNMP is true and a new
+	// port is actually created. The grid's own SNMP field is this string
+	// directly (blank means SNMP disabled, non-blank both enables it and
+	// supplies the community); SNMP itself stays a separate bool here
+	// because AddStandardTcpIpPort's own signature already took one before
+	// this field existed, and PrinterRow is a public boundary type not worth
+	// reshaping over it. Empty means "public" (AddStandardTcpIpPort's own
+	// default) even when SNMP is true.
+	SNMPCommunity            string
 	Mono                     bool
 	OneSided                 bool
 	UseExistingPort          bool

@@ -159,7 +159,18 @@ document.querySelector('#app').innerHTML = `
         <button type="button" class="dropdown-item" data-spooler-action="stop">Stop</button>
       </div>
     </div>
-    <button id="btnFlashDrive" class="icon-btn-inline" title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">&#128436;</button>
+    <button id="btnFlashDrive" class="icon-btn-inline" title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+        <line x1="12" y1="12" x2="6" y2="7"/>
+        <circle cx="6" cy="6" r="1.6"/>
+        <line x1="12" y1="12" x2="12" y2="4"/>
+        <rect x="10.4" y="2.4" width="3.2" height="3.2"/>
+        <line x1="12" y1="12" x2="18" y2="7"/>
+        <polygon points="18,4.8 19.8,7.6 16.2,7.6"/>
+        <line x1="12" y1="12" x2="12" y2="18"/>
+        <polyline points="9.5,16 12,19 14.5,16"/>
+      </svg>
+    </button>
     <button id="btnRefreshDrivers" class="icon-btn-inline" title="Rescan the Drivers folder for newly added or extracted driver packages, without restarting PDT.">&#128260;</button>
     <button id="btnOpenDriversFolder" class="icon-btn-inline" title="Open the Drivers folder in File Explorer.">&#128194;</button>
     <span class="catalog-warning" id="catalogWarning" hidden></span>
@@ -503,7 +514,15 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 // work on a fresh install, before there's any job to name yet) - each along
 // with
 // everything inside its own modal/dropdown, so it stays fully usable, not
-// just openable; Deploy Checked Printers, whose
+// just openable; the shared confirm dialog (#confirmBackdrop, showConfirm())
+// those job-independent flows also pop up through - Write to Flash Drive's
+// own "Erase and Format"/Cancel buttons landed disabled with an empty
+// SalesChain ID before this was added, confirmed live, since that dialog
+// lives outside #flashDriveBackdrop's own already-exempt subtree. The other
+// callers of showConfirm() (Reset Configuration, Export Configs) are
+// themselves gated by this same sweep, so their own confirm popups are
+// simply unreachable while locked either way - exempting the dialog itself
+// changes nothing for them; Deploy Checked Printers, whose
 // enabled state is entirely owned by updateDeployButtonEnabled() instead
 // (IP-validity, not just SalesChain ID, decides that button - see its own
 // comment for why that needs to be fully separate from this generic sweep);
@@ -528,7 +547,7 @@ function applySalesChainGate() {
     document.body.classList.toggle('sales-chain-locked', locked);
     const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnOpenDriversFolder', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
-        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown')) continue;
+        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#confirmBackdrop')) continue;
         c.disabled = locked;
     }
     updatePortPrefixTextEnabled();

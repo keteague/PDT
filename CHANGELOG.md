@@ -4,6 +4,25 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.3.7) - Fix disabled format-warning buttons; USB icon for Flash Drive
+
+### Fixed
+- **Write to Flash Drive's "Erase and Format" warning had both its buttons disabled whenever Save ID
+  was empty.** Write to Flash Drive itself is deliberately job-independent (exempt from the Save ID
+  gate - see `applySalesChainGate`'s own doc comment), but the shared confirm dialog it pops up through
+  (`showConfirm()`/`#confirmBackdrop`) lived outside that exemption, so its own OK/Cancel buttons still
+  got swept and disabled - confirmed live, with a real removable drive, that both buttons were
+  unusable with an empty Save ID before this fix. `#confirmBackdrop` is now exempt too; the two other
+  callers of `showConfirm()` (Reset Configuration, Export Configs) are themselves gated by the same
+  sweep, so their own confirm popups were already unreachable while locked either way - this changes
+  nothing for them.
+
+### Changed
+- **Flash Drive toolbar icon changed again** - the 🖴 swapped in last release still didn't read as a
+  flash drive to actual use. Replaced with a hand-drawn inline SVG of the classic USB trident symbol
+  (circle/square/triangle branches over a plug shape) instead of gambling on a third emoji glyph -
+  guarantees the exact appearance regardless of font/emoji rendering differences across machines.
+
 ## 2026-09-07 (v0.3.6) - Fix appwiz.cpl self-update sync, retroactive Kyocera repair, UI polish
 
 ### Added

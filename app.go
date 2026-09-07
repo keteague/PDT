@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/sys/windows/registry"
 
 	"PDT/internal/config"
 	"PDT/internal/driver"
@@ -288,12 +289,14 @@ type ApplyUpdateResult struct {
 }
 
 // ApplyUpdate downloads assetURL (from a prior CheckForUpdate result),
-// installs it in place of the running executable, relaunches it, and quits
-// this process - see internal/update's doc comment for how replacing a
-// running .exe works on Windows with no separate installer. Runs inline with
-// no progress reporting since it's one small exe download, not a
-// multi-minute operation like Deploy.
-func (a *App) ApplyUpdate(assetURL string) ApplyUpdateResult {
+// installs it in place of the running executable, best-effort updates the
+// Inno Setup uninstall entry's DisplayVersion to newVersion (see
+// updateInstalledVersionInRegistry), relaunches, and quits this process -
+// see internal/update's doc comment for how replacing a running .exe works
+// on Windows with no separate installer. Runs inline with no progress
+// reporting since it's one small exe download, not a multi-minute operation
+// like Deploy.
+func (a *App) ApplyUpdate(assetURL, newVersion string) ApplyUpdateResult {
 	exePath, err := os.Executable()
 	if err != nil {
 		return ApplyUpdateResult{Error: err.Error()}
@@ -305,11 +308,55 @@ func (a *App) ApplyUpdate(assetURL string) ApplyUpdateResult {
 	if err := update.Apply(exePath, tmpPath); err != nil {
 		return ApplyUpdateResult{Error: err.Error()}
 	}
+	updateInstalledVersionInRegistry(newVersion)
 	if err := exec.Command(exePath).Start(); err != nil {
 		return ApplyUpdateResult{Error: "update installed, but failed to relaunch: " + err.Error()}
 	}
 	runtime.Quit(a.ctx)
 	return ApplyUpdateResult{}
+}
+
+// innoSetupUninstallKeyPath is where pdt.iss's own [Setup] AppId
+// (`{40FB3E79-C3DC-4C78-A969-35012251BD36}`, braces included - Inno Setup's
+// own "{{" in that script is its escape for a literal "{") ends up under
+// Uninstall - Inno Setup always names its own uninstall registry key
+// "<AppId>_is1". Kept in sync with pdt.iss by hand; nothing enforces this
+// automatically, so if that GUID is ever regenerated, this needs updating
+// too.
+const innoSetupUninstallKeyPath = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{40FB3E79-C3DC-4C78-A969-35012251BD36}_is1`
+
+// updateInstalledVersionInRegistry best-effort updates the Inno Setup
+// uninstall entry's DisplayVersion to newVersion after a successful
+// self-update (ApplyUpdate) - without this, Windows' own Programs and
+// Features / appwiz.cpl keeps showing whatever version was last actually
+// installed, even though the running exe underneath it is now newer;
+// confirmed live that appwiz.cpl's own Version column only ever reflects
+// this one registry value; it has no idea the exe itself changed. Tries both
+// CURRENT_USER (an unelevated install) and LOCAL_MACHINE (an elevated one)
+// since exactly one will actually have this key - PDT itself always runs
+// elevated regardless of which mode it was installed under (see the
+// README's own elevation note), so it can reach whichever hive actually has
+// it. A portable/flash-drive copy - never installed via the Inno Setup
+// installer at all - has neither key; silently a no-op there, not an error,
+// same reasoning as every other best-effort step in ApplyUpdate/update.Apply.
+func updateInstalledVersionInRegistry(newVersion string) {
+	setRegistryDisplayVersion(registry.CURRENT_USER, innoSetupUninstallKeyPath, newVersion)
+	setRegistryDisplayVersion(registry.LOCAL_MACHINE, innoSetupUninstallKeyPath, newVersion)
+}
+
+// setRegistryDisplayVersion sets path's DisplayVersion value to newVersion
+// under root, silently doing nothing if path doesn't exist there (wrong
+// hive for how this copy was installed, or a portable copy with no
+// uninstall entry at all) or can't be written to. Split out from
+// updateInstalledVersionInRegistry so it can be unit-tested directly against
+// a throwaway key rather than this project's own real uninstall entry.
+func setRegistryDisplayVersion(root registry.Key, path, newVersion string) {
+	k, err := registry.OpenKey(root, path, registry.SET_VALUE)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+	_ = k.SetStringValue("DisplayVersion", newVersion)
 }
 
 // currentDriversBasePath/currentConfigsBasePath cache the live Settings

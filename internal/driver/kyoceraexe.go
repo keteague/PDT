@@ -39,9 +39,26 @@ func ensureKyoceraExesExtracted(root string) {
 
 	var existingDirs []string
 	for _, e := range entries {
-		if e.IsDir() {
-			existingDirs = append(existingDirs, e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		full := filepath.Join(root, e.Name())
+		if looksLikeRawPEDump(full) {
+			// A leftover from the exact bug ensureSfxArchivesExtracted's own
+			// Kyocera exclusion now prevents going forward (see its doc
+			// comment): a plain `7z x` run directly against a Kyocera
+			// package's raw exe, rather than this file's own two-stage
+			// process, produces just its PE sections at the top level -
+			// still fooled kyoceraVersionAlreadyExtracted's substring match
+			// below, since its folder name still contained the version
+			// token, permanently blocking a real re-extraction. Removing it
+			// here - rather than merely excluding new occurrences - is what
+			// actually repairs an install that already has one sitting
+			// around from before this fix existed.
+			os.RemoveAll(full)
+			continue
+		}
+		existingDirs = append(existingDirs, e.Name())
 	}
 
 	for _, e := range entries {
@@ -67,6 +84,19 @@ func ensureKyoceraExesExtracted(root string) {
 			os.RemoveAll(destDir)
 		}
 	}
+}
+
+// looksLikeRawPEDump reports whether dir is a leftover of an .exe having
+// been fed to a plain, non-Kyocera-aware extractor instead of this file's
+// own two-stage process: a Kyocera package's raw PE sections at its top
+// level - ".text" (the actual embedded driver archive, itself never
+// unpacked), ".rsrc"/".rsrc_1", ".reloc", "CERTIFICATE" - not a single real
+// driver file. A top-level ".text" *file* (not a folder - a real extracted
+// driver package has no reason to ever produce a bare file by that name) is
+// the unambiguous tell.
+func looksLikeRawPEDump(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, ".text"))
+	return err == nil && !info.IsDir()
 }
 
 // kyoceraVersionAlreadyExtracted reports whether any existing subfolder's

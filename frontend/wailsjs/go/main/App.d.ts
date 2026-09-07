@@ -6,7 +6,7 @@ import {config} from '../models';
 
 export function AllManufacturers():Promise<Array<string>>;
 
-export function ApplyUpdate(arg1:string):Promise<main.ApplyUpdateResult>;
+export function ApplyUpdate(arg1:string,arg2:string):Promise<main.ApplyUpdateResult>;
 
 export function BrowseDevModeFile(arg1:string,arg2:string):Promise<main.DevModeResult>;
 

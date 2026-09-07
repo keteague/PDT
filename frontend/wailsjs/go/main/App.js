@@ -6,8 +6,8 @@ export function AllManufacturers() {
   return window['go']['main']['App']['AllManufacturers']();
 }
 
-export function ApplyUpdate(arg1) {
-  return window['go']['main']['App']['ApplyUpdate'](arg1);
+export function ApplyUpdate(arg1, arg2) {
+  return window['go']['main']['App']['ApplyUpdate'](arg1, arg2);
 }
 
 export function BrowseDevModeFile(arg1, arg2) {

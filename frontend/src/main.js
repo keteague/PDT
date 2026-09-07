@@ -159,7 +159,7 @@ document.querySelector('#app').innerHTML = `
         <button type="button" class="dropdown-item" data-spooler-action="stop">Stop</button>
       </div>
     </div>
-    <button id="btnFlashDrive" class="icon-btn-inline" title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">&#128190;</button>
+    <button id="btnFlashDrive" class="icon-btn-inline" title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">&#128436;</button>
     <button id="btnRefreshDrivers" class="icon-btn-inline" title="Rescan the Drivers folder for newly added or extracted driver packages, without restarting PDT.">&#128260;</button>
     <button id="btnOpenDriversFolder" class="icon-btn-inline" title="Open the Drivers folder in File Explorer.">&#128194;</button>
     <span class="catalog-warning" id="catalogWarning" hidden></span>
@@ -198,6 +198,7 @@ document.querySelector('#app').innerHTML = `
         </label>
         <div class="modal-field" title="${tip('manufacturerOrder')}">
           Manufacturer sort order
+          <a href="#" id="btnAlphabetizeMfgOrder" class="inline-link" title="Sort the list below A-Z.">Alphabetize</a>
           <ul id="mfgOrderList" class="mfg-order-list" title="${tip('manufacturerOrder')}"></ul>
         </div>
       </div>
@@ -1269,9 +1270,9 @@ function renderSettingsSitesPanel() {
 // Reordering happens live during dragover (moving the dragged <li> directly
 // via insertBefore) rather than waiting for a drop event - a common
 // lightweight pattern that needs no separate drop handler.
-function renderManufacturerOrderList() {
+function renderManufacturerOrderList(order) {
     const list = el('mfgOrderList');
-    list.innerHTML = state.settings.manufacturerOrder.map(mfg => `
+    list.innerHTML = (order || state.settings.manufacturerOrder).map(mfg => `
         <li class="mfg-order-item" draggable="true" data-mfg="${attr(mfg)}">
           <span class="mfg-order-handle">&#9776;</span> ${mfg}
         </li>
@@ -1758,10 +1759,14 @@ async function renderAboutPanel() {
     });
 }
 
-// The asset URL from the most recent CheckForUpdate result with an update
-// available - stashed here rather than re-derived, since Update Now needs to
-// hand it straight back to ApplyUpdate without asking GitHub again.
+// The asset URL and version number from the most recent CheckForUpdate
+// result with an update available - stashed here rather than re-derived,
+// since Update Now needs to hand both straight back to ApplyUpdate without
+// asking GitHub again (the version number is what lets ApplyUpdate keep the
+// Inno Setup uninstall entry's DisplayVersion - appwiz.cpl's own Version
+// column - in sync with the exe it just replaced).
 let pendingUpdateAssetUrl = '';
+let pendingUpdateVersion = '';
 
 async function checkForUpdate() {
     const btn = el('btnCheckUpdate');
@@ -1776,6 +1781,7 @@ async function checkForUpdate() {
         } else if (result.available) {
             status.textContent = `Version ${result.latestVersion} is available (you have ${result.currentVersion}).`;
             pendingUpdateAssetUrl = result.assetUrl;
+            pendingUpdateVersion = result.latestVersion;
             el('btnApplyUpdate').hidden = !result.assetUrl;
         } else {
             status.textContent = 'You are running the latest version.';
@@ -1792,7 +1798,7 @@ async function applyUpdate() {
     btn.disabled = true;
     el('updateStatus').textContent = 'Downloading and installing the update...';
     try {
-        const result = await ApplyUpdate(pendingUpdateAssetUrl);
+        const result = await ApplyUpdate(pendingUpdateAssetUrl, pendingUpdateVersion);
         if (result.error) {
             el('updateStatus').textContent = result.error;
             btn.disabled = false;
@@ -1882,6 +1888,12 @@ function wireSettingsModal() {
     el('btnBrowsePreinstallBasePath').addEventListener('click', async () => {
         const result = await PickFolder(el('settingsPreinstallBasePath').value);
         if (!result.canceled) el('settingsPreinstallBasePath').value = result.path;
+    });
+
+    el('btnAlphabetizeMfgOrder').addEventListener('click', (e) => {
+        e.preventDefault();
+        const sorted = [...currentManufacturerOrder()].sort((a, b) => a.localeCompare(b));
+        renderManufacturerOrderList(sorted);
     });
 
     el('btnSettingsSave').addEventListener('click', async () => {

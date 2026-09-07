@@ -96,3 +96,59 @@ func TestEnsureKyoceraExesExtracted_SkipsAlreadyExtractedVersion(t *testing.T) {
 		t.Error("expected the already-extracted folder to be left alone, not removed")
 	}
 }
+
+func TestLooksLikeRawPEDump(t *testing.T) {
+	dir := t.TempDir()
+
+	realExtraction := filepath.Join(dir, "real")
+	if err := os.MkdirAll(filepath.Join(realExtraction, "32bit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if looksLikeRawPEDump(realExtraction) {
+		t.Error("a real driver extraction (no top-level .text file) should not look like a raw PE dump")
+	}
+
+	rawDump := filepath.Join(dir, "rawdump")
+	if err := os.MkdirAll(rawDump, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rawDump, ".text"), []byte("PE section data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !looksLikeRawPEDump(rawDump) {
+		t.Error("a folder with a top-level .text file should look like a raw PE dump")
+	}
+}
+
+// TestEnsureKyoceraExesExtracted_RepairsRawPEDumpLeftover guards against a
+// real bug: ensureSfxArchivesExtracted (before it excluded Kyocera-named
+// exes) would create exactly this kind of folder - named after the exe
+// itself, containing nothing but raw PE sections - and its name still
+// contained the version token, which permanently fooled
+// kyoceraVersionAlreadyExtracted into skipping a real extraction forever,
+// even on an install upgraded to carry that exclusion fix. The folder must
+// be removed and a real extraction attempted instead of merely trusting its
+// existence.
+func TestEnsureKyoceraExesExtracted_RepairsRawPEDumpLeftover(t *testing.T) {
+	old := SevenZipPath
+	SevenZipPath = "some-path-that-would-fail-if-actually-invoked.exe"
+	defer func() { SevenZipPath = old }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "KXDRIVER 8.6A.1412.exe"), []byte("not a real exe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rawDump := filepath.Join(dir, "KXDRIVER 8.6A.1412")
+	if err := os.MkdirAll(rawDump, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rawDump, ".text"), []byte("this is the whole embedded archive, unextracted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureKyoceraExesExtracted(dir)
+
+	if _, err := os.Stat(rawDump); !os.IsNotExist(err) {
+		t.Error("expected the raw-PE-dump leftover to be removed")
+	}
+}

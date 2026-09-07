@@ -4,6 +4,41 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.3.6) - Fix appwiz.cpl self-update sync, retroactive Kyocera repair, UI polish
+
+### Added
+- **Settings > General's Manufacturer sort order gains an "Alphabetize" link** next to the label,
+  sorting the reorderable list A-Z in one click rather than dragging every entry by hand. Operates on
+  whatever's currently shown (including an unsaved drag reorder already in progress), the same way the
+  list's own drag-and-drop only takes effect once Save is clicked.
+- **Self-updating through Settings > About now keeps Programs and Features (appwiz.cpl) in sync.**
+  `ApplyUpdate` previously only replaced the running `PDT.exe` in place - the Inno Setup uninstall
+  entry's `DisplayVersion` (all appwiz.cpl's own Version column ever reflects) was untouched, so it
+  kept showing whichever version the installer itself last ran, even after a self-update moved the
+  actual exe ahead of it. `ApplyUpdate` now also best-effort updates that registry value (tries both
+  `CURRENT_USER` and `LOCAL_MACHINE`, since exactly one holds it depending on how PDT was installed;
+  a portable/flash-drive copy has neither, silently a no-op) - confirmed live against this project's
+  own installed copy, `appwiz.cpl`'s Version column moved from 0.3.4 to 0.3.5 with no reinstall.
+
+### Fixed
+- **v0.3.5's fix only prevented the Kyocera raw-PE-dump bug from recurring - it didn't repair an
+  install that already had one sitting around from before that fix existed.** A leftover wrong folder
+  (created by the bug this same release already documents) still satisfied
+  `kyoceraVersionAlreadyExtracted`'s substring check, so the correct extraction kept getting skipped
+  even on an install upgraded to carry the v0.3.5 fix - confirmed live against this project's own
+  actual installed copy (`%LocalAppData%\Programs\PDT`), not just its dev build. `ensureKyoceraExesExtracted`
+  now recognizes this exact leftover (a top-level `.text` *file*, not a folder - `looksLikeRawPEDump`)
+  and removes it before deciding whether a version still needs extracting, so upgrading to this fix
+  actually self-repairs an already-poisoned install rather than requiring a manual folder deletion.
+
+### Changed
+- **Settings dialog +80px wider, +50px taller** (`.settings-modal` 550px -> 630px; `.tab-panel` height
+  385px -> 435px) - on top of v0.3.3/v0.3.4's own bumps, for the new Alphabetize link and more general
+  breathing room.
+- **Flash Drive toolbar button no longer looks like a floppy disk.** Swapped the icon from 💾 (floppy
+  disk) to 🖴 (a flat rectangular drive shape) - the feature itself (Write to Flash Drive) was never
+  about floppy disks, and the old icon was confusing at a glance.
+
 ## 2026-09-07 (v0.3.5) - Fix Kyocera extraction regression from generalized SFX detection
 
 ### Fixed

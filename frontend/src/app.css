@@ -9,6 +9,42 @@
     overflow: hidden;
 }
 
+/* Startup overlay - visible from the moment the page renders (no [hidden]
+   attribute in the markup) until init() hides it, once the app is actually
+   fully interactive (wireEvents() has run). Blocks clicks to everything
+   beneath it for the entire span BuildCatalog can take scanning/extracting a
+   real Drivers folder - previously that same span had zero event listeners
+   attached at all, so clicking anything did nothing with no indication why
+   (confirmed live). :not([hidden]), not a bare rule - see .modal-backdrop's
+   own comment just below for why a plain `display` here would defeat
+   `hidden` entirely once this gets its own `hidden` attribute added back. */
+.startup-overlay:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(10, 16, 24, 0.9);
+    color: white;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    font-size: 15px;
+}
+
+.startup-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #3f5978;
+    border-top-color: #7fc4f5;
+    border-radius: 50%;
+    animation: startup-spin 0.8s linear infinite;
+}
+
+@keyframes startup-spin {
+    to { transform: rotate(360deg); }
+}
+
 .top-bar {
     display: flex;
     align-items: center;
@@ -532,6 +568,11 @@ table.grid td.checkbox-cell {
     display: flex;
     flex-direction: column;
     gap: 14px;
+    /* The enclosing .tab-panel scrolls (overflow-y: auto) once there are
+       enough manufacturers to overflow it - without this, each full-width
+       .settings-url input's own right edge butts straight up against that
+       scrollbar with no visual gap at all. */
+    padding-right: 8px;
 }
 
 /* Manufacturer sort order (Settings > General) - a plain HTML5
@@ -615,7 +656,6 @@ table.grid td.checkbox-cell {
    it's a convenience shortcut for the reorderable list right below it, not
    a primary action of its own. */
 .inline-link {
-    margin-left: 8px;
     font-size: 12px;
     font-weight: normal;
     color: #7fc4f5;

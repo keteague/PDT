@@ -78,6 +78,10 @@ export function ImportCsv() {
   return window['go']['main']['App']['ImportCsv']();
 }
 
+export function IsRunningFromRemovableDrive() {
+  return window['go']['main']['App']['IsRunningFromRemovableDrive']();
+}
+
 export function ListPreinstallFolders(arg1) {
   return window['go']['main']['App']['ListPreinstallFolders'](arg1);
 }

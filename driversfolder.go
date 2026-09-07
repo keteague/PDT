@@ -75,12 +75,13 @@ type OpenFolderResult struct {
 
 // OpenDriversBasePathInExplorer scaffolds path (see ensureDriversScaffold)
 // if it's empty or doesn't exist yet, then opens it in File Explorer - the
-// Settings > General "Drivers Base Path" field's own right-arrow button.
-// Uses whatever path is currently typed in that field, not necessarily the
-// last-saved Settings.DriversBasePath, so pointing it at a not-yet-saved
-// location and clicking the button still does something useful.
+// toolbar's own Drivers-folder button. path is resolved against this exe's
+// current location first (see resolveExeRelative) in case it's the relative
+// ".\Drivers" a portable copy's DriversBasePath now defaults to, rather than
+// passing a relative path straight to os.MkdirAll/explorer.exe and hoping
+// the process's own current working directory happens to line up.
 func (a *App) OpenDriversBasePathInExplorer(path string) OpenFolderResult {
-	path = strings.TrimSpace(path)
+	path = resolveExeRelative(strings.TrimSpace(path))
 	if path == "" {
 		return OpenFolderResult{Error: "no folder path given"}
 	}

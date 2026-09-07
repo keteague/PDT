@@ -8,10 +8,29 @@ package flashdrive
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/windows"
 )
+
+// IsRemovableDrive reports whether path sits on a removable (USB flash)
+// drive - PDT.exe's own running location, when Write to Flash Drive needs to
+// refuse to overwrite the exact file it's currently executing from (Windows
+// won't allow it - confirmed live: "The process cannot access the file
+// because it is being used by another process" - and even if it somehow did,
+// stamping a running copy out onto more drives makes no sense as a
+// workflow; only a technician's laptop install is a sensible source).
+// Non-removable drives (the common case for an installed copy) and any path
+// GetDriveType can't resolve both report false.
+func IsRemovableDrive(path string) bool {
+	root := filepath.VolumeName(path) + `\`
+	rootPtr, err := windows.UTF16PtrFromString(root)
+	if err != nil {
+		return false
+	}
+	return windows.GetDriveType(rootPtr) == windows.DRIVE_REMOVABLE
+}
 
 // Drive is one currently-mounted removable drive.
 type Drive struct {

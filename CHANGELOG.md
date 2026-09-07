@@ -4,6 +4,41 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.3.8) - Startup overlay; portable flash drives now fully self-contained
+
+### Added
+- **Startup overlay** ("Initializing...", with a spinner) covers the whole app from the moment it
+  renders until `init()` finishes wiring up every event listener - previously that whole span (easily
+  noticeable when `BuildCatalog` has real extraction work to do) had zero event listeners attached at
+  all, so clicking anything, Settings included, did nothing with no indication why. Confirmed live with
+  an artificial delay that the overlay blocks input the entire time and disappears the instant the app
+  is actually ready.
+- **Write to Flash Drive's toolbar button is now disabled when PDT itself is running from a removable
+  drive** (`IsRunningFromRemovableDrive`, `flashdrive.IsRemovableDrive`) - confirmed live this used to
+  fail with "The process cannot access the file because it is being used by another process" trying to
+  overwrite its own running exe; only an installed copy on a technician's laptop is a sensible source
+  for stamping out more portable copies anyway.
+- **A portable copy's Settings now shows and uses relative base paths** (`.\Drivers`, `.\Configs`)
+  instead of an absolute path baked to whatever drive letter the flash drive happened to have at the
+  time - a real gap, since a flash drive doesn't keep the same letter across computers, or even across
+  relaunches on the same one. `resolveExeRelative` resolves a relative Settings path against wherever
+  the exe is *currently* running from, at every point of use (`driversRoot`/`configsRoot`, `PickFolder`,
+  Open/Save Configuration's own starting directory, the toolbar's Drivers-folder button) - an absolute
+  path (an installed copy's `%LocalAppData%\PDT\...`, or anything explicitly chosen via Browse) is
+  unaffected.
+
+### Fixed
+- **Write to Flash Drive left the destination missing its Configs folder entirely**, and missing
+  Drivers subfolders for any manufacturer not already downloaded on the technician's own laptop -
+  confirmed live. A technician's local Configs folder very often doesn't exist yet (nothing saved or
+  captured there so far) and their local Drivers folder is rarely fully populated for every
+  manufacturer PDT knows about; `writePortablePDTTo` now guarantees both a Configs folder and a full
+  manufacturer scaffold exist on the flash drive regardless of what the source had.
+- **Settings > General's "Manufacturer sort order (Alphabetize)" link moved next to its label**
+  (previously sat on its own line below it, from when it was first added).
+- **Settings > External Sites' text fields butted straight up against the tab's own scrollbar** with
+  no visual gap at all once there were enough manufacturers to make it scroll - added 8px of padding.
+
 ## 2026-09-07 (v0.3.7) - Fix disabled format-warning buttons; USB icon for Flash Drive
 
 ### Fixed

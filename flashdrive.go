@@ -23,6 +23,22 @@ type ListDrivesResult struct {
 	Error  string      `json:"error"`
 }
 
+// IsRunningFromRemovableDrive reports whether this exact running PDT.exe
+// sits on a removable (USB flash) drive - the toolbar's Flash Drive button
+// is disabled whenever this is true, since Windows refuses to let a running
+// exe overwrite its own file ("The process cannot access the file because
+// it is being used by another process" - confirmed live) and there's no
+// sensible reason to stamp a portable copy out onto more drives from
+// another portable copy anyway; only an installed copy on a technician's
+// laptop is a real source.
+func (a *App) IsRunningFromRemovableDrive() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return flashdrive.IsRemovableDrive(exe)
+}
+
 // ListRemovableDrives lists every currently-mounted USB flash drive, for the
 // Write to Flash Drive dialog's checklist.
 func (a *App) ListRemovableDrives() ListDrivesResult {
@@ -98,19 +114,41 @@ func (a *App) WritePortablePDT(letters []string) BatchDriveResult {
 	return result
 }
 
+// writePortablePDTTo copies exeData to letter, then this laptop's own
+// Drivers and Configs folders alongside it. Both destination folders are
+// guaranteed to exist afterward even if the source had nothing to copy - a
+// technician's local Configs folder often doesn't exist yet (nothing saved
+// or captured there so far), and their local Drivers folder is very rarely
+// fully populated for every manufacturer PDT knows about - so a plain
+// os.CopyFS alone left the flash drive missing Configs entirely, and missing
+// manufacturer folders for anything not already downloaded locally,
+// confirmed live. ensureDriversScaffold (already unconditional/idempotent -
+// see its own doc comment) fills in whichever manufacturer folders the copy
+// didn't already bring along, the same way it does for a brand-new install's
+// own empty Drivers folder.
 func writePortablePDTTo(letter, exeName string, exeData []byte) error {
 	if err := os.WriteFile(filepath.Join(letter, exeName), exeData, 0o755); err != nil {
 		return fmt.Errorf("writing %s: %w", exeName, err)
 	}
+
+	driversDest := filepath.Join(letter, "Drivers")
 	if dirExists(driversRoot()) {
-		if err := os.CopyFS(filepath.Join(letter, "Drivers"), os.DirFS(driversRoot())); err != nil {
+		if err := os.CopyFS(driversDest, os.DirFS(driversRoot())); err != nil {
 			return fmt.Errorf("copying Drivers: %w", err)
 		}
 	}
+	if err := ensureDriversScaffold(driversDest); err != nil {
+		return fmt.Errorf("scaffolding Drivers: %w", err)
+	}
+
+	configsDest := filepath.Join(letter, "Configs")
 	if dirExists(configsRoot()) {
-		if err := os.CopyFS(filepath.Join(letter, "Configs"), os.DirFS(configsRoot())); err != nil {
+		if err := os.CopyFS(configsDest, os.DirFS(configsRoot())); err != nil {
 			return fmt.Errorf("copying Configs: %w", err)
 		}
+	}
+	if err := os.MkdirAll(configsDest, 0o755); err != nil {
+		return fmt.Errorf("creating Configs: %w", err)
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -193,7 +194,7 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 func (a *App) PickFolder(currentPath string) (PathResult, error) {
 	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:                "Select Save File Base Path",
-		DefaultDirectory:     currentPath,
+		DefaultDirectory:     resolveExeRelative(currentPath),
 		CanCreateDirectories: true,
 	})
 	if err != nil || path == "" {
@@ -373,12 +374,14 @@ var currentConfigsBasePath string
 
 // driversRoot returns the Drivers folder PDT actually uses - Settings'
 // "Drivers Base Path", defaulting to defaultDriversBasePath() if that's
-// somehow still unset (shouldn't happen; loadSettings always seeds it).
+// somehow still unset (shouldn't happen; loadSettings always seeds it) -
+// resolved against this exe's own current location if it's a relative path
+// (see resolveExeRelative).
 func driversRoot() string {
 	if currentDriversBasePath != "" {
-		return currentDriversBasePath
+		return resolveExeRelative(currentDriversBasePath)
 	}
-	return defaultDriversBasePath()
+	return resolveExeRelative(defaultDriversBasePath())
 }
 
 func dirExists(path string) bool {
@@ -388,12 +391,40 @@ func dirExists(path string) bool {
 
 // configsRoot returns the Configs folder PDT actually uses - Settings'
 // "Configuration Files Base Path", defaulting to defaultSaveFileBasePath()
-// if somehow still unset.
+// if somehow still unset - resolved against this exe's own current location
+// if it's a relative path (see resolveExeRelative).
 func configsRoot() string {
 	if currentConfigsBasePath != "" {
-		return currentConfigsBasePath
+		return resolveExeRelative(currentConfigsBasePath)
 	}
-	return defaultSaveFileBasePath()
+	return resolveExeRelative(defaultSaveFileBasePath())
+}
+
+// resolveExeRelative resolves a relative Settings base path (".\Drivers",
+// ".\Configs" - see defaultDriversBasePath/defaultSaveFileBasePath's own
+// portable-copy case) against the directory this exe is *currently* running
+// from, rather than wherever it happened to be the last time Settings was
+// saved. This is what actually makes a portable/flash-drive copy's
+// DriversBasePath/SaveFileBasePath stay correct across computers and drive
+// letters: an absolute path (an installed copy's %LocalAppData%\PDT\...,
+// or anything a user explicitly picked via Browse) is returned unchanged,
+// since only a relative one depends on "relative to what" in the first
+// place. Every consumer of a Settings base path - driversRoot/configsRoot
+// above, PickFolder's starting directory, Open/Save Configuration's own
+// DefaultDirectory, OpenDriversBasePathInExplorer - goes through this so
+// none of them accidentally resolve a relative path against the process's
+// own current working directory instead (not guaranteed to be the exe's own
+// directory, unlike what every double-click/shortcut launch happens to give
+// it in practice).
+func resolveExeRelative(path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(filepath.Dir(exe), path)
 }
 
 // CatalogStatus reports whether the driver catalog loaded at startup, and
@@ -569,7 +600,7 @@ func (a *App) OpenConfiguration() (OpenConfigResult, error) {
 	<-a.ready
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            "Open Configuration",
-		DefaultDirectory: a.settings.SaveFileBasePath,
+		DefaultDirectory: configsRoot(),
 		Filters:          []runtime.FileFilter{jsonFilter},
 	})
 	if err != nil || path == "" {
@@ -594,7 +625,7 @@ func (a *App) SaveConfiguration(cfg config.SavedConfig) (PathResult, error) {
 	}
 	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:            "Save Configuration",
-		DefaultDirectory: a.settings.SaveFileBasePath,
+		DefaultDirectory: configsRoot(),
 		DefaultFilename:  defaultFilename,
 		Filters:          []runtime.FileFilter{jsonFilter},
 	})

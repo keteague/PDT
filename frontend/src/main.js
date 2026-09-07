@@ -11,7 +11,7 @@ import {
     ListPreinstallFolders, CheckExportCollisions, ExportConfigs,
     ListRemovableDrives, FormatDrives, WritePortablePDT,
     StartSpooler, StopSpooler, RestartSpooler, SpoolerStatus,
-    RefreshDriverCatalog,
+    RefreshDriverCatalog, IsRunningFromRemovableDrive,
 } from '../wailsjs/go/main/App';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 
@@ -145,6 +145,10 @@ const state = {
 };
 
 document.querySelector('#app').innerHTML = `
+  <div class="startup-overlay" id="startupOverlay">
+    <div class="startup-spinner"></div>
+    <div>Initializing...</div>
+  </div>
   <div class="top-bar">
     <label title="${tip('salesChainId')}">Save ID <input type="text" id="salesChainId" class="input-needs-value" size="14" title="${tip('salesChainId')}"></label>
     <button id="btnOpenConfig" title="Load a previously saved JSON configuration (rows + SalesChain ID).">Open Configuration</button>
@@ -208,8 +212,7 @@ document.querySelector('#app').innerHTML = `
           </div>
         </label>
         <div class="modal-field" title="${tip('manufacturerOrder')}">
-          Manufacturer sort order
-          <a href="#" id="btnAlphabetizeMfgOrder" class="inline-link" title="Sort the list below A-Z.">Alphabetize</a>
+          <span>Manufacturer sort order (<a href="#" id="btnAlphabetizeMfgOrder" class="inline-link" title="Sort the list below A-Z.">Alphabetize</a>)</span>
           <ul id="mfgOrderList" class="mfg-order-list" title="${tip('manufacturerOrder')}"></ul>
         </div>
       </div>
@@ -631,7 +634,29 @@ async function init() {
     setupDefaultsComboboxes();
     refreshSpoolerButtonState(); // not awaited - shouldn't delay the rest of startup
 
+    // Write to Flash Drive can't overwrite the exact exe it's currently
+    // running from (Windows refuses - confirmed live) - disabled outright
+    // when running portably from removable media itself, rather than
+    // failing at click time. Set once, directly, rather than through
+    // applySalesChainGate()'s own exemption list - that sweep skips exempt
+    // elements entirely (see its own doc comment), so this sticks regardless
+    // of Save ID state.
+    if (await IsRunningFromRemovableDrive()) {
+        const btn = el('btnFlashDrive');
+        btn.disabled = true;
+        btn.title = 'Write to Flash Drive is unavailable when running PDT from a flash drive itself - use an installed copy instead.';
+    }
+
     EventsOn('deploy-progress', (result) => onDeployProgress(result));
+
+    // Startup overlay: everything above this point runs before wireEvents()
+    // attaches a single event listener, so clicking anything during that
+    // window previously did nothing with no indication why (confirmed live -
+    // BuildCatalog scanning/extracting a real Drivers folder is easily slow
+    // enough to notice). Hiding this last, only once the app is actually
+    // fully interactive, is what actually fixes that rather than just
+    // hiding the symptom.
+    el('startupOverlay').hidden = true;
 }
 
 function logLevelClass(line) {

@@ -42,6 +42,8 @@ export function GetSevenZipVersion():Promise<string>;
 
 export function ImportCsv():Promise<main.ImportResult>;
 
+export function IsRunningFromRemovableDrive():Promise<boolean>;
+
 export function ListPreinstallFolders(arg1:string):Promise<main.PreinstallFoldersResult>;
 
 export function ListRemovableDrives():Promise<main.ListDrivesResult>;

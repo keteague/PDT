@@ -40,10 +40,22 @@ func installedAppDataDir() string {
 // own Settings fields - falling back to installedAppDataDir() for an
 // installed copy, where the current user always has write access regardless
 // of whether PDT itself sits under %ProgramFiles% or %LocalAppData%\Programs.
+//
+// The portable case returns a *relative* path (".\Drivers", ".\Configs"),
+// not an absolute one built from this exe's current location - resolved
+// back to absolute at the point of use (see resolveExeRelative) against
+// wherever the exe actually is *at that moment*, not wherever it was when
+// Settings was last saved. A flash drive doesn't keep the same drive letter
+// across computers (or even across relaunches on the same one, if something
+// else already claimed it), so baking in an absolute path here would save a
+// value that silently stops meaning "this flash drive's own Drivers folder"
+// the moment the letter changes - confirmed as a real gap: Settings'
+// DriversBasePath/SaveFileBasePath fields showed a stale, computer-specific
+// absolute path even for a portable copy before this.
 func defaultDriversBasePath() string {
 	if exe, err := os.Executable(); err == nil {
-		if candidate := filepath.Join(filepath.Dir(exe), "Drivers"); dirExists(candidate) {
-			return candidate
+		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {
+			return `.\Drivers`
 		}
 	}
 	if dir := installedAppDataDir(); dir != "" {
@@ -55,7 +67,7 @@ func defaultDriversBasePath() string {
 func defaultSaveFileBasePath() string {
 	if exe, err := os.Executable(); err == nil {
 		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {
-			return filepath.Join(filepath.Dir(exe), "Configs")
+			return `.\Configs`
 		}
 	}
 	if dir := installedAppDataDir(); dir != "" {

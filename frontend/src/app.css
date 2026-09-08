@@ -678,7 +678,14 @@ table.grid td.checkbox-cell {
     margin-top: 18px;
 }
 
-.modal-field-inline {
+/* :not([hidden]), not a bare `display: flex` - a plain rule here has equal
+   specificity to the browser's own `[hidden] { display: none }` UA style
+   and, appearing later in the cascade, would defeat `hidden` entirely -
+   confirmed live: the Sync modal's "Format as exFAT" row stayed visible
+   despite its own `hidden` attribute being set, until this was fixed. Same
+   recurring bug class as .modal-backdrop/.dropdown-menu/.tab-panel above -
+   see .modal-backdrop's own comment for the fuller explanation. */
+.modal-field-inline:not([hidden]) {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -714,6 +721,23 @@ table.grid td.checkbox-cell {
 
 .import-printer-name {
     font-weight: 600;
+}
+
+/* Write to Flash Drive/Sync's copy-progress dialog - one row per drive
+   letter, shown for the entire span of the operation (see
+   openFlashCopyProgressModal's own comment for why this exists at all). */
+.flash-copy-row {
+    margin-bottom: 12px;
+}
+
+.flash-copy-row-label {
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+
+.flash-copy-row-bar {
+    width: 100%;
+    height: 10px;
 }
 
 .import-printer-detail {

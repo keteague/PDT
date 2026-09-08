@@ -158,6 +158,10 @@ export function StopSpooler() {
   return window['go']['main']['App']['StopSpooler']();
 }
 
+export function SyncDriversToFlashDrives(arg1) {
+  return window['go']['main']['App']['SyncDriversToFlashDrives'](arg1);
+}
+
 export function UpdateSevenZip(arg1) {
   return window['go']['main']['App']['UpdateSevenZip'](arg1);
 }

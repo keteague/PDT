@@ -46,6 +46,20 @@ var sevenZipVersionRe = regexp.MustCompile(`7-Zip\s+(\d+\.\d+)`)
 //go:embed third_party/7zip/7z.exe third_party/7zip/7z.dll third_party/7zip/License.txt
 var sevenZipAssets embed.FS
 
+// sevenZipToolsDir is the stable per-machine cache folder
+// ensureSevenZipExtracted writes 7z.exe/7z.dll/License.txt into - also
+// copied onto a flash drive by Write to Flash Drive/Sync (see flashdrive.go)
+// so a portable copy carries its own tools rather than relying on this
+// exact computer's own cache existing. "" if os.UserCacheDir() itself
+// fails, same as ensureSevenZipExtracted's own best-effort handling of that.
+func sevenZipToolsDir() string {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(cacheDir, "PDT", "tools", "7zip")
+}
+
 // ensureSevenZipExtracted writes this build's embedded 7z.exe/7z.dll/License
 // out to a stable per-machine cache folder and points driver.SevenZipPath at
 // the result, so BuildCatalog can auto-extract a self-extracting RAR package
@@ -53,11 +67,10 @@ var sevenZipAssets embed.FS
 // skips that auto-extraction entirely rather than failing startup over it -
 // the rest of the catalog scan doesn't depend on it.
 func ensureSevenZipExtracted() {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
+	destDir := sevenZipToolsDir()
+	if destDir == "" {
 		return
 	}
-	destDir := filepath.Join(cacheDir, "PDT", "tools", "7zip")
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return
 	}

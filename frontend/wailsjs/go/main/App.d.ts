@@ -82,6 +82,8 @@ export function StopDeploy():Promise<void>;
 
 export function StopSpooler():Promise<main.SpoolerResult>;
 
+export function SyncDriversToFlashDrives(arg1:Array<string>):Promise<main.BatchDriveResult>;
+
 export function UpdateSevenZip(arg1:string):Promise<main.ApplyUpdateResult>;
 
 export function WritePortablePDT(arg1:Array<string>):Promise<main.BatchDriveResult>;

@@ -1,12 +1,49 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"PDT/internal/driver"
 	"PDT/internal/flashdrive"
 )
+
+// flashCopyProgressEvent is emitted throughout WritePortablePDT/
+// SyncDriversToFlashDrives - the toolbar's copy-progress dialog listens for
+// it, since a real Drivers folder can easily be tens of thousands of files
+// and take several minutes over a real USB port with otherwise zero
+// indication it hadn't just hung (confirmed live).
+const flashCopyProgressEvent = "flashcopy-progress"
+
+// FlashCopyProgress is flashCopyProgressEvent's payload.
+type FlashCopyProgress struct {
+	Letter string `json:"letter"`
+	Step   string `json:"step"`
+	Done   int    `json:"done"`
+	Total  int    `json:"total"`
+}
+
+// newFlashCopyProgressFunc returns a stepProgressFunc that emits
+// flashCopyProgressEvent for letter, throttled to at most once every 150ms
+// per step - except the step's own final update (done == total), always
+// sent so the dialog never sits on a stale percentage once a step actually
+// finishes.
+func (a *App) newFlashCopyProgressFunc(letter string) stepProgressFunc {
+	var lastEmit time.Time
+	return func(step string, done, total int) {
+		now := time.Now()
+		if done != total && now.Sub(lastEmit) < 150*time.Millisecond {
+			return
+		}
+		lastEmit = now
+		runtime.EventsEmit(a.ctx, flashCopyProgressEvent, FlashCopyProgress{Letter: letter, Step: step, Done: done, Total: total})
+	}
+}
 
 // DriveInfo is one removable drive offered by the Write to Flash Drive
 // dialog.
@@ -105,7 +142,29 @@ func (a *App) WritePortablePDT(letters []string) BatchDriveResult {
 	}
 
 	for _, letter := range letters {
-		if err := writePortablePDTTo(letter, exeName, exeData); err != nil {
+		if err := writePortablePDTTo(letter, exeName, exeData, a.newFlashCopyProgressFunc(letter)); err != nil {
+			result.Failed[letter] = err.Error()
+			continue
+		}
+		result.Succeeded = append(result.Succeeded, letter)
+	}
+	return result
+}
+
+// SyncDriversToFlashDrives copies this laptop's own Drivers folder onto
+// every listed drive letter - the toolbar's Sync button, for topping up a
+// flash drive that already has a portable PDT copy on it with whatever new
+// driver packages have shown up locally since, without rewriting the exe or
+// touching Configs/tools at all. syncDriversTo already extracts anything
+// newly-copied on the destination itself (see its own doc comment), so the
+// flash drive is immediately ready to use without needing to be plugged
+// into another computer first just to trigger that.
+func (a *App) SyncDriversToFlashDrives(letters []string) BatchDriveResult {
+	<-a.ready
+	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}}
+	for _, letter := range letters {
+		progress := a.newFlashCopyProgressFunc(letter)
+		if err := syncDriversTo(letter, func(done, total int) { progress("Drivers", done, total) }); err != nil {
 			result.Failed[letter] = err.Error()
 			continue
 		}
@@ -115,40 +174,112 @@ func (a *App) WritePortablePDT(letters []string) BatchDriveResult {
 }
 
 // writePortablePDTTo copies exeData to letter, then this laptop's own
-// Drivers and Configs folders alongside it. Both destination folders are
-// guaranteed to exist afterward even if the source had nothing to copy - a
-// technician's local Configs folder often doesn't exist yet (nothing saved
-// or captured there so far), and their local Drivers folder is very rarely
-// fully populated for every manufacturer PDT knows about - so a plain
-// os.CopyFS alone left the flash drive missing Configs entirely, and missing
-// manufacturer folders for anything not already downloaded locally,
-// confirmed live. ensureDriversScaffold (already unconditional/idempotent -
-// see its own doc comment) fills in whichever manufacturer folders the copy
-// didn't already bring along, the same way it does for a brand-new install's
-// own empty Drivers folder.
-func writePortablePDTTo(letter, exeName string, exeData []byte) error {
+// Drivers, Configs, and 7-Zip tools folders alongside it - a fully
+// self-contained portable copy that needs nothing else to work on another
+// computer. Both Drivers and Configs are guaranteed to exist afterward even
+// if the source had nothing to copy - a technician's local Configs folder
+// often doesn't exist yet (nothing saved or captured there so far), and
+// their local Drivers folder is very rarely fully populated for every
+// manufacturer PDT knows about. ensureDriversScaffold (already
+// unconditional/idempotent - see its own doc comment) fills in whichever
+// manufacturer folders the copy didn't already bring along, the same way it
+// does for a brand-new install's own empty Drivers folder. Uses
+// copyTreeMerge, not os.CopyFS, specifically so re-running this against a
+// flash drive that already has content on it (a repeat Write to Flash
+// Drive, or Sync) doesn't fail outright on the first already-existing file
+// it finds - confirmed live as a real bug (see copyTreeMerge's own doc
+// comment).
+// stepProgressFunc reports progress for one named copy step ("Drivers",
+// "Configs", "7-Zip tools") - done/total files processed so far within that
+// step specifically, each step restarting its own count from zero. nil is a
+// valid, no-op value (existing tests, and anything that doesn't need to show
+// a progress dialog, pass nil throughout).
+type stepProgressFunc func(step string, done, total int)
+
+func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepProgressFunc) error {
 	if err := os.WriteFile(filepath.Join(letter, exeName), exeData, 0o755); err != nil {
 		return fmt.Errorf("writing %s: %w", exeName, err)
 	}
 
-	driversDest := filepath.Join(letter, "Drivers")
-	if dirExists(driversRoot()) {
-		if err := os.CopyFS(driversDest, os.DirFS(driversRoot())); err != nil {
-			return fmt.Errorf("copying Drivers: %w", err)
+	// Each step below is attempted regardless of whether an earlier one hit
+	// a partial failure - copyTreeMerge itself is already best-effort
+	// per-file (see its own doc comment for the real bug that motivated
+	// that), but this function used to still throw away everything after
+	// the first step that returned any error at all, which meant one bad
+	// file part-way through Drivers previously skipped Configs and tools
+	// entirely too, on top of whatever Drivers itself already skipped.
+	var errs []error
+	driversProgress := func(done, total int) {
+		if progress != nil {
+			progress("Drivers", done, total)
 		}
 	}
-	if err := ensureDriversScaffold(driversDest); err != nil {
-		return fmt.Errorf("scaffolding Drivers: %w", err)
+	if err := syncDriversTo(letter, driversProgress); err != nil {
+		errs = append(errs, err)
 	}
 
 	configsDest := filepath.Join(letter, "Configs")
 	if dirExists(configsRoot()) {
-		if err := os.CopyFS(configsDest, os.DirFS(configsRoot())); err != nil {
-			return fmt.Errorf("copying Configs: %w", err)
+		configsProgress := func(done, total int) {
+			if progress != nil {
+				progress("Configs", done, total)
+			}
+		}
+		if err := copyTreeMerge(configsDest, configsRoot(), configsProgress); err != nil {
+			errs = append(errs, fmt.Errorf("copying Configs: %w", err))
 		}
 	}
 	if err := os.MkdirAll(configsDest, 0o755); err != nil {
-		return fmt.Errorf("creating Configs: %w", err)
+		errs = append(errs, fmt.Errorf("creating Configs: %w", err))
 	}
-	return nil
+
+	if dirExists(sevenZipToolsDir()) {
+		toolsProgress := func(done, total int) {
+			if progress != nil {
+				progress("7-Zip tools", done, total)
+			}
+		}
+		if err := copyTreeMerge(filepath.Join(letter, "tools", "7zip"), sevenZipToolsDir(), toolsProgress); err != nil {
+			errs = append(errs, fmt.Errorf("copying 7-Zip tools: %w", err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// syncDriversTo copies this laptop's own Drivers folder onto letter,
+// scaffolding any manufacturer folder the copy didn't already bring along,
+// then runs driver.BuildCatalog against the destination itself purely for
+// its side effects (zip/self-extracting-archive/msi/Kyocera auto-extraction
+// - see scanManufacturerFolders) - the resulting catalog is discarded, this
+// instance's own a.catalog is untouched, but any raw archive that just got
+// copied onto the flash drive is extracted right there, so it's immediately
+// usable rather than needing to be plugged into another computer first just
+// to trigger that. The shared step between writePortablePDTTo (full "Write
+// to Flash Drive") and the toolbar's Sync button (drivers only, no
+// exe/Configs/tools, for topping up a flash drive that already exists).
+func syncDriversTo(letter string, onProgress func(done, total int)) error {
+	driversDest := filepath.Join(letter, "Drivers")
+	src := driversRoot()
+	if samePath(driversDest, src) {
+		// Sync stays available even when PDT itself is running from a flash
+		// drive (unlike Write to Flash Drive, which is disabled outright in
+		// that case - see IsRunningFromRemovableDrive), so a technician can
+		// sync one portable copy's Drivers onto a *different* one they've
+		// also plugged in. Picking that exact same drive as the sync target
+		// would make src and driversDest identical, which - copying a tree
+		// onto itself via copyTreeMerge's own os.OpenFile(O_TRUNC) - would
+		// truncate a source file while still reading it. A no-op instead.
+		return nil
+	}
+	var errs []error
+	if dirExists(src) {
+		if err := copyTreeMerge(driversDest, src, onProgress); err != nil {
+			errs = append(errs, fmt.Errorf("copying Drivers: %w", err))
+		}
+	}
+	if err := ensureDriversScaffold(driversDest); err != nil {
+		errs = append(errs, fmt.Errorf("scaffolding Drivers: %w", err))
+	}
+	_, _ = driver.BuildCatalog(driversDest)
+	return errors.Join(errs...)
 }

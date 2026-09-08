@@ -9,7 +9,7 @@ import {
     GetSevenZipVersion, OpenSevenZipHomepage, CheckSevenZipUpdate, UpdateSevenZip,
     CaptureDevModeForPrinter, BrowseDevModeFile, EnumerateLocalPrinters,
     ListPreinstallFolders, CheckExportCollisions, ExportConfigs,
-    ListRemovableDrives, FormatDrives, WritePortablePDT,
+    ListRemovableDrives, FormatDrives, WritePortablePDT, SyncDriversToFlashDrives,
     StartSpooler, StopSpooler, RestartSpooler, SpoolerStatus,
     RefreshDriverCatalog, IsRunningFromRemovableDrive,
 } from '../wailsjs/go/main/App';
@@ -176,6 +176,14 @@ document.querySelector('#app').innerHTML = `
       </svg>
     </button>
     <button id="btnRefreshDrivers" class="icon-btn-inline" title="Rescan the Drivers folder for newly added or extracted driver packages, without restarting PDT.">&#128260;</button>
+    <button id="btnSyncFlashDrive" class="icon-btn-inline" title="Sync this computer's Drivers folder onto a flash drive that already has a portable PDT copy on it, then extract anything newly-copied.">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+        <line x1="3" y1="8" x2="19" y2="8"/>
+        <polyline points="15,4 19,8 15,12"/>
+        <line x1="21" y1="16" x2="5" y2="16"/>
+        <polyline points="9,12 5,16 9,20"/>
+      </svg>
+    </button>
     <button id="btnOpenDriversFolder" class="icon-btn-inline" title="Open the Drivers folder in File Explorer.">&#128194;</button>
     <span class="catalog-warning" id="catalogWarning" hidden></span>
     <button id="btnSettings" class="icon-btn" title="Settings">&#9881;</button>
@@ -299,17 +307,24 @@ document.querySelector('#app').innerHTML = `
 
   <div class="modal-backdrop" id="flashDriveBackdrop" hidden>
     <div class="modal">
-      <h3>Write to Flash Drive</h3>
-      <p class="modal-hint">Writes a portable copy of PDT (this executable, plus its Drivers and Configs
-        folders) to every checked drive.</p>
+      <h3 id="flashDriveTitle">Write to Flash Drive</h3>
+      <p class="modal-hint" id="flashDriveHint">Writes a portable copy of PDT (this executable, plus its
+        Drivers and Configs folders) to every checked drive.</p>
       <div id="flashDriveList" class="import-printers-list"></div>
-      <label class="modal-field-inline" title="Erases all data on every checked drive and lays down a fresh exFAT filesystem before writing PDT to it.">
+      <label class="modal-field-inline" id="flashDriveFormatRow" title="Erases all data on every checked drive and lays down a fresh exFAT filesystem before writing PDT to it.">
         <input type="checkbox" id="flashDriveFormat"> Format as exFAT first (erases all data on the selected drive(s))
       </label>
       <div class="modal-actions">
         <button id="btnFlashDriveCancel">Cancel</button>
         <button class="primary" id="btnFlashDriveConfirm">Write</button>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="flashCopyProgressBackdrop" hidden>
+    <div class="modal">
+      <h3 id="flashCopyProgressTitle">Copying...</h3>
+      <div id="flashCopyProgressList"></div>
     </div>
   </div>
 
@@ -504,12 +519,13 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 // Configuration (which can load a value from a saved file); Settings
 // (app-wide preferences - Preinstall/Configuration Files Base Path,
 // manufacturer URLs/order - that have nothing to do with any particular
-// job); Write to Flash Drive, Spooler, Refresh, and the Drivers-folder
+// job); Write to Flash Drive, Sync, Spooler, Refresh, and the Drivers-folder
 // button (also job-independent - stamping out this laptop's whole
-// Drivers/Configs folders, restarting the one Print Spooler service shared
-// by every queue on the machine, rescanning the Drivers folder in place, and
-// opening it in File Explorer all have nothing to do with one particular
-// SalesChain ID); the Defaults panel's Manufacturer dropdown and
+// Drivers/Configs folders, topping up an existing flash drive's own Drivers
+// folder, restarting the one Print Spooler service shared by every queue on
+// the machine, rescanning the Drivers folder in place, and opening it in
+// File Explorer all have nothing to do with one particular SalesChain ID);
+// the Defaults panel's Manufacturer dropdown and
 // Check for Updates button (also job-independent - picking a manufacturer
 // and opening its configured download page touches no SalesChain-ID-named
 // file, and this is exactly how the no-drivers banner's own bootstrap
@@ -548,7 +564,7 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 function applySalesChainGate() {
     const locked = !state.salesChainId;
     document.body.classList.toggle('sales-chain-locked', locked);
-    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnOpenDriversFolder', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
+    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnSyncFlashDrive', 'btnOpenDriversFolder', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
         if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#confirmBackdrop')) continue;
         c.disabled = locked;
@@ -648,6 +664,7 @@ async function init() {
     }
 
     EventsOn('deploy-progress', (result) => onDeployProgress(result));
+    EventsOn('flashcopy-progress', (progress) => updateFlashCopyProgress(progress));
 
     // Startup overlay: everything above this point runs before wireEvents()
     // attaches a single event listener, so clicking anything during that
@@ -1259,7 +1276,8 @@ function wireEvents() {
         }
     });
 
-    el('btnFlashDrive').addEventListener('click', openFlashDriveModal);
+    el('btnFlashDrive').addEventListener('click', () => openFlashDriveModal('write'));
+    el('btnSyncFlashDrive').addEventListener('click', () => openFlashDriveModal('sync'));
     el('btnFlashDriveCancel').addEventListener('click', closeFlashDriveModal);
     el('btnFlashDriveConfirm').addEventListener('click', confirmWriteToFlashDrive);
     wireBackdropDismiss('flashDriveBackdrop', closeFlashDriveModal);
@@ -1612,7 +1630,18 @@ function formatByteSize(n) {
     return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-async function openFlashDriveModal() {
+// flashDriveMode selects what btnFlashDriveConfirm actually does -
+// 'write' (the default, opened via the toolbar's own Flash Drive button) is
+// the full portable copy (exe + Drivers + Configs + 7-Zip tools) with its
+// own Format as exFAT option; 'sync' (opened via the Sync button) is Drivers
+// only, no format option at all (formatting an already-in-use flash drive
+// makes no sense for a top-up), and runs a Rescan against the destination
+// itself afterward. Both share this same modal/drive-checklist rather than
+// duplicating it.
+let flashDriveMode = 'write';
+
+async function openFlashDriveModal(mode = 'write') {
+    flashDriveMode = mode;
     const result = await ListRemovableDrives();
     if (result.error) {
         logStatus('ERR', result.error);
@@ -1629,7 +1658,22 @@ async function openFlashDriveModal() {
               <span class="import-printer-detail">${attr(d.label || '(no label)')} - ${formatByteSize(d.freeBytes)} free of ${formatByteSize(d.totalBytes)}</span>
             </label>
         `).join('');
+
+    const isSync = mode === 'sync';
+    el('flashDriveTitle').textContent = isSync ? 'Sync Drivers to Flash Drive' : 'Write to Flash Drive';
+    el('flashDriveHint').textContent = isSync
+        ? 'Copies this computer\'s Drivers folder onto every checked drive (merging into whatever is already there), then extracts anything newly-copied.'
+        : 'Writes a portable copy of PDT (this executable, plus its Drivers, Configs, and 7-Zip tools folders) to every checked drive.';
+    // Inline style, not the `hidden` attribute/`:not([hidden])` CSS pattern
+    // used elsewhere in this file - confirmed live that this row still
+    // rendered even with the compiled bundle's own `.hidden = true` logic
+    // verified correct (checked the actual embedded JS/CSS byte-for-byte),
+    // for a reason that didn't resolve under inspection. Setting `display`
+    // directly can't lose to any stylesheet rule regardless of cause.
+    el('flashDriveFormatRow').style.display = isSync ? 'none' : '';
     el('flashDriveFormat').checked = false;
+    el('btnFlashDriveConfirm').textContent = isSync ? 'Sync' : 'Write';
+
     el('flashDriveBackdrop').hidden = false;
 }
 
@@ -1639,14 +1683,22 @@ function closeFlashDriveModal() {
 
 // Write to Flash Drive: optionally formats the checked drives as exFAT
 // (destructive - confirmed separately, by name, right before it happens),
-// then writes a portable PDT copy (exe + Drivers + Configs) to whichever
-// drives are left. This is the flip side of "install PDT on the
+// then writes a portable PDT copy (exe + Drivers + Configs + tools) to
+// whichever drives are left. This is the flip side of "install PDT on the
 // technician's laptop" - the laptop's own local Drivers/Configs become the
 // source for every flash drive stamped out from it.
+//
+// Sync mode skips formatting entirely (never offered - see
+// openFlashDriveModal) and calls SyncDriversToFlashDrives instead of
+// WritePortablePDT - Drivers only, no exe/Configs/tools - then RefreshDriverCatalog
+// so this running instance's own catalog/no-drivers banner reflect whatever
+// just got copied too, not just the flash drive's own copy (which
+// SyncDriversToFlashDrives/syncDriversTo already extracted server-side).
 async function confirmWriteToFlashDrive() {
     const checks = Array.from(el('flashDriveList').querySelectorAll('.flash-drive-check'));
     const chosen = checks.filter(c => c.checked).map(c => flashDriveCandidates[Number(c.dataset.index)]);
-    const doFormat = el('flashDriveFormat').checked;
+    const mode = flashDriveMode;
+    const doFormat = mode === 'write' && el('flashDriveFormat').checked;
     closeFlashDriveModal();
     if (chosen.length === 0) return;
 
@@ -1665,17 +1717,73 @@ async function confirmWriteToFlashDrive() {
         letters = formatResult.succeeded || [];
         if (letters.length === 0) return;
     } else {
-        const ok = await showConfirm({
+        const ok = await showConfirm(mode === 'sync' ? {
+            title: 'Sync Drivers to Flash Drive',
+            message: `Sync this computer's Drivers folder to: ${letters.join(', ')}?`,
+            okLabel: 'Sync',
+        } : {
             title: 'Write to Flash Drive',
-            message: `Write a portable copy of PDT (this executable, Drivers, and Configs) to: ${letters.join(', ')}?`,
+            message: `Write a portable copy of PDT (this executable, Drivers, Configs, and 7-Zip tools) to: ${letters.join(', ')}?`,
             okLabel: 'Write',
         });
         if (!ok) return;
     }
 
-    const writeResult = await WritePortablePDT(letters);
-    for (const l of writeResult.succeeded || []) logStatus('OK', `Wrote portable PDT to ${l}.`);
-    for (const l of Object.keys(writeResult.failed || {})) logStatus('ERR', `Could not write to ${l}: ${writeResult.failed[l]}`);
+    openFlashCopyProgressModal(mode, letters);
+    try {
+        if (mode === 'sync') {
+            const syncResult = await SyncDriversToFlashDrives(letters);
+            for (const l of syncResult.succeeded || []) logStatus('OK', `Synced Drivers to ${l}.`);
+            for (const l of Object.keys(syncResult.failed || {})) logStatus('ERR', `Could not sync Drivers to ${l}: ${syncResult.failed[l]}`);
+            if ((syncResult.succeeded || []).length > 0) {
+                const status = await RefreshDriverCatalog();
+                el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
+            }
+            return;
+        }
+
+        const writeResult = await WritePortablePDT(letters);
+        for (const l of writeResult.succeeded || []) logStatus('OK', `Wrote portable PDT to ${l}.`);
+        for (const l of Object.keys(writeResult.failed || {})) logStatus('ERR', `Could not write to ${l}: ${writeResult.failed[l]}`);
+    } finally {
+        closeFlashCopyProgressModal();
+    }
+}
+
+// The copy-progress dialog: shown for the entire span of a Write to Flash
+// Drive/Sync operation, since a real Drivers folder can be tens of
+// thousands of files and take several minutes over a real USB port with
+// otherwise zero indication it hadn't just hung (confirmed live). One row
+// per letter, each showing whichever step (Drivers/Configs/7-Zip tools) is
+// currently copying and a live file-count progress bar -
+// updateFlashCopyProgress is wired to the "flashcopy-progress" event once,
+// in init(), rather than per-operation, so there's no listener-stacking
+// concern across repeated Write/Sync calls; it simply no-ops if the row it
+// would update isn't present (the dialog isn't open, or that letter wasn't
+// part of the current operation).
+function openFlashCopyProgressModal(mode, letters) {
+    el('flashCopyProgressTitle').textContent = mode === 'sync' ? 'Syncing Drivers...' : 'Writing to Flash Drive...';
+    el('flashCopyProgressList').innerHTML = letters.map(letter => `
+        <div class="flash-copy-row" data-letter="${attr(letter)}">
+            <div class="flash-copy-row-label">${attr(letter)} - starting...</div>
+            <progress class="flash-copy-row-bar" value="0" max="1"></progress>
+        </div>
+    `).join('');
+    el('flashCopyProgressBackdrop').hidden = false;
+}
+
+function closeFlashCopyProgressModal() {
+    el('flashCopyProgressBackdrop').hidden = true;
+}
+
+function updateFlashCopyProgress(progress) {
+    const row = el('flashCopyProgressBackdrop').querySelector(`.flash-copy-row[data-letter="${CSS.escape(progress.letter)}"]`);
+    if (!row) return;
+    row.querySelector('.flash-copy-row-label').textContent =
+        `${progress.letter} - ${progress.step} (${progress.done} / ${progress.total} files)`;
+    const bar = row.querySelector('.flash-copy-row-bar');
+    bar.max = Math.max(progress.total, 1);
+    bar.value = progress.done;
 }
 
 function openSettingsModal() {

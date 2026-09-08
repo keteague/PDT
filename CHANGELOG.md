@@ -4,6 +4,61 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-07 (v0.3.9) - Toolbar Sync button; fix and speed up flash drive copying
+
+### Added
+- **Toolbar Sync button** (the two opposing horizontal arrows, between Refresh and the Drivers-folder
+  button) copies this computer's Drivers folder onto a flash drive that already has a portable PDT
+  copy on it, then extracts anything newly-copied right there - for topping up a flash drive with
+  driver packages downloaded since it was last written, without rewriting the exe/Configs/tools or
+  waiting to plug it into another computer first just to trigger extraction. Available whether PDT
+  itself is running from a local install or from a flash drive already (unlike Write to Flash Drive,
+  which is disabled in the latter case) - syncing one portable copy's Drivers onto a *different* flash
+  drive is a legitimate workflow, guarded against picking the exact same drive PDT is currently running
+  from (`syncDriversTo`'s own `samePath` check - copying a tree onto itself would truncate a source
+  file while still reading it).
+- **Write to Flash Drive now also copies this computer's 7-Zip tools folder** onto the destination, so
+  a portable copy is fully self-contained and needs nothing else to work on another computer.
+- **Copy-progress dialog** for both Write to Flash Drive and Sync - a real Drivers folder can be tens
+  of thousands of files and take several minutes over a real USB port with otherwise zero indication
+  it hadn't just hung (confirmed live). Shows which step (Drivers/Configs/7-Zip tools) is currently
+  copying and a live "N / total files" progress bar per drive, via a new `flashcopy-progress` Wails
+  event emitted throughout the copy (throttled to at most once per 150ms so tens of thousands of files
+  don't flood the frontend with events).
+
+### Fixed
+- **Write to Flash Drive silently copied none of the real driver files onto a flash drive that already
+  had anything under `Drivers\`** (a prior Write to Flash Drive, or its own scaffolded
+  `Archive\README.txt` files) - confirmed live, and root-caused to `os.CopyFS`'s own documented
+  behavior: "will not overwrite existing files ... stops at and returns the first error encountered."
+  Replaced with `copyTreeMerge`, which merges into an already-populated destination instead of failing
+  outright on the first pre-existing path it finds.
+- **A second, related bug found while fixing the first one**: `copyTreeMerge`'s own first version still
+  aborted the *entire* copy the moment any single file failed for any other reason (`filepath.WalkDir`'s
+  default behavior) - confirmed live against a real flash drive, where a file deep in Lexmark's own
+  driver package (thousands of files, deeply nested - a plausible Windows `MAX_PATH` issue) failed, and
+  every manufacturer sorting after Lexmark (Ricoh, Sharp, Toshiba, Xerox) never got copied at all as a
+  result, with nothing to explain why. `copyTreeMerge` is now best-effort per file (one bad file no
+  longer stops the rest of the tree), and `writePortablePDTTo`/`syncDriversTo` now attempt every step
+  (Drivers, Configs, tools) regardless of whether an earlier one hit a partial failure, instead of
+  bailing out of the whole operation on the first error.
+- **Repeat Write to Flash Drive/Sync against an already-populated drive was extremely slow** - tens of
+  thousands of individual `os.Stat` round-trips to a real USB-attached filesystem, one per source file,
+  turned out to be the dominant cost once the two bugs above were fixed and files actually started
+  landing. Replaced with a single bulk directory listing of the destination up front
+  (`listFileSizes`) - a repeat sync of an already-fully-synced ~23,000-file, ~14GB real Drivers folder
+  went from several minutes to about 4 seconds. CRC32/MD5 content hashing was considered for detecting
+  changed files and rejected: computing a hash means reading every byte of every file on both sides,
+  which costs far more I/O than the size-comparison it would replace, for a correctness guarantee this
+  case doesn't need - driver packages are downloaded once and never silently modified in place
+  afterward, so a size match is already as good as a hash match here.
+- Fixed the Sync modal's "Format as exFAT" row staying visible despite being correctly hidden under the
+  hood - another instance of this codebase's recurring `[hidden]`-vs-bare-`display` CSS specificity bug
+  (see `.modal-backdrop`'s own comment), this time on `.modal-field-inline`; also switched that one
+  element to an inline `style.display` toggle instead, since the row still rendered even with the
+  compiled bundle's own logic and the CSS fix both verified correct byte-for-byte - moot with the
+  belt-and-suspenders fix in place either way.
+
 ## 2026-09-07 (v0.3.8) - Startup overlay; portable flash drives now fully self-contained
 
 ### Added

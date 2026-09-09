@@ -4,6 +4,111 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-09 (v0.4.0) - macOS support (data layer, darwin Deployer, Wails app, frontend)
+
+The first real macOS build - PDT is no longer Windows-only. Built and verified on a real Mac (macOS
+26 "Tahoe", Apple Silicon) against real vendor driver packages (Kyocera, Ricoh, Sharp) and this
+machine's own already-deployed CUPS queues, not just unit tests. `internal/printer.Deployer` - already
+a clean, platform-independent interface from the original Windows-only design - now has a second real
+implementation alongside `internal/printer/windows`.
+
+### Added
+- **macOS driver catalog** (`internal/driver/maccatalog.go`, `macmount.go`, `macresolve.go`): scans
+  `Drivers/macOS/<Manufacturer>/<any version folder>/*.dmg`/`*.pkg` (mirroring the Windows side's own
+  `Drivers/Windows/<version>/<Manufacturer>/` convention, version nested the other way per the
+  README's own longstanding note that macOS packages genuinely vary by OS release), plus a flat
+  `Drivers/macOS/OpenPrinting/<Manufacturer>/*.ppd` fallback bucket for a manufacturer/model with no
+  vendor installer at all. `driver.LocatePkg` resolves a `.dmg` to the real `.pkg` inside it
+  (mounting via `hdiutil`, recursing into one level of nested `.dmg` - confirmed necessary against a
+  real Kyocera package) with no bundled extraction tool needed (unlike Windows' bundled 7-Zip - macOS
+  driver packages need no pre-extraction at all).
+  - **No reliable per-package version field exists on macOS**, unlike a Windows `.inf`'s `DriverVer=`
+    line - confirmed against a real Kyocera distribution-style package, where every component's own
+    declared "version" was boilerplate `1.0`/`0`. `ResolveMac` picks the newest package by file
+    modification time instead of trying to compare a version string; `PackageLabel` is a display-only
+    best-effort label (a flat `.pkg`'s real `PackageInfo` version when there is one, else the
+    filename), never used for ordering.
+- **darwin `Deployer`** (`internal/printer/darwin`): installs a resolved `.dmg`/`.pkg` via macOS's own
+  `installer` tool (elevated - see below), diffs `/Library/Printers/PPDs/Contents/Resources` before
+  and after to discover which PPD(s) the install actually registered (there's no Windows-registry-like
+  "installed driver version" to read directly), and creates/reuses a CUPS **LPD** print queue
+  (`lpadmin`/`lpstat`) - `lpd://<ip>/`, no queue name, confirmed against this machine's own
+  already-deployed real queues to be exactly the working convention already in use here. Best-effort
+  duplex/color defaults are set by reading each queue's actual PPD-declared option keywords/choices
+  (`lpoptions -l`) rather than hardcoding one vendor's naming - confirmed against a real installed
+  Kyocera PPD (`Duplex`/`None`/`DuplexTumble`/`DuplexNoTumble`, `ColorModel`/`CMYK`/`Gray`) that PPD
+  option naming is inconsistent enough across vendors that this has to be dynamic, the same lesson
+  `devmode_windows.go` already learned the hard way for DEVMODE on Windows. No NUL:-port workaround and
+  no APF/"print spooled documents first" - both Windows spooler-specific concepts with nothing
+  analogous in CUPS (see `deploy_darwin.go`'s own doc comment for why).
+- **Elevation**: every privileged command (`installer`, `lpadmin`) runs through `osascript`'s
+  `do shell script ... with administrator privileges` - the closest available equivalent to Windows'
+  manifest-driven auto-UAC-elevation without needing a paid code-signing certificate. **Confirmed live
+  that a bare, ad-hoc-signed CLI binary gets killed by AMFI** (`AppleMobileFileIntegrityError -423`,
+  "adhoc signed or signed by an unknown certificate chain") the moment the privileged command actually
+  starts, even after the password prompt is accepted - a real `wails build`-produced `.app` bundle
+  (also only ad-hoc signed today, no paid Developer ID) has not yet been confirmed to avoid the same
+  rejection; see `elevate_darwin.go`'s own doc comment. If it turns out a real `.app` hits this too,
+  the fix is a paid Apple Developer ID signature (and likely notarization) - a real cost/process change
+  from this project's current unsigned-installer precedent on the Windows side.
+- **`cmd/pdtdebugmac`**: a throwaway CLI mirroring `cmd/pdtdebug`'s own role, for exercising the darwin
+  catalog/install/queue-creation codepaths by hand against real state before the Wails UI could.
+- **`package main` now actually compiles and runs on darwin** - `app.go`'s Windows-only pieces
+  (driver-catalog methods, the self-update mechanism, the Explorer-opening toolbar button) split into
+  `app_windows.go`/`drivercatalog_windows.go`/`update_windows.go`/`openfolder_windows.go`, each with a
+  matching `_darwin.go` counterpart where one makes sense; `spooler.go`/`devmode.go`/`sevenzip.go`
+  renamed outright to `_windows.go` (Print Spooler control, DEVMODE/Device Settings capture, and the
+  bundled-7-Zip-for-self-extracting-archives tooling all remain Windows-only for now - no CUPS/macOS
+  equivalent built yet). New `App.Platform()` bound method (`runtime.GOOS`) is the frontend's only
+  feature-detection signal.
+- **Flash Drive / Sync ported to macOS** (`internal/flashdrive/flashdrive_darwin.go`): removable-drive
+  enumeration and exFAT formatting via `diskutil` (`RemovableMediaOrExternalDevice` from
+  `diskutil info -plist`, converted to JSON via `plutil` for reliable parsing) and `syscall.Statfs` for
+  free/total space, in place of Windows' `GetDriveType`/`GetDiskFreeSpaceEx`. Same `flashdrive.Drive`
+  shape on both platforms - `Letter` holds a mount point path (e.g. `/Volumes/MYDRIVE`) on macOS
+  instead of an actual drive letter, since every caller already treats it as an opaque identifier
+  string rather than parsing it.
+- **Frontend** (`frontend/src/main.js`): a `state.platform`-gated reduced UI on macOS - Spooler,
+  SNMP/port-prefix/Use-existing-port, APF, DEVMODE capture, Import Printers, app self-update, and the
+  7-Zip credit/update section are all hidden (Windows-only concepts, per above); the Driver combobox
+  stays (now backed by `App.DriverCandidates`/`DefaultDriverFor`'s own darwin implementation - the
+  resolved package's own label when one exists locally, or fuzzy-ranked OpenPrinting PPD labels
+  otherwise). Switched from named imports of the generated Wails bindings to a namespace import
+  (`import * as App from ...`) - confirmed live that Vite/Rollup hard-fails the production build on a
+  named import of a bound method that doesn't exist in that platform's generated `App.js` (a fair
+  number of `App`'s own methods only exist on one platform now), where a namespace import's member
+  access degrades to `undefined` at runtime instead, caught by the same `isMac()` guards already
+  needed at every one of those call sites.
+- User-visible "SalesChain ID" wording changed to "Save ID" throughout (tooltips, log/status messages,
+  confirmation dialogs) - internal identifiers and the saved-JSON-config field name are unchanged, so
+  this doesn't affect config file compatibility.
+
+### Fixed
+- Two pre-existing test gaps, invisible until `package main` could actually compile/run on darwin for
+  the first time this pass: `resolveexerelative_test.go` hardcoded Windows-only path syntax
+  (`C:\Users\...`, `.\Drivers`) for a function that's genuinely cross-platform; and
+  `TestResolve_StaleVersionFallsBackToNewest` (`internal/driver`) was missing the same amd64-only
+  `t.Skip` its two sibling tests already had, failing on Apple Silicon since the real-vendor-INF test
+  fixtures it uses have no arm64 build for that particular old Kyocera model.
+
+### Known issues / open for the next pass
+- **Settings > General's Browse (`...`) buttons don't open a folder picker on macOS** - not yet
+  root-caused; `PickFolder`/`runtime.OpenDirectoryDialog` is nominally cross-platform Wails runtime
+  code, unmodified here.
+- **Settings > General's base path fields display Windows-style `\`-separated paths on macOS** -
+  `defaultDriversBasePath`/`defaultSaveFileBasePath`/`defaultPreinstallBasePath` (`settings.go`) still
+  need a macOS-appropriate default location decided and implemented (the Windows side defaults to
+  `%LocalAppData%\PDT\Drivers` etc.); until then, paths display with the wrong separator and may not
+  point anywhere sensible on macOS.
+- No macOS equivalent of `ensureDriversScaffold` yet (auto-creating the `Drivers/macOS/<Manufacturer>/`
+  tree on first launch) - a freshly-installed macOS copy's Drivers folder isn't scaffolded the way an
+  installed Windows copy's is.
+- A minor Defaults-panel spacing/padding issue above the Manufacturer row, reported after the fixes
+  above landed - not yet reproduced/fixed.
+- `PrinterRow` has no explicit LPD-queue-name field - every macOS deploy uses `lpd://<ip>/` (no queue
+  name), confirmed to match this machine's own real, already-deployed queues, but not yet exposed as a
+  per-row override if a future printer's LPD server needs a specific queue name.
+
 ## 2026-09-07 (v0.3.9) - Toolbar Sync button; fix and speed up flash drive copying
 
 ### Added

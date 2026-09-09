@@ -2,22 +2,17 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"golang.org/x/sys/windows/registry"
 
 	"PDT/internal/config"
 	"PDT/internal/driver"
 	"PDT/internal/printer"
-	pdtwin "PDT/internal/printer/windows"
-	"PDT/internal/update"
 )
 
 const deployProgressEvent = "deploy-progress"
@@ -43,15 +38,25 @@ type App struct {
 	// silently see catalog/modelIndex still at their nil zero value.
 	ready chan struct{}
 
-	// catalogMu guards catalog/modelIndex/catalogErr below. Built once at
-	// startup and read-only from then on for most of this app's life, but
-	// RefreshDriverCatalog (the toolbar's Refresh button) can now replace all
-	// three live, without restarting PDT - a real lock, not just the one-time
-	// <-a.ready happens-before startup already relied on, is what keeps that
-	// safe against a DriverCandidates/Deploy call landing at the same moment.
+	// catalogMu guards catalog/modelIndex/macCatalog/catalogErr below. Built
+	// once at startup and read-only from then on for most of this app's
+	// life, but RefreshDriverCatalog (the toolbar's Refresh button) can now
+	// replace them live, without restarting PDT - a real lock, not just the
+	// one-time <-a.ready happens-before startup already relied on, is what
+	// keeps that safe against a DriverCandidates/Deploy call landing at the
+	// same moment.
+	//
+	// catalog/modelIndex (Windows' .inf-driver-name-shaped catalog, plus its
+	// Kyocera model index) and macCatalog (macOS' installer-package-shaped
+	// catalog - internal/driver.MacCatalog) both live on every build of this
+	// struct, but only the one this platform's own loadCatalog
+	// (app_windows.go/app_darwin.go) actually populates is ever non-zero -
+	// the same way internal/printer/windows and internal/printer/darwin are
+	// two packages that never both link into the same binary.
 	catalogMu  sync.RWMutex
 	catalog    driver.Catalog
 	modelIndex map[string]map[string][]string
+	macCatalog driver.MacCatalog
 	catalogErr error
 	settings   Settings
 
@@ -76,77 +81,19 @@ func (a *App) startup(ctx context.Context) {
 	currentDriversBasePath = a.settings.DriversBasePath
 	currentConfigsBasePath = a.settings.SaveFileBasePath
 
-	// Best-effort cleanup of a previous update's renamed-aside old exe (see
-	// internal/update.Apply) - by the time this process is running at all,
-	// whatever process left that file behind has necessarily already exited.
-	if exe, err := os.Executable(); err == nil {
-		update.CleanupOldExe(exe)
-	}
+	// Whatever this platform needs done once, before the driver catalog is
+	// scanned (Windows: 7-Zip extraction, stale-update cleanup, the Drivers
+	// scaffold; macOS: nothing yet - see app_windows.go/app_darwin.go).
+	a.platformStartup()
 
-	ensureSevenZipExtracted()
-
-	// A freshly-installed copy's Drivers folder (installedAppDataDir(),
-	// picked by defaultDriversBasePath() when there's no portable copy's
-	// Drivers folder to inherit) starts out completely empty - scaffold the
-	// standard manufacturer subfolders so the Defaults panel's own
-	// Manufacturer dropdown isn't just blank on first launch, and so
-	// there's an obvious, ready-to-use place to drop driver packages into.
-	// A no-op once anything already exists there (see its own doc comment).
-	_ = ensureDriversScaffold(driversRoot())
-
-	catalog, err := driver.BuildCatalog(driversRoot())
-	a.catalogMu.Lock()
-	if err != nil {
+	if err := a.loadCatalog(driversRoot()); err != nil {
+		a.catalogMu.Lock()
 		a.catalogErr = err
 		a.catalogMu.Unlock()
 		close(a.ready)
 		return
 	}
-	a.catalog = catalog
-	a.modelIndex = driver.BuildModelIndex(catalog)
-	a.catalogMu.Unlock()
 	close(a.ready)
-}
-
-// catalogSnapshot returns the current catalog/modelIndex/catalogErr under
-// catalogMu's read lock - every method below that reads any of the three
-// goes through this rather than touching the fields directly, so a
-// RefreshDriverCatalog call landing concurrently can't be observed half
-// swapped-in.
-func (a *App) catalogSnapshot() (driver.Catalog, map[string]map[string][]string, error) {
-	a.catalogMu.RLock()
-	defer a.catalogMu.RUnlock()
-	return a.catalog, a.modelIndex, a.catalogErr
-}
-
-// RefreshDriverCatalog re-scans the Drivers folder in place - the toolbar's
-// Refresh button, for picking up a driver package dropped in (or downloaded
-// via Check for Updates) without restarting PDT, which was previously the
-// only way (BuildCatalog only ever ran once, at startup). This calls the
-// exact same driver.BuildCatalog startup already does, so it also re-runs
-// every auto-extraction step (zip/self-extracting-archive/msi/Kyocera) on
-// whatever's newly sitting in the Drivers folder, not just re-scanning
-// already-extracted .inf files - dropping in a raw, never-extracted .zip or
-// driver .exe and clicking Refresh is enough, no manual extraction needed
-// first. Returns the same CatalogStatus shape GetCatalogStatus does, so the
-// frontend can drive its no-drivers banner and re-populate any open Driver
-// dropdowns from one call.
-func (a *App) RefreshDriverCatalog() CatalogStatus {
-	<-a.ready
-	catalog, err := driver.BuildCatalog(driversRoot())
-
-	a.catalogMu.Lock()
-	if err != nil {
-		a.catalogErr = err
-		a.catalogMu.Unlock()
-		return CatalogStatus{OK: false, Error: err.Error()}
-	}
-	a.catalog = catalog
-	a.modelIndex = driver.BuildModelIndex(catalog)
-	a.catalogErr = nil
-	a.catalogMu.Unlock()
-
-	return CatalogStatus{OK: true, HasDrivers: len(driver.ManufacturersWithDrivers(catalog)) > 0}
 }
 
 // GetSettings returns the current persisted preferences.
@@ -228,136 +175,19 @@ func (a *App) GetAppInfo() AppInfo {
 	return AppInfo{Name: appDisplayName, Version: AppVersion, Author: appAuthor, RepoURL: appRepoURL}
 }
 
+// Platform reports this build's OS ("windows" or "darwin") - the frontend's
+// one feature-detection signal for showing/hiding platform-specific UI
+// (Spooler/Flash Drive/DEVMODE capture/SNMP-port fields on Windows; a
+// simpler grid shape with no Driver combobox on macOS - see
+// frontend/src/main.js).
+func (a *App) Platform() string {
+	return goruntime.GOOS
+}
+
 // OpenRepoURL opens this project's GitHub page in the system default
 // browser - the About tab's repo link.
 func (a *App) OpenRepoURL() {
 	runtime.BrowserOpenURL(a.ctx, appRepoURL)
-}
-
-// updateAssetName is the exact GitHub release asset name CheckForUpdate looks
-// for - the release process for this app is to build with `wails build` and
-// upload build/bin/PDT.exe under this same name to each GitHub release.
-const updateAssetName = "PDT.exe"
-
-// repoSlug is appRepoURL in GitHub API "owner/name" form.
-func repoSlug() string {
-	return strings.TrimPrefix(appRepoURL, "https://github.com/")
-}
-
-// UpdateCheckResult is CheckForUpdate's outcome.
-type UpdateCheckResult struct {
-	Available      bool   `json:"available"`
-	CurrentVersion string `json:"currentVersion"`
-	LatestVersion  string `json:"latestVersion"`
-	ReleaseURL     string `json:"releaseUrl"`
-	AssetURL       string `json:"assetUrl"`
-	Error          string `json:"error"`
-}
-
-// CheckForUpdate queries this project's GitHub Releases for a version newer
-// than AppVersion - Settings > About's "Check for Updates" button. Comparison
-// is numeric (driver.CompareVersions - a generic dot-separated numeric
-// comparator despite living in the driver package, already exported for
-// exactly this kind of reuse outside it), not string equality, so "0.1.0"
-// isn't mistaken for older than "0.1.0" due to formatting. AssetURL is left
-// empty (with Available still true) if the matching release has no
-// updateAssetName asset to download - a release published without one is a
-// process mistake worth surfacing, not silently ignoring.
-func (a *App) CheckForUpdate() UpdateCheckResult {
-	rel, err := update.FetchLatest(repoSlug())
-	if err != nil {
-		return UpdateCheckResult{CurrentVersion: AppVersion, Error: err.Error()}
-	}
-
-	latest := strings.TrimPrefix(rel.TagName, "v")
-	result := UpdateCheckResult{CurrentVersion: AppVersion, LatestVersion: latest, ReleaseURL: rel.HTMLURL}
-	if driver.CompareVersions(latest, AppVersion) > 0 {
-		result.Available = true
-		if asset := rel.Asset(updateAssetName); asset != nil {
-			result.AssetURL = asset.DownloadURL
-		} else {
-			result.Error = fmt.Sprintf("release %s has no %s asset to download", rel.TagName, updateAssetName)
-		}
-	}
-	return result
-}
-
-// ApplyUpdateResult is ApplyUpdate's outcome. Error is "" on success, in
-// which case the app has already relaunched itself and this process is about
-// to quit - there is nothing further for the frontend to do either way.
-type ApplyUpdateResult struct {
-	Error string `json:"error"`
-}
-
-// ApplyUpdate downloads assetURL (from a prior CheckForUpdate result),
-// installs it in place of the running executable, best-effort updates the
-// Inno Setup uninstall entry's DisplayVersion to newVersion (see
-// updateInstalledVersionInRegistry), relaunches, and quits this process -
-// see internal/update's doc comment for how replacing a running .exe works
-// on Windows with no separate installer. Runs inline with no progress
-// reporting since it's one small exe download, not a multi-minute operation
-// like Deploy.
-func (a *App) ApplyUpdate(assetURL, newVersion string) ApplyUpdateResult {
-	exePath, err := os.Executable()
-	if err != nil {
-		return ApplyUpdateResult{Error: err.Error()}
-	}
-	tmpPath, err := update.Download(assetURL, exePath)
-	if err != nil {
-		return ApplyUpdateResult{Error: err.Error()}
-	}
-	if err := update.Apply(exePath, tmpPath); err != nil {
-		return ApplyUpdateResult{Error: err.Error()}
-	}
-	updateInstalledVersionInRegistry(newVersion)
-	if err := exec.Command(exePath).Start(); err != nil {
-		return ApplyUpdateResult{Error: "update installed, but failed to relaunch: " + err.Error()}
-	}
-	runtime.Quit(a.ctx)
-	return ApplyUpdateResult{}
-}
-
-// innoSetupUninstallKeyPath is where pdt.iss's own [Setup] AppId
-// (`{40FB3E79-C3DC-4C78-A969-35012251BD36}`, braces included - Inno Setup's
-// own "{{" in that script is its escape for a literal "{") ends up under
-// Uninstall - Inno Setup always names its own uninstall registry key
-// "<AppId>_is1". Kept in sync with pdt.iss by hand; nothing enforces this
-// automatically, so if that GUID is ever regenerated, this needs updating
-// too.
-const innoSetupUninstallKeyPath = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{40FB3E79-C3DC-4C78-A969-35012251BD36}_is1`
-
-// updateInstalledVersionInRegistry best-effort updates the Inno Setup
-// uninstall entry's DisplayVersion to newVersion after a successful
-// self-update (ApplyUpdate) - without this, Windows' own Programs and
-// Features / appwiz.cpl keeps showing whatever version was last actually
-// installed, even though the running exe underneath it is now newer;
-// confirmed live that appwiz.cpl's own Version column only ever reflects
-// this one registry value; it has no idea the exe itself changed. Tries both
-// CURRENT_USER (an unelevated install) and LOCAL_MACHINE (an elevated one)
-// since exactly one will actually have this key - PDT itself always runs
-// elevated regardless of which mode it was installed under (see the
-// README's own elevation note), so it can reach whichever hive actually has
-// it. A portable/flash-drive copy - never installed via the Inno Setup
-// installer at all - has neither key; silently a no-op there, not an error,
-// same reasoning as every other best-effort step in ApplyUpdate/update.Apply.
-func updateInstalledVersionInRegistry(newVersion string) {
-	setRegistryDisplayVersion(registry.CURRENT_USER, innoSetupUninstallKeyPath, newVersion)
-	setRegistryDisplayVersion(registry.LOCAL_MACHINE, innoSetupUninstallKeyPath, newVersion)
-}
-
-// setRegistryDisplayVersion sets path's DisplayVersion value to newVersion
-// under root, silently doing nothing if path doesn't exist there (wrong
-// hive for how this copy was installed, or a portable copy with no
-// uninstall entry at all) or can't be written to. Split out from
-// updateInstalledVersionInRegistry so it can be unit-tested directly against
-// a throwaway key rather than this project's own real uninstall entry.
-func setRegistryDisplayVersion(root registry.Key, path, newVersion string) {
-	k, err := registry.OpenKey(root, path, registry.SET_VALUE)
-	if err != nil {
-		return
-	}
-	defer k.Close()
-	_ = k.SetStringValue("DisplayVersion", newVersion)
 }
 
 // currentDriversBasePath/currentConfigsBasePath cache the live Settings
@@ -441,15 +271,9 @@ type CatalogStatus struct {
 	HasDrivers bool   `json:"hasDrivers"`
 }
 
-func (a *App) GetCatalogStatus() CatalogStatus {
-	<-a.ready
-	catalog, _, catalogErr := a.catalogSnapshot()
-	hasDrivers := len(driver.ManufacturersWithDrivers(catalog)) > 0
-	if catalogErr != nil {
-		return CatalogStatus{OK: false, Error: catalogErr.Error(), HasDrivers: hasDrivers}
-	}
-	return CatalogStatus{OK: true, HasDrivers: hasDrivers}
-}
+// GetCatalogStatus, RefreshDriverCatalog: see drivercatalog_windows.go/
+// drivercatalog_darwin.go - both platform-specific (Windows' driver.Catalog
+// vs macOS' driver.MacCatalog).
 
 // Manufacturers is every row's dropdown offers - the full list of
 // manufacturers PDT knows about (same set as AllManufacturers), ordered per
@@ -504,41 +328,14 @@ func applyManufacturerOrder(items []string, order []string) []string {
 	return out
 }
 
-// Models lists the known models for manufacturer (Kyocera only - other
-// manufacturers' driver names aren't model-specific; see driver.ModelFromDriverName).
-func (a *App) Models(manufacturer string) []string {
-	<-a.ready
-	_, modelIndex, _ := a.catalogSnapshot()
-	byModel, ok := modelIndex[manufacturer]
-	if !ok {
-		return nil
-	}
-	models := make([]string, 0, len(byModel))
-	for m := range byModel {
-		models = append(models, m)
-	}
-	sort.Strings(models)
-	return models
-}
-
-// DriverCandidates lists selectable driver labels for a row's dropdown -
-// plain names, or decorated "<name> (vVersion - date)" labels when more than
-// one arch-compatible local version exists. filterText fuzzy-matches and
-// re-ranks when non-empty (free-text typing in the dropdown).
-func (a *App) DriverCandidates(manufacturer, model, filterText string) []string {
-	<-a.ready
-	catalog, modelIndex, _ := a.catalogSnapshot()
-	return driver.Candidates(catalog, modelIndex, manufacturer, model, filterText)
-}
-
-// DefaultDriverFor is the Defaults panel's pre-selected driver name for
-// manufacturer (e.g. Canon -> its UFR II driver), or "" if there's no such
-// rule for manufacturer or no matching driver is present locally.
-func (a *App) DefaultDriverFor(manufacturer string) string {
-	<-a.ready
-	catalog, _, _ := a.catalogSnapshot()
-	return driver.DefaultDriverNameFor(catalog, manufacturer)
-}
+// Models, DriverCandidates, DefaultDriverFor: Windows-only bound methods -
+// see drivercatalog_windows.go. All three are Driver-combobox concepts
+// (a per-manufacturer driver-name index, fuzzy-ranked candidate labels, a
+// pre-selected default driver name) with nothing analogous on macOS, where a
+// manufacturer's driver package resolves automatically
+// (internal/printer/darwin's deploy_darwin.go) and the frontend's mac row
+// shape has a plain Model text field instead of a Driver combobox at all -
+// not stubbed out here since nothing on a darwin build ever calls them.
 
 // PathResult is a file dialog's outcome: Canceled is true (with Path empty)
 // if the user dismissed the dialog without choosing a file.
@@ -688,8 +485,7 @@ func (a *App) Deploy(rows []printer.PrinterRow, salesChainID, portNamePrefix str
 		cancel()
 	}()
 
-	catalog, _, _ := a.catalogSnapshot()
-	deployer := pdtwin.NewDeployer(catalog, configsRoot())
+	deployer := a.newPlatformDeployer()
 	results := printer.DeployAllWithProgress(ctx, deployer, reqs, a.confirm, func(r printer.DeployResult) {
 		runtime.EventsEmit(a.ctx, deployProgressEvent, toDeployRowResult(r))
 	})

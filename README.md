@@ -36,8 +36,16 @@ UAC-prompts every time, per its own manifest.
 - **Phase 4 - Wails frontend** (`app.go`, `frontend/src/`): the actual GUI - a plain HTML/CSS/vanilla-JS
   grid (no framework), the `App` struct's bound methods the frontend calls, and native OS dialogs for
   file pickers and deploy confirmations. Done; see "Frontend" below.
-- **Not started**: macOS/Linux support (`printer.Deployer` is implemented for Windows only; there is no
-  `darwin`/other-OS stub yet).
+- **macOS support** (`internal/printer/darwin`, `internal/driver`'s Mac* additions): a second real
+  `printer.Deployer` implementation - installs a `.dmg`/`.pkg` driver package and creates/reuses a CUPS
+  LPD print queue, verified against real vendor packages and this machine's own real queues. `package
+  main` now compiles and runs as a real macOS `.app`, with a reduced frontend UI for the Windows-only
+  concepts (Spooler, SNMP/port config, APF, DEVMODE capture, app self-update) that have no CUPS/macOS
+  equivalent yet. Not yet installer-packaged, and a handful of loose ends remain (Settings > General's
+  folder-picker buttons and Windows-style path display on macOS, no macOS Drivers-folder scaffold, and
+  the open question of whether a real signed `.app` avoids the ad-hoc-signing AMFI rejection a bare
+  test binary hit) - see "macOS support" below and the Changelog's v0.4.0 entry for the current list.
+- **Not started**: Linux support.
 
 ## Windows bindings (`internal/printer/windows`)
 
@@ -70,6 +78,47 @@ runs the *entire* Phase 3 Deploy sequence end to end against a real local driver
 machine's real spooler for one throwaway printer, auto-confirming every prompt, then cleans up after
 itself (unless `nocleanup` is given, to set up a same-row redeploy test). Run `pdtdebug` with no
 arguments for the full command list.
+
+## macOS support (`internal/printer/darwin`, `internal/driver`'s Mac* additions)
+
+`printer.Deployer`'s own platform-independent design (from the original Windows-only build) meant a
+second implementation could be added with no changes to the interface itself. The macOS side installs
+a `.dmg`/`.pkg` driver package and creates a CUPS **LPD** print queue, instead of a Standard TCP/IP
+port + `.inf` driver the Windows side uses - CUPS has no separate "port" object at all, so there's
+nothing analogous to create ahead of the queue itself.
+
+| File | What it does |
+|---|---|
+| `internal/driver/maccatalog.go` | Scans `Drivers/macOS/<Manufacturer>/<any version folder>/*.dmg`/`*.pkg` (version nested under manufacturer, the other way from the Windows side - see "Drivers folder layout" below for why), plus a flat `Drivers/macOS/OpenPrinting/<Manufacturer>/*.ppd` fallback bucket. |
+| `internal/driver/macmount.go` | `LocatePkg` resolves a `.dmg` to the real `.pkg` inside it (mounts via `hdiutil`, recurses into one level of nested `.dmg` - confirmed necessary against a real Kyocera package that wraps a nested image), with no bundled extraction tool needed - unlike Windows' bundled 7-Zip, macOS driver packages need no pre-extraction step at all. `PackageLabel` is a best-effort *display* label only (see below) - never used to decide which package is newest. |
+| `internal/driver/macresolve.go` | `ResolveMac` picks the newest package for a manufacturer **by file modification time**, not by any version parsed out of the package - confirmed against a real Kyocera distribution-style package that there's no reliable per-package version field on macOS at all (every component's own declared "version" was boilerplate `1.0`/`0`); the file's own mtime is the only honest signal available. `ResolveOpenPrintingPPD`/`OpenPrintingCandidates` fuzzy-match a technician-typed driver/model string against the OpenPrinting fallback bucket's own filenames (normalized from `Ricoh_MP_C3003.ppd`-style underscores to spaces first - confirmed necessary, `FuzzyMatchScore`'s subsequence matching is strict about order and does not treat `_` and ` ` as interchangeable). |
+| `internal/printer/darwin/elevate_darwin.go` | Every privileged command (`installer`, `lpadmin`) runs through `osascript`'s `do shell script ... with administrator privileges` - the closest available equivalent to Windows' manifest-driven auto-UAC-elevation without a paid code-signing certificate. **Confirmed live that a bare, ad-hoc-signed CLI binary gets killed by AMFI** (`AppleMobileFileIntegrityError -423`) the moment the privileged command actually starts, even after the password prompt is accepted - whether a real signed `.app` bundle avoids this too is still an open question (see the file's own doc comment for the full story and what to try next). |
+| `internal/printer/darwin/install_darwin.go`, `ppdinventory_darwin.go` | Installs a resolved package via `installer -pkg ... -target /`, and diffs `/Library/Printers/PPDs/Contents/Resources` before/after to discover which PPD(s) it actually registered - there's no Windows-registry-like "installed driver version" to read directly on macOS, so a before/after PPD-directory diff is the closest real signal (confirmed live against a real Kyocera install: hundreds of new PPDs appeared, including an exact match for a real deployed printer's own model). |
+| `internal/printer/darwin/queue_darwin.go` | Creates/reuses a CUPS queue via `lpadmin`/`lpstat` - `lpd://<ip>/` with no queue name, confirmed against this machine's own already-deployed real queues (`Jenks_Kyocera`, `Jackson_Streets`) to be exactly the working convention already in use in this environment. Reuses an existing queue already targeting the same device URI rather than ever creating a duplicate, the same rule `portlookup_windows.go` applies to Standard TCP/IP ports. |
+| `internal/printer/darwin/printdefaults_darwin.go` | Best-effort duplex/color defaults, by reading each queue's actual PPD-declared option keywords/choices (`lpoptions -l`) rather than hardcoding one vendor's naming - confirmed against a real installed Kyocera PPD (`Duplex`: `None`/`DuplexTumble`/`DuplexNoTumble`; `ColorModel`: `CMYK`/`Gray`) that PPD option naming is inconsistent enough across vendors that this has to stay dynamic, the same lesson `devmode_windows.go` already learned for DEVMODE on Windows. |
+| `internal/printer/darwin/deploy_darwin.go` | The orchestrator (`Deployer.Deploy`) - resolve driver -> ensure it's installed -> resolve/create queue -> best-effort print defaults. No NUL:-port workaround (nothing here is ever created against a placeholder port; CUPS queue creation doesn't have the multi-minute-against-a-live-port problem that motivated it on Windows) and no APF/"print spooled documents first" (both Windows spooler-specific concepts with no CUPS equivalent). |
+
+### `cmd/pdtdebugmac`
+
+The macOS analog of `cmd/pdtdebug` - `catalog`/`installpkg`/`deployqueue` commands for exercising the
+catalog/install/queue-creation codepaths by hand against real state, validated before the Wails UI
+could drive them directly. `installpkg`/`deployqueue` run real privileged commands and prompt for the
+admin password the same way a real Deploy does.
+
+### `package main` on darwin
+
+`app.go`'s Windows-only pieces are split into `app_windows.go`/`drivercatalog_windows.go`/
+`update_windows.go`/`openfolder_windows.go`, each with a `_darwin.go` counterpart where one makes
+sense; `spooler.go`/`devmode.go`/`sevenzip.go` are renamed outright to `_windows.go` (Print Spooler
+control, DEVMODE/Device Settings capture, and the bundled-7-Zip tooling for self-extracting Windows
+archives all remain Windows-only - no CUPS/macOS equivalent built yet). `App.Platform()`
+(`runtime.GOOS`) is the frontend's one feature-detection signal, gating the reduced macOS UI described
+above (see `frontend/src/main.js`'s own `isMac()`/`state.platform`).
+
+Flash Drive/Sync are fully ported too (`internal/flashdrive/flashdrive_darwin.go`) - removable-drive
+enumeration and exFAT formatting via `diskutil` (its own `RemovableMediaOrExternalDevice` field,
+converted from plist to JSON via `plutil` for reliable parsing) and `syscall.Statfs` for free/total
+space, in place of Windows' `GetDriveType`/`GetDiskFreeSpaceEx` family.
 
 ## Drivers folder layout
 
@@ -339,18 +388,16 @@ A few things worth knowing before relying on either manual method:
   Kyocera installer version relocates this, checking under `Temp` first (or using Sysinternals'
   Process Monitor to watch what the installer actually writes and where) is the way to re-find it.
 
-**macOS is not read by this function at all yet.** The real macOS side of the Drivers tree (being
-built out alongside the Windows side) nests the *other* way - `Drivers/macOS/<Manufacturer>/<macOS
-version>/...` (version under manufacturer, not manufacturer under version like Windows) - reflecting
-that macOS driver packages genuinely do vary by OS release in a way Windows ones generally don't.
-There is also a `Drivers/macOS/OpenPrinting/<Manufacturer>/*.ppd` bucket (flat, no version
-breakdown) as a fallback source for manufacturers/models with nothing better. None of this is
-scanned yet - `internal/driver` has no macOS-specific code, and there is no macOS `Deployer`
-implementation at all (this tool remains Windows-only for now). The bigger open question for that
-work: most of the macOS packages on disk are `.dmg` images (some wrapping a nested `.dmg`, most
-ultimately containing a `.pkg` installer) - extracting the driver files (or PPDs) from those without
-either running a full installer or requiring a macOS host to mount them is unsolved and needs its
-own design pass before any macOS catalog-scanning code gets written.
+**macOS is not read by this function at all** - `BuildCatalog` only ever reads the Windows side; the
+macOS side of the Drivers tree has its own scanner now (`driver.BuildMacCatalog`, see "macOS support"
+above), and nests the *other* way - `Drivers/macOS/<Manufacturer>/<macOS version>/...` (version under
+manufacturer, not manufacturer under version like Windows) - reflecting that macOS driver packages
+genuinely do vary by OS release in a way Windows ones generally don't. There is also a
+`Drivers/macOS/OpenPrinting/<Manufacturer>/*.ppd` bucket (flat, no version breakdown) as a fallback
+source for manufacturers/models with nothing better - both are described in full in "macOS support"
+above, including how `.dmg`/`.pkg` extraction actually ended up working out (mounting via `hdiutil`,
+no bundled tool needed - simpler than the Windows side's own 7-Zip/msiexec/expand.exe pipeline, since
+macOS packages need no pre-extraction at install time at all).
 
 ## Deploy sequence (`internal/printer/windows/deploy_windows.go`)
 

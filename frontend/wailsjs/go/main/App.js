@@ -6,28 +6,8 @@ export function AllManufacturers() {
   return window['go']['main']['App']['AllManufacturers']();
 }
 
-export function ApplyUpdate(arg1, arg2) {
-  return window['go']['main']['App']['ApplyUpdate'](arg1, arg2);
-}
-
-export function BrowseDevModeFile(arg1, arg2) {
-  return window['go']['main']['App']['BrowseDevModeFile'](arg1, arg2);
-}
-
-export function CaptureDevModeForPrinter(arg1, arg2) {
-  return window['go']['main']['App']['CaptureDevModeForPrinter'](arg1, arg2);
-}
-
 export function CheckExportCollisions(arg1, arg2) {
   return window['go']['main']['App']['CheckExportCollisions'](arg1, arg2);
-}
-
-export function CheckForUpdate() {
-  return window['go']['main']['App']['CheckForUpdate']();
-}
-
-export function CheckSevenZipUpdate() {
-  return window['go']['main']['App']['CheckSevenZipUpdate']();
 }
 
 export function DefaultDriverFor(arg1) {
@@ -40,10 +20,6 @@ export function Deploy(arg1, arg2, arg3) {
 
 export function DriverCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['DriverCandidates'](arg1, arg2, arg3);
-}
-
-export function EnumerateLocalPrinters() {
-  return window['go']['main']['App']['EnumerateLocalPrinters']();
 }
 
 export function ExportConfigs(arg1, arg2, arg3) {
@@ -70,10 +46,6 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
-export function GetSevenZipVersion() {
-  return window['go']['main']['App']['GetSevenZipVersion']();
-}
-
 export function ImportCsv() {
   return window['go']['main']['App']['ImportCsv']();
 }
@@ -92,10 +64,6 @@ export function ListRemovableDrives() {
 
 export function Manufacturers() {
   return window['go']['main']['App']['Manufacturers']();
-}
-
-export function Models(arg1) {
-  return window['go']['main']['App']['Models'](arg1);
 }
 
 export function NewCsvTemplate() {
@@ -118,20 +86,16 @@ export function OpenRepoURL() {
   return window['go']['main']['App']['OpenRepoURL']();
 }
 
-export function OpenSevenZipHomepage() {
-  return window['go']['main']['App']['OpenSevenZipHomepage']();
-}
-
 export function PickFolder(arg1) {
   return window['go']['main']['App']['PickFolder'](arg1);
 }
 
-export function RefreshDriverCatalog() {
-  return window['go']['main']['App']['RefreshDriverCatalog']();
+export function Platform() {
+  return window['go']['main']['App']['Platform']();
 }
 
-export function RestartSpooler() {
-  return window['go']['main']['App']['RestartSpooler']();
+export function RefreshDriverCatalog() {
+  return window['go']['main']['App']['RefreshDriverCatalog']();
 }
 
 export function SaveConfiguration(arg1) {
@@ -142,28 +106,12 @@ export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
-export function SpoolerStatus() {
-  return window['go']['main']['App']['SpoolerStatus']();
-}
-
-export function StartSpooler() {
-  return window['go']['main']['App']['StartSpooler']();
-}
-
 export function StopDeploy() {
   return window['go']['main']['App']['StopDeploy']();
 }
 
-export function StopSpooler() {
-  return window['go']['main']['App']['StopSpooler']();
-}
-
 export function SyncDriversToFlashDrives(arg1) {
   return window['go']['main']['App']['SyncDriversToFlashDrives'](arg1);
-}
-
-export function UpdateSevenZip(arg1) {
-  return window['go']['main']['App']['UpdateSevenZip'](arg1);
 }
 
 export function WritePortablePDT(arg1) {

@@ -46,6 +46,9 @@ func TestResolve_DecoratedLabelPinsExactVersion(t *testing.T) {
 }
 
 func TestResolve_StaleVersionFallsBackToNewest(t *testing.T) {
+	if runtime.GOARCH != "amd64" {
+		t.Skip("this table assumes the dev/CI host is amd64 - see the fixture's own testdata (real vendor INFs, no arm64 build for this model)")
+	}
 	cat := testCatalog(t)
 	got, err := Resolve(cat, "Kyocera", "Kyocera FS-1100 KX (v9.9.9999.0 - 2099-01-01)")
 	if err != nil {

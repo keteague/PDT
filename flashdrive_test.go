@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"testing"
 
 	"PDT/internal/driver"
@@ -15,6 +16,14 @@ import (
 // Drivers folder is very rarely fully populated for every manufacturer PDT
 // knows about, which used to leave the flash drive missing folders for
 // whichever manufacturers weren't already downloaded locally.
+//
+// The full-manufacturer-scaffold assertion at the bottom is Windows-only: it
+// exercises postSyncDriversHook's own ensureDriversScaffold call
+// (app_windows.go), which has no macOS equivalent yet (see app_darwin.go's
+// own doc comment - there's no macOS Drivers-folder scaffold built yet at
+// all) - skipped there rather than the whole test, since the Configs-folder
+// and real-content-copied assertions above it are platform-independent and
+// still worth running on every platform.
 func TestWritePortablePDTTo_AlwaysCreatesConfigsAndFullDriversScaffold(t *testing.T) {
 	oldDrivers, oldConfigs := currentDriversBasePath, currentConfigsBasePath
 	defer func() {
@@ -49,6 +58,9 @@ func TestWritePortablePDTTo_AlwaysCreatesConfigsAndFullDriversScaffold(t *testin
 	}
 	if _, err := os.Stat(filepath.Join(dest, "Drivers", "Windows", "11", "Canon", "real-driver.zip")); err != nil {
 		t.Errorf("expected Canon's real local content to be copied: %v", err)
+	}
+	if goruntime.GOOS != "windows" {
+		return
 	}
 	for _, mfg := range driver.Manufacturers {
 		if mfg == "Canon" {

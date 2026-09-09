@@ -1,4 +1,5 @@
 build/bin
+Drivers
 node_modules
 frontend/dist
 .claude/settings.local.json

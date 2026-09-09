@@ -1,18 +1,18 @@
 import './style.css';
 import './app.css';
 
-import {
-    Manufacturers, AllManufacturers, DriverCandidates, DefaultDriverFor, GetCatalogStatus,
-    NewCsvTemplate, ImportCsv, OpenConfiguration, SaveConfiguration, Deploy, StopDeploy, ForceQuit,
-    GetSettings, SaveSettings, PickFolder, OpenManufacturerURL, OpenDriversBasePathInExplorer,
-    GetAppInfo, OpenRepoURL, CheckForUpdate, ApplyUpdate,
-    GetSevenZipVersion, OpenSevenZipHomepage, CheckSevenZipUpdate, UpdateSevenZip,
-    CaptureDevModeForPrinter, BrowseDevModeFile, EnumerateLocalPrinters,
-    ListPreinstallFolders, CheckExportCollisions, ExportConfigs,
-    ListRemovableDrives, FormatDrives, WritePortablePDT, SyncDriversToFlashDrives,
-    StartSpooler, StopSpooler, RestartSpooler, SpoolerStatus,
-    RefreshDriverCatalog, IsRunningFromRemovableDrive,
-} from '../wailsjs/go/main/App';
+// Namespace import, not named imports - deliberate. Wails regenerates
+// wailsjs/go/main/App.js from whatever the *App struct's method set actually
+// is FOR THE PLATFORM IT WAS LAST BUILT FOR, and a fair number of App's own
+// methods only exist on Windows (Spooler/Flash Drive/DEVMODE capture/Driver-
+// combobox methods/app self-update/7-Zip - see app.go's own "explicitly out
+// of scope" notes). A named import of a function that doesn't exist in the
+// generated module is a hard build-time failure under Vite/Rollup (confirmed
+// live building this exact file against a darwin-generated App.js); a
+// namespace import sidesteps that entirely - App.SomeWindowsOnlyMethod is
+// simply undefined at runtime on a macOS build, and every call site below
+// that can reach one is already guarded by isMac().
+import * as App from '../wailsjs/go/main/App';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 
 // Tooltip text, shared between the static template below and the
@@ -23,6 +23,7 @@ const TIP = {
     salesChainId: 'Used to name saved configuration/DEVMODE files for this job. Letters, numbers, hyphen, and underscore only.',
     manufacturer: 'Printer manufacturer - determines which drivers are offered.',
     driver: 'Driver to install/use for this printer. Type to fuzzy-search; multiple local versions of the same driver appear as separate dated entries - for a model-specific driver name (Kyocera, mainly), typing part of the model narrows the list the same way.',
+    model: 'Printer model - used to pick the right PPD when the manufacturer has multiple local driver packages, or to fuzzy-match a fallback PPD when no manufacturer package is installed. Optional when a manufacturer has just one installer package.',
     subnet: 'Pre-fills new rows\' IP with this subnet (a trailing "." is added automatically if you don\'t type one) - e.g. "10.1.1." so you only need to type the last octet per row.',
     portPrefixEnabled: 'When creating a new Standard TCP/IP port, prefix its name with the text to the right instead of using the bare IP address.',
     portPrefixText: 'Prefix text used when Port name prefix is checked, e.g. "IP_" - the port would be named "IP_10.1.1.50".',
@@ -39,7 +40,7 @@ const TIP = {
     selectAllHeader: 'Check/uncheck every row.',
     saveFileBasePath: 'Where PDT keeps saved JSON configs and captured DEVMODE/Device Settings files, and where Open/Save Configuration start from by default. Defaults to Configs\\ on this flash drive when running portably, or %LocalAppData%\\PDT\\Configs for an installed copy.',
     driversBasePath: 'Where PDT looks for printer drivers (Drivers\\Windows\\<version>\\<Manufacturer>\\...) - click Refresh (or restart PDT) after changing this to rescan the new location. Defaults to Drivers\\ on this flash drive when running portably, or %LocalAppData%\\PDT\\Drivers for an installed copy.',
-    preinstallBasePath: 'Where site-survey "<SalesChainID> - <Client> - <Address>" subfolders live - Export Configs looks here for the one matching the current SalesChain ID.',
+    preinstallBasePath: 'Where site-survey "<SaveID> - <Client> - <Address>" subfolders live - Export Configs looks here for the one matching the current Save ID.',
     manufacturerOrder: 'Drag to reorder - controls the Manufacturer dropdown\'s order in Defaults and in the grid. Settings > External Sites is always alphabetical regardless of this order.',
 };
 
@@ -129,6 +130,12 @@ function savedRowToRow(sr) {
 }
 
 const state = {
+    // 'windows' or 'darwin' - set once at the top of init() from the Go
+    // side's own runtime.GOOS (App.Platform), before anything else runs.
+    // The one feature-detection signal every platform-specific bit of UI
+    // below keys off, via the "platform-windows"/"platform-darwin" class
+    // isPlatform() adds to <body> - see app.css for the actual hide rules.
+    platform: 'windows',
     salesChainId: '',
     portPrefixEnabled: false,
     portPrefixText: '',
@@ -151,11 +158,11 @@ document.querySelector('#app').innerHTML = `
   </div>
   <div class="top-bar">
     <label title="${tip('salesChainId')}">Save ID <input type="text" id="salesChainId" class="input-needs-value" size="14" title="${tip('salesChainId')}"></label>
-    <button id="btnOpenConfig" title="Load a previously saved JSON configuration (rows + SalesChain ID).">Open Configuration</button>
-    <button id="btnSaveConfig" title="Save the current rows and SalesChain ID to a JSON configuration file.">Save Configuration</button>
-    <button id="btnResetConfig" title="Reset PDT to its default settings - clears every row, the SalesChain ID, and the Defaults panel.">Reset Configuration</button>
-    <button id="btnExportConfigs" title="Copy this SalesChain ID's Configs files (saved JSON config, captured DEVMODE/Device Settings) to its Preinstall subfolder on this computer.">Export Configs</button>
-    <div class="dropdown" id="spoolerDropdown">
+    <button id="btnOpenConfig" title="Load a previously saved JSON configuration (rows + Save ID).">Open Configuration</button>
+    <button id="btnSaveConfig" title="Save the current rows and Save ID to a JSON configuration file.">Save Configuration</button>
+    <button id="btnResetConfig" title="Reset PDT to its default settings - clears every row, the Save ID, and the Defaults panel.">Reset Configuration</button>
+    <button id="btnExportConfigs" title="Copy this Save ID's Configs files (saved JSON config, captured DEVMODE/Device Settings) to its Preinstall subfolder on this computer.">Export Configs</button>
+    <div class="dropdown platform-windows-only" id="spoolerDropdown">
       <button id="btnSpooler" title="Control the Windows Print Spooler service.">Spooler &#9662;</button>
       <div class="dropdown-menu" id="spoolerMenu" hidden>
         <button type="button" class="dropdown-item" data-spooler-action="restart">Restart</button>
@@ -239,18 +246,18 @@ document.querySelector('#app').innerHTML = `
             <a href="#" id="aboutRepoLink" title="Open in your browser"></a>
           </div>
         </div>
-        <div class="about-update">
+        <div class="about-update platform-windows-only">
           <button type="button" id="btnCheckUpdate" title="Check this project's GitHub Releases for a newer version.">Check for Updates</button>
           <button type="button" class="primary" id="btnApplyUpdate" hidden title="Download and install the update, then relaunch.">Update Now</button>
           <span class="modal-hint" id="updateStatus"></span>
         </div>
-        <p class="modal-hint">Self-extracting driver packages (Lexmark's own) are unpacked using
+        <p class="modal-hint platform-windows-only">Self-extracting driver packages (Lexmark's own) are unpacked using
           <a href="#" id="sevenZipCreditLink" title="Open 7-zip.org in your browser">7-Zip</a>, by Igor
           Pavlov, bundled with PDT under its own license.</p>
-        <div class="about-panel">
+        <div class="about-panel platform-windows-only">
           <div class="about-row"><span class="about-label">7-Zip</span><span id="aboutSevenZipVersion"></span></div>
         </div>
-        <div class="about-update">
+        <div class="about-update platform-windows-only">
           <button type="button" id="btnCheckSevenZipUpdate" title="Check 7-Zip's own releases for a newer version.">Check for 7-Zip Updates</button>
           <button type="button" class="primary" id="btnApplySevenZipUpdate" hidden title="Download and install the update.">Update 7-Zip Now</button>
           <span class="modal-hint" id="sevenZipUpdateStatus"></span>
@@ -283,7 +290,7 @@ document.querySelector('#app').innerHTML = `
   <div class="modal-backdrop" id="exportFolderBackdrop" hidden>
     <div class="modal">
       <h3>Select Preinstall Folder</h3>
-      <p class="modal-hint">More than one Preinstall subfolder matches this SalesChain ID. Choose which one to export to.</p>
+      <p class="modal-hint">More than one Preinstall subfolder matches this Save ID. Choose which one to export to.</p>
       <div id="exportFolderList" class="import-printers-list"></div>
       <div class="modal-actions">
         <button id="btnExportFolderCancel">Cancel</button>
@@ -372,18 +379,18 @@ document.querySelector('#app').innerHTML = `
       <fieldset class="defaults-sub">
         <legend>Port</legend>
         <label title="${tip('subnet')}">Subnet <input type="text" id="defSubnet" placeholder="10.1.1." title="${tip('subnet')}"></label>
-        <label title="${tip('portPrefixEnabled')}"><input type="checkbox" id="portPrefixEnabled" title="${tip('portPrefixEnabled')}"> Port name prefix</label>
-        <input type="text" id="portPrefixText" size="6" placeholder="IP_" title="${tip('portPrefixText')}">
-        <label title="${tip('useExistingPort')}"><input type="checkbox" id="defUseExistingPort" title="${tip('useExistingPort')}"> Use existing port</label>
-        <label title="${tip('snmp')}"><input type="checkbox" id="defSnmp" title="${tip('snmp')}"> SNMP</label>
-        <input type="text" id="defSnmpCommunity" size="8" placeholder="public" title="${tip('snmpCommunity')}">
+        <label class="platform-windows-only" title="${tip('portPrefixEnabled')}"><input type="checkbox" id="portPrefixEnabled" title="${tip('portPrefixEnabled')}"> Port name prefix</label>
+        <input type="text" id="portPrefixText" size="6" placeholder="IP_" class="platform-windows-only" title="${tip('portPrefixText')}">
+        <label class="platform-windows-only" title="${tip('useExistingPort')}"><input type="checkbox" id="defUseExistingPort" title="${tip('useExistingPort')}"> Use existing port</label>
+        <label class="platform-windows-only" title="${tip('snmp')}"><input type="checkbox" id="defSnmp" title="${tip('snmp')}"> SNMP</label>
+        <input type="text" id="defSnmpCommunity" size="8" placeholder="public" class="platform-windows-only" title="${tip('snmpCommunity')}">
       </fieldset>
       <fieldset class="defaults-sub">
         <legend>Print Defaults</legend>
         <label title="${tip('mono')}"><input type="checkbox" id="defMono" checked title="${tip('mono')}"> Monochrome</label>
         <label title="${tip('oneSided')}"><input type="checkbox" id="defOneSided" checked title="${tip('oneSided')}"> 1-sided</label>
       </fieldset>
-      <fieldset class="defaults-sub">
+      <fieldset class="defaults-sub platform-windows-only">
         <legend>Advanced</legend>
         <label title="${tip('apf')}"><input type="checkbox" id="defApf" title="${tip('apf')}"> Enable APF</label>
       </fieldset>
@@ -395,8 +402,8 @@ document.querySelector('#app').innerHTML = `
     <button id="btnRemoveRow" title="Remove every checked row from the grid.">Remove Selected</button>
     <button id="btnNewCsv" title="Create a blank CSV file with the correct column headers to fill in externally.">New CSV</button>
     <button id="btnImportCsv" title="Import printer rows from a CSV file.">Import CSV</button>
-    <button id="btnImportPrinters" title="Import already-configured printers from this computer.">Import Printers</button>
-    <button id="btnGetDevmode" title="Capture the current DEVMODE (print defaults) and Device Settings from every checked row's local printer.">Get DEVMODE</button>
+    <button id="btnImportPrinters" class="platform-windows-only" title="Import already-configured printers from this computer.">Import Printers</button>
+    <button id="btnGetDevmode" class="platform-windows-only" title="Capture the current DEVMODE (print defaults) and Device Settings from every checked row's local printer.">Get DEVMODE</button>
     <span class="spacer"></span>
     <button class="primary" id="btnDeploy" title="Deploy every checked row: create/update ports, drivers, and printer objects, then apply print configuration.">Deploy Checked Printers</button>
     <button class="danger" id="btnStop" disabled title="Stop after the row currently in progress finishes - no further row will start.">STOP</button>
@@ -411,11 +418,11 @@ document.querySelector('#app').innerHTML = `
           <th title="${tip('ip')}">IP</th>
           <th title="${tip('manufacturer')}">Manufacturer</th>
           <th title="${tip('driver')}">Driver</th>
-          <th title="${tip('snmpGrid')}">SNMP</th>
+          <th class="platform-windows-only" title="${tip('snmpGrid')}">SNMP</th>
           <th title="${tip('mono')}">Mono</th>
           <th title="${tip('oneSided')}">1-sided</th>
-          <th title="${tip('useExistingPort')}">UEP</th>
-          <th title="Capture or browse to this row's DEVMODE (print defaults) and Device Settings, applied last during Deploy."></th>
+          <th class="platform-windows-only" title="${tip('useExistingPort')}">UEP</th>
+          <th class="platform-windows-only" title="Capture or browse to this row's DEVMODE (print defaults) and Device Settings, applied last during Deploy."></th>
           <th title="Double-click to remove this one row, without needing to check it first."></th>
         </tr>
       </thead>
@@ -491,7 +498,7 @@ function isValidName(name) {
     return (name || '').trim().length > 0;
 }
 
-// Applies value to both the SalesChain ID field and state, sanitized the
+// Applies value to both the Save ID field and state, sanitized the
 // same way live typing is - used for the field's own input handler and for
 // loading a saved configuration, so an old/hand-edited file can't bypass the
 // same restriction. A reserved device name can't be fixed by stripping
@@ -512,7 +519,7 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
     updateDeployButtonEnabled();
 }
 
-// SalesChain ID is foundational - it's what every saved config, DEVMODE
+// Save ID is foundational - it's what every saved config, DEVMODE
 // .bin, and driver-data sidecar is named after - so nothing else in PDT is
 // usable until it has a value, to rule out ever configuring/deploying under
 // the wrong job's ID by mistake. Exceptions: the field itself; Open
@@ -524,7 +531,7 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 // Drivers/Configs folders, topping up an existing flash drive's own Drivers
 // folder, restarting the one Print Spooler service shared by every queue on
 // the machine, rescanning the Drivers folder in place, and opening it in
-// File Explorer all have nothing to do with one particular SalesChain ID);
+// File Explorer all have nothing to do with one particular Save ID);
 // the Defaults panel's Manufacturer dropdown and
 // Check for Updates button (also job-independent - picking a manufacturer
 // and opening its configured download page touches no SalesChain-ID-named
@@ -536,17 +543,17 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 // just openable; the shared confirm dialog (#confirmBackdrop, showConfirm())
 // those job-independent flows also pop up through - Write to Flash Drive's
 // own "Erase and Format"/Cancel buttons landed disabled with an empty
-// SalesChain ID before this was added, confirmed live, since that dialog
+// Save ID before this was added, confirmed live, since that dialog
 // lives outside #flashDriveBackdrop's own already-exempt subtree. The other
 // callers of showConfirm() (Reset Configuration, Export Configs) are
 // themselves gated by this same sweep, so their own confirm popups are
 // simply unreachable while locked either way - exempting the dialog itself
 // changes nothing for them; Deploy Checked Printers, whose
 // enabled state is entirely owned by updateDeployButtonEnabled() instead
-// (IP-validity, not just SalesChain ID, decides that button - see its own
+// (IP-validity, not just Save ID, decides that button - see its own
 // comment for why that needs to be fully separate from this generic sweep);
 // and STOP, which must stay clickable for the entire length of an in-progress
-// deploy even if someone edits SalesChain ID mid-run - it's the one button
+// deploy even if someone edits Save ID mid-run - it's the one button
 // that would be actively harmful to lock at the exact moment it's needed.
 //
 // Unconditional: every non-exempt control is set to exactly `locked` on
@@ -559,7 +566,7 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 // exactly the class of bug that produced this function's own git history),
 // so the whole approach was replaced with this: lock/unlock is always
 // unconditional here, and the one control with its own extra condition
-// beyond "SalesChain ID is set" (portPrefixText) gets that condition
+// beyond "Save ID is set" (portPrefixText) gets that condition
 // re-asserted right after, every time - see updatePortPrefixTextEnabled().
 function applySalesChainGate() {
     const locked = !state.salesChainId;
@@ -573,7 +580,7 @@ function applySalesChainGate() {
     updateSnmpCommunityEnabled();
 }
 
-// portPrefixText is enabled only when BOTH SalesChain ID is set (the
+// portPrefixText is enabled only when BOTH Save ID is set (the
 // generic gate's own condition) AND its own "Port name prefix" checkbox is
 // checked - a second, narrower condition the generic sweep above knows
 // nothing about, so it always needs reasserting right after that sweep runs.
@@ -583,7 +590,7 @@ function updatePortPrefixTextEnabled() {
 }
 
 // Same reasoning as updatePortPrefixTextEnabled(), for the Defaults panel's
-// own SNMP community string field: enabled only when SalesChain ID is set
+// own SNMP community string field: enabled only when Save ID is set
 // AND the SNMP checkbox next to it is checked.
 function updateSnmpCommunityEnabled() {
     const input = el('defSnmpCommunity');
@@ -617,7 +624,7 @@ function playInvalidDing() {
 }
 
 // Flashes input red and dings - called once per rejected keystroke (see the
-// SalesChain ID input handler). Removing the class before re-adding it (with
+// Save ID input handler). Removing the class before re-adding it (with
 // a reflow forced in between) restarts the CSS animation even if the
 // previous flash from a rapid-fire rejected keystroke hasn't finished yet,
 // rather than a no-op re-add the browser would otherwise ignore.
@@ -628,13 +635,25 @@ function flashInvalidInput(input) {
     playInvalidDing();
 }
 
+// isMac() is the one check every platform-specific call site below uses,
+// rather than comparing state.platform directly everywhere - "darwin" is the
+// only other value App.Platform ever returns today, but reading this as "is
+// the reduced macOS UI active" is clearer at each call site than the literal
+// string.
+function isMac() {
+    return state.platform === 'darwin';
+}
+
 async function init() {
-    state.manufacturers = await Manufacturers();
-    state.allManufacturers = await AllManufacturers();
+    state.platform = await App.Platform();
+    document.body.classList.add(state.platform === 'darwin' ? 'platform-darwin' : 'platform-windows');
+
+    state.manufacturers = await App.Manufacturers();
+    state.allManufacturers = await App.AllManufacturers();
     el('defMfg').innerHTML = state.manufacturers.map(m => `<option value="${m}">${m}</option>`).join('');
     await resetDefaultsPanel();
 
-    const status = await GetCatalogStatus();
+    const status = await App.GetCatalogStatus();
     if (!status.ok) {
         const warn = el('catalogWarning');
         warn.hidden = false;
@@ -643,21 +662,25 @@ async function init() {
         el('noDriversBanner').hidden = false;
     }
 
-    state.settings = await GetSettings();
+    state.settings = await App.GetSettings();
 
     renderGrid();
     wireEvents();
     setupDefaultsComboboxes();
-    refreshSpoolerButtonState(); // not awaited - shouldn't delay the rest of startup
+    if (!isMac()) {
+        refreshSpoolerButtonState(); // not awaited - shouldn't delay the rest of startup - Windows-only, no CUPS-service-restart analog (see this port's own "explicitly out of scope" notes)
+    }
 
     // Write to Flash Drive can't overwrite the exact exe it's currently
-    // running from (Windows refuses - confirmed live) - disabled outright
-    // when running portably from removable media itself, rather than
-    // failing at click time. Set once, directly, rather than through
+    // running from (Windows refuses outright - confirmed live; macOS allows
+    // it technically, but stamping a running copy out onto more drives still
+    // makes no sense as a workflow either way) - disabled outright when
+    // running portably from removable media itself, rather than failing at
+    // click time. Set once, directly, rather than through
     // applySalesChainGate()'s own exemption list - that sweep skips exempt
     // elements entirely (see its own doc comment), so this sticks regardless
     // of Save ID state.
-    if (await IsRunningFromRemovableDrive()) {
+    if (await App.IsRunningFromRemovableDrive()) {
         const btn = el('btnFlashDrive');
         btn.disabled = true;
         btn.title = 'Write to Flash Drive is unavailable when running PDT from a flash drive itself - use an installed copy instead.';
@@ -858,7 +881,7 @@ function renderGrid() {
 // (also checks state.deploying and state.salesChainId itself) rather than
 // composing with applySalesChainGate()'s generic dataset.gateLocked sweep,
 // which has no concept of IP validity and would otherwise just blindly
-// re-enable this button the moment SalesChain ID gets a value regardless of
+// re-enable this button the moment Save ID gets a value regardless of
 // whether the rows are actually ready - see the gate's own exemption list,
 // which leaves btnDeploy out for exactly this reason.
 function updateDeployButtonEnabled() {
@@ -881,11 +904,11 @@ function rowHtml(r) {
       <td><input type="text" class="row-ip${isValidPortValue(r.ip) ? '' : ' input-needs-value'}" value="${attr(r.ip)}" placeholder="or NUL" title="${tip('ip')}"></td>
       <td>${mfgSelectHtml(r)}</td>
       <td><div class="combo"><input type="text" class="row-driver${r.driver ? '' : ' input-needs-value'}" value="${attr(r.driver)}" title="${tip('driver')}"><div class="combo-list" hidden></div></div></td>
-      <td><input type="text" class="row-snmp" value="${attr(r.snmpCommunity)}" placeholder="off" title="${tip('snmpGrid')}"></td>
+      <td class="platform-windows-only"><input type="text" class="row-snmp" value="${attr(r.snmpCommunity)}" placeholder="off" title="${tip('snmpGrid')}"></td>
       <td class="checkbox-cell"><input type="checkbox" class="row-mono" ${r.mono ? 'checked' : ''} title="${tip('mono')}"></td>
       <td class="checkbox-cell"><input type="checkbox" class="row-onesided" ${r.oneSided ? 'checked' : ''} title="${tip('oneSided')}"></td>
-      <td class="checkbox-cell"><input type="checkbox" class="row-uep" ${r.useExistingPort ? 'checked' : ''} title="${tip('useExistingPort')}"></td>
-      <td>${devModeButtonHtml(r)}</td>
+      <td class="checkbox-cell platform-windows-only"><input type="checkbox" class="row-uep" ${r.useExistingPort ? 'checked' : ''} title="${tip('useExistingPort')}"></td>
+      <td class="platform-windows-only">${devModeButtonHtml(r)}</td>
       <td class="checkbox-cell"><button class="row-remove" title="Double-click to remove this row">&times;</button></td>
     </tr>`;
 }
@@ -912,7 +935,7 @@ function mfgSelectHtml(r) {
 // panel's and every existing grid row's - each preserving its own current
 // selection rather than resetting to the new first option.
 async function refreshManufacturerDropdowns() {
-    state.manufacturers = await Manufacturers();
+    state.manufacturers = await App.Manufacturers();
     const optsHtml = (selected) => state.manufacturers
         .map(m => `<option value="${m}" ${m === selected ? 'selected' : ''}>${m}</option>`).join('');
 
@@ -969,30 +992,27 @@ function wireRowEvents() {
                 target.setSelectionRange(end, end);
             }, 0);
         });
-        tr.querySelector('.row-snmp').addEventListener('input', (e) => { row.snmpCommunity = e.target.value; });
         tr.querySelector('.row-mono').addEventListener('change', (e) => { row.mono = e.target.checked; });
         tr.querySelector('.row-onesided').addEventListener('change', (e) => { row.oneSided = e.target.checked; });
-        tr.querySelector('.row-uep').addEventListener('change', (e) => { row.useExistingPort = e.target.checked; });
 
-        const mfgSelect = tr.querySelector('.row-mfg');
-        mfgSelect.addEventListener('change', (e) => {
-            row.manufacturer = e.target.value;
-            row.driver = '';
-            renderGrid();
-        });
+        if (!isMac()) {
+            tr.querySelector('.row-snmp').addEventListener('input', (e) => { row.snmpCommunity = e.target.value; });
+            tr.querySelector('.row-uep').addEventListener('change', (e) => { row.useExistingPort = e.target.checked; });
+            wireDevModeButton(tr, row);
+        }
 
         const driverCombo = tr.querySelector('.row-driver').closest('.combo');
         const driverInput = driverCombo.querySelector('input');
         setupCombobox(
             driverInput,
             driverCombo.querySelector('.combo-list'),
-            // Model no longer has its own field - typing part of a model
-            // name (e.g. "MA4500") straight into Driver's own filter text
-            // narrows the list exactly the same way a separate Model field
-            // used to, since driver names that are model-specific already
-            // spell the model out (Kyocera's, mainly - see the driver
-            // tooltip).
-            (filterText) => DriverCandidates(row.manufacturer, '', filterText),
+            // Model has no field of its own - typing part of a model name
+            // (e.g. "MA4500") straight into Driver's own filter text narrows
+            // the list the same way a separate Model field would, since a
+            // driver/PPD name that's model-specific already spells the model
+            // out (Kyocera's, mainly, on Windows; a macOS PPD's own filename
+            // usually does too - see driver.ppdMatchLabel).
+            (filterText) => App.DriverCandidates(row.manufacturer, '', filterText),
             (value) => {
                 row.driver = value;
                 driverInput.classList.toggle('input-needs-value', !value);
@@ -1000,7 +1020,12 @@ function wireRowEvents() {
             () => addPrinterRow(true),
         );
 
-        wireDevModeButton(tr, row);
+        const mfgSelect = tr.querySelector('.row-mfg');
+        mfgSelect.addEventListener('change', (e) => {
+            row.manufacturer = e.target.value;
+            row.driver = '';
+            renderGrid();
+        });
 
         // Double-click rather than a confirm() dialog - fast for someone who
         // means it, but a stray single click can't nuke a row by accident.
@@ -1034,16 +1059,16 @@ function patchRowDevModeButton(row) {
 // already-"DEVMODE SET" row replaces it the same way.
 async function captureOrBrowseDevMode(row) {
     if (!state.salesChainId) {
-        logStatus('WARN', 'Set a SalesChain ID before capturing a DEVMODE.');
+        logStatus('WARN', 'Set a Save ID before capturing a DEVMODE.');
         return;
     }
     const tr = document.querySelector(`tr[data-id="${row._id}"]`);
     const btn = tr?.querySelector('.row-devmode');
     if (btn) btn.disabled = true;
     try {
-        let result = await CaptureDevModeForPrinter(state.salesChainId, row.name);
+        let result = await App.CaptureDevModeForPrinter(state.salesChainId, row.name);
         if (result.error) {
-            result = await BrowseDevModeFile(state.salesChainId, row.name);
+            result = await App.BrowseDevModeFile(state.salesChainId, row.name);
         }
         if (result.canceled) {
             logStatus('INFO', 'DEVMODE capture canceled.');
@@ -1072,7 +1097,7 @@ function setupDefaultsComboboxes() {
         el('defDriverList'),
         // No separate Model field here either - see the grid row driver
         // combobox's own comment.
-        (filterText) => DriverCandidates(el('defMfg').value, '', filterText),
+        (filterText) => App.DriverCandidates(el('defMfg').value, '', filterText),
         (value) => { el('defDriver').classList.toggle('input-needs-value', !value); },
     );
 }
@@ -1087,24 +1112,26 @@ async function resetDefaultsPanel() {
     const mfgSelect = el('defMfg');
     mfgSelect.value = state.manufacturers[0] || '';
     mfgSelect.classList.toggle('input-needs-value', !mfgSelect.value);
-    el('defDriver').value = mfgSelect.value ? await DefaultDriverFor(mfgSelect.value) : '';
+    el('defDriver').value = mfgSelect.value ? await App.DefaultDriverFor(mfgSelect.value) : '';
     el('defDriver').classList.toggle('input-needs-value', !el('defDriver').value);
+    if (!isMac()) {
+        el('portPrefixEnabled').checked = false;
+        state.portPrefixEnabled = false;
+        el('portPrefixText').value = '';
+        state.portPrefixText = '';
+        updatePortPrefixTextEnabled();
+        el('defUseExistingPort').checked = false;
+        el('defSnmp').checked = false;
+        el('defSnmpCommunity').value = 'public';
+        updateSnmpCommunityEnabled();
+        el('defApf').checked = false;
+    }
     el('defSubnet').value = '';
-    el('portPrefixEnabled').checked = false;
-    state.portPrefixEnabled = false;
-    el('portPrefixText').value = '';
-    state.portPrefixText = '';
-    updatePortPrefixTextEnabled();
-    el('defUseExistingPort').checked = false;
-    el('defSnmp').checked = false;
-    el('defSnmpCommunity').value = 'public';
-    updateSnmpCommunityEnabled();
     el('defMono').checked = true;
     el('defOneSided').checked = true;
-    el('defApf').checked = false;
 }
 
-// Reset Configuration: takes the whole app - grid, SalesChain ID, and the
+// Reset Configuration: takes the whole app - grid, Save ID, and the
 // Defaults panel - back to how it looks right after launching PDT. Confirms
 // first whenever there's actually something to lose (an empty, freshly-
 // launched app has nothing worth confirming).
@@ -1112,7 +1139,7 @@ async function resetConfiguration() {
     if (state.rows.length > 0 || state.salesChainId) {
         const ok = await showConfirm({
             title: 'Warning',
-            message: 'Reset PDT to its default settings? This clears every row, the SalesChain ID, and the Defaults panel.',
+            message: 'Reset PDT to its default settings? This clears every row, the Save ID, and the Defaults panel.',
             okLabel: 'Reset',
         });
         if (!ok) return;
@@ -1137,11 +1164,11 @@ function addPrinterRow(focusNewRow = false) {
         ip,
         manufacturer: el('defMfg').value,
         driver: el('defDriver').value,
-        snmpCommunity: el('defSnmp').checked ? el('defSnmpCommunity').value : '',
+        snmpCommunity: !isMac() && el('defSnmp').checked ? el('defSnmpCommunity').value : '',
         mono: el('defMono').checked,
         oneSided: el('defOneSided').checked,
-        useExistingPort: el('defUseExistingPort').checked,
-        advancedPrintingFeatures: el('defApf').checked,
+        useExistingPort: !isMac() && el('defUseExistingPort').checked,
+        advancedPrintingFeatures: !isMac() && el('defApf').checked,
     });
     state.rows.push(row);
     renderGrid();
@@ -1173,17 +1200,19 @@ function wireEvents() {
         }
     });
 
-    el('portPrefixEnabled').addEventListener('change', (e) => {
-        state.portPrefixEnabled = e.target.checked;
-        updatePortPrefixTextEnabled();
-    });
-    el('portPrefixText').addEventListener('input', (e) => { state.portPrefixText = e.target.value; });
+    if (!isMac()) {
+        el('portPrefixEnabled').addEventListener('change', (e) => {
+            state.portPrefixEnabled = e.target.checked;
+            updatePortPrefixTextEnabled();
+        });
+        el('portPrefixText').addEventListener('input', (e) => { state.portPrefixText = e.target.value; });
 
-    el('defSnmp').addEventListener('change', updateSnmpCommunityEnabled);
+        el('defSnmp').addEventListener('change', updateSnmpCommunityEnabled);
+    }
 
     el('defMfg').addEventListener('change', async (e) => {
         e.target.classList.toggle('input-needs-value', !e.target.value);
-        el('defDriver').value = await DefaultDriverFor(el('defMfg').value);
+        el('defDriver').value = await App.DefaultDriverFor(el('defMfg').value);
         el('defDriver').classList.toggle('input-needs-value', !el('defDriver').value);
     });
 
@@ -1200,12 +1229,12 @@ function wireEvents() {
     });
 
     el('btnNewCsv').addEventListener('click', async () => {
-        const result = await NewCsvTemplate();
+        const result = await App.NewCsvTemplate();
         if (!result.canceled) logStatus('OK', `Wrote new CSV template to ${result.path}`);
     });
 
     el('btnImportCsv').addEventListener('click', async () => {
-        const result = await ImportCsv();
+        const result = await App.ImportCsv();
         if (result.canceled) return;
         state.rows.push(...result.rows.map(pr => printerRowToRow(pr, true)));
         renderGrid();
@@ -1224,12 +1253,12 @@ function wireEvents() {
             return;
         }
         if (!state.salesChainId) {
-            logStatus('WARN', 'Set a SalesChain ID before capturing DEVMODE configs.');
+            logStatus('WARN', 'Set a Save ID before capturing DEVMODE configs.');
             return;
         }
         let captured = 0;
         for (const row of selected) {
-            const result = await CaptureDevModeForPrinter(state.salesChainId, row.name);
+            const result = await App.CaptureDevModeForPrinter(state.salesChainId, row.name);
             if (!result.error) {
                 row.devModeFile = result.fileName;
                 patchRowDevModeButton(row);
@@ -1240,7 +1269,7 @@ function wireEvents() {
     });
 
     el('btnOpenConfig').addEventListener('click', async () => {
-        const result = await OpenConfiguration();
+        const result = await App.OpenConfiguration();
         if (result.canceled) return;
         setSalesChainId(result.config.SalesChainId, {rejectReservedAsEmpty: true});
         state.rows = (result.config.Printers || []).map(savedRowToRow);
@@ -1250,7 +1279,7 @@ function wireEvents() {
 
     el('btnSaveConfig').addEventListener('click', async () => {
         const cfg = {SalesChainId: state.salesChainId, Printers: state.rows.map(rowToSavedRow)};
-        const result = await SaveConfiguration(cfg);
+        const result = await App.SaveConfiguration(cfg);
         if (!result.canceled) logStatus('OK', `Saved configuration to ${result.path}`);
     });
 
@@ -1297,11 +1326,11 @@ function wireEvents() {
         if (choice === 'cancel') return;
         if (choice === 'force') {
             logStatus('ERR', 'Force Stop requested - closing PDT immediately.');
-            ForceQuit();
+            App.ForceQuit();
             return;
         }
         el('btnStop').disabled = true;
-        await StopDeploy();
+        await App.StopDeploy();
         logStatus('WARN', 'Stop requested - the current row will finish, then no further row will start.');
     });
 
@@ -1371,13 +1400,13 @@ function currentManufacturerOrder() {
 
 // --- Import Printers modal ---
 
-// Candidates from the most recent EnumerateLocalPrinters() call, indexed the
+// Candidates from the most recent App.EnumerateLocalPrinters() call, indexed the
 // same as the checkboxes rendered from them - held here (not in state) since
 // it's only ever needed while the modal itself is open.
 let importPrintersCandidates = [];
 
 async function openImportPrintersModal() {
-    importPrintersCandidates = await EnumerateLocalPrinters() || [];
+    importPrintersCandidates = await App.EnumerateLocalPrinters() || [];
     renderImportPrintersList();
     el('importPrintersGetDevmode').checked = true;
     el('importPrintersBackdrop').hidden = false;
@@ -1429,12 +1458,12 @@ async function confirmImportPrinters() {
         return;
     }
     if (!state.salesChainId) {
-        logStatus('WARN', `Imported ${newRows.length} printer(s). Set a SalesChain ID to capture DEVMODE configs.`);
+        logStatus('WARN', `Imported ${newRows.length} printer(s). Set a Save ID to capture DEVMODE configs.`);
         return;
     }
     let captured = 0;
     for (const row of newRows) {
-        const result = await CaptureDevModeForPrinter(state.salesChainId, row.name);
+        const result = await App.CaptureDevModeForPrinter(state.salesChainId, row.name);
         if (!result.error) {
             row.devModeFile = result.fileName;
             patchRowDevModeButton(row);
@@ -1510,9 +1539,9 @@ function resolveExportCollision(files) {
     });
 }
 
-// Export Configs: copies every Configs/<SalesChainID>* file (the saved JSON
+// Export Configs: copies every Configs/<SaveID>* file (the saved JSON
 // config, captured DEVMODE .bin's, driver-data sidecars) from this flash
-// drive to the matching "<SalesChainID> - <Client> - <Address>" subfolder
+// drive to the matching "<SaveID> - <Client> - <Address>" subfolder
 // under Preinstall Base Path (Settings > General), so a site-survey folder
 // ends up with everything PDT captured on the reference machine before the
 // tech ever gets to the actual install. Preinstall Base Path is a folder on
@@ -1522,19 +1551,19 @@ function resolveExportCollision(files) {
 async function exportConfigs() {
     const proceed = await showConfirm({
         title: 'Confirm Export Location',
-        message: 'Export Configs copies this SalesChain ID\'s Configs files to THIS computer\'s Preinstall folder.\n\n' +
+        message: 'Export Configs copies this Save ID\'s Configs files to THIS computer\'s Preinstall folder.\n\n' +
             'Continue only if PDT is running on the technician\'s laptop - not the computer the flash drive\'s Configs were captured on.',
         okLabel: 'Continue',
     });
     if (!proceed) return;
 
-    const listResult = await ListPreinstallFolders(state.salesChainId);
+    const listResult = await App.ListPreinstallFolders(state.salesChainId);
     if (listResult.error) {
         logStatus('ERR', listResult.error);
         return;
     }
     if (listResult.folders.length === 0) {
-        logStatus('ERR', `No Preinstall subfolder found for SalesChain ID "${state.salesChainId}". Create "${state.salesChainId} - <Client> - <Address>" under the configured Preinstall Base Path first.`);
+        logStatus('ERR', `No Preinstall subfolder found for Save ID "${state.salesChainId}". Create "${state.salesChainId} - <Client> - <Address>" under the configured Preinstall Base Path first.`);
         return;
     }
 
@@ -1544,13 +1573,13 @@ async function exportConfigs() {
         if (!destFolder) return;
     }
 
-    const collisionResult = await CheckExportCollisions(state.salesChainId, destFolder);
+    const collisionResult = await App.CheckExportCollisions(state.salesChainId, destFolder);
     if (collisionResult.error) {
         logStatus('ERR', collisionResult.error);
         return;
     }
     if (collisionResult.sourceFiles.length === 0) {
-        logStatus('WARN', `No Configs files found for SalesChain ID "${state.salesChainId}".`);
+        logStatus('WARN', `No Configs files found for Save ID "${state.salesChainId}".`);
         return;
     }
 
@@ -1560,7 +1589,7 @@ async function exportConfigs() {
         if (!mode) return;
     }
 
-    const result = await ExportConfigs(state.salesChainId, destFolder, mode);
+    const result = await App.ExportConfigs(state.salesChainId, destFolder, mode);
     if (result.error) {
         logStatus('ERR', `Export Configs failed: ${result.error}`);
         return;
@@ -1583,14 +1612,14 @@ function applySpoolerButtonState(state) {
 }
 
 async function refreshSpoolerButtonState() {
-    const result = await SpoolerStatus();
+    const result = await App.SpoolerStatus();
     applySpoolerButtonState(result.error ? 'pending' : result.state);
 }
 
 // controlSpooler: action is 'restart'/'start'/'stop', matching each dropdown
 // item's data-spooler-action and the Go method name directly. Job-independent
 // (this affects every print queue on the machine, not just PDT's own rows),
-// so it needs no SalesChain ID and isn't gated by it - same reasoning as
+// so it needs no Save ID and isn't gated by it - same reasoning as
 // Settings/Write to Flash Drive. Shows pending (yellow) for the duration of
 // the call itself - Restart in particular takes a real, visible moment -
 // then the actual resulting state the Go side already re-queried once it
@@ -1612,7 +1641,7 @@ async function controlSpooler(action) {
 
 // --- Write to Flash Drive ---
 
-// Drives from the most recent ListRemovableDrives() call, indexed the same
+// Drives from the most recent App.ListRemovableDrives() call, indexed the same
 // as the checkboxes rendered from them - same pattern as
 // importPrintersCandidates, held here rather than in state since it's only
 // ever needed while the modal is open.
@@ -1642,7 +1671,7 @@ let flashDriveMode = 'write';
 
 async function openFlashDriveModal(mode = 'write') {
     flashDriveMode = mode;
-    const result = await ListRemovableDrives();
+    const result = await App.ListRemovableDrives();
     if (result.error) {
         logStatus('ERR', result.error);
         return;
@@ -1711,7 +1740,7 @@ async function confirmWriteToFlashDrive() {
             okLabel: 'Erase and Format',
         });
         if (!ok) return;
-        const formatResult = await FormatDrives(letters);
+        const formatResult = await App.FormatDrives(letters);
         for (const l of formatResult.succeeded || []) logStatus('OK', `Formatted ${l} as exFAT.`);
         for (const l of Object.keys(formatResult.failed || {})) logStatus('ERR', `Could not format ${l}: ${formatResult.failed[l]}`);
         letters = formatResult.succeeded || [];
@@ -1732,17 +1761,17 @@ async function confirmWriteToFlashDrive() {
     openFlashCopyProgressModal(mode, letters);
     try {
         if (mode === 'sync') {
-            const syncResult = await SyncDriversToFlashDrives(letters);
+            const syncResult = await App.SyncDriversToFlashDrives(letters);
             for (const l of syncResult.succeeded || []) logStatus('OK', `Synced Drivers to ${l}.`);
             for (const l of Object.keys(syncResult.failed || {})) logStatus('ERR', `Could not sync Drivers to ${l}: ${syncResult.failed[l]}`);
             if ((syncResult.succeeded || []).length > 0) {
-                const status = await RefreshDriverCatalog();
+                const status = await App.RefreshDriverCatalog();
                 el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
             }
             return;
         }
 
-        const writeResult = await WritePortablePDT(letters);
+        const writeResult = await App.WritePortablePDT(letters);
         for (const l of writeResult.succeeded || []) logStatus('OK', `Wrote portable PDT to ${l}.`);
         for (const l of Object.keys(writeResult.failed || {})) logStatus('ERR', `Could not write to ${l}: ${writeResult.failed[l]}`);
     } finally {
@@ -1893,7 +1922,7 @@ function switchSettingsTab(tab) {
 }
 
 async function renderAboutPanel() {
-    const info = await GetAppInfo();
+    const info = await App.GetAppInfo();
     el('aboutName').textContent = info.name;
     el('aboutVersion').textContent = info.version;
     el('aboutAuthor').textContent = info.author;
@@ -1901,14 +1930,16 @@ async function renderAboutPanel() {
     link.textContent = info.repoUrl;
     link.addEventListener('click', (e) => {
         e.preventDefault();
-        OpenRepoURL();
+        App.OpenRepoURL();
     });
 
-    el('aboutSevenZipVersion').textContent = (await GetSevenZipVersion()) || 'unavailable';
-    el('sevenZipCreditLink').addEventListener('click', (e) => {
-        e.preventDefault();
-        OpenSevenZipHomepage();
-    });
+    if (!isMac()) {
+        el('aboutSevenZipVersion').textContent = (await App.GetSevenZipVersion()) || 'unavailable';
+        el('sevenZipCreditLink').addEventListener('click', (e) => {
+            e.preventDefault();
+            App.OpenSevenZipHomepage();
+        });
+    }
 }
 
 // The asset URL and version number from the most recent CheckForUpdate
@@ -1927,7 +1958,7 @@ async function checkForUpdate() {
     el('btnApplyUpdate').hidden = true;
     status.textContent = 'Checking...';
     try {
-        const result = await CheckForUpdate();
+        const result = await App.CheckForUpdate();
         if (result.error) {
             status.textContent = result.error;
         } else if (result.available) {
@@ -1950,7 +1981,7 @@ async function applyUpdate() {
     btn.disabled = true;
     el('updateStatus').textContent = 'Downloading and installing the update...';
     try {
-        const result = await ApplyUpdate(pendingUpdateAssetUrl, pendingUpdateVersion);
+        const result = await App.ApplyUpdate(pendingUpdateAssetUrl, pendingUpdateVersion);
         if (result.error) {
             el('updateStatus').textContent = result.error;
             btn.disabled = false;
@@ -1974,7 +2005,7 @@ async function checkSevenZipUpdate() {
     el('btnApplySevenZipUpdate').hidden = true;
     status.textContent = 'Checking...';
     try {
-        const result = await CheckSevenZipUpdate();
+        const result = await App.CheckSevenZipUpdate();
         if (result.error) {
             status.textContent = result.error;
         } else if (result.available) {
@@ -1996,12 +2027,12 @@ async function applySevenZipUpdate() {
     btn.disabled = true;
     el('sevenZipUpdateStatus').textContent = 'Downloading and installing the update...';
     try {
-        const result = await UpdateSevenZip(pendingSevenZipAssetUrl);
+        const result = await App.UpdateSevenZip(pendingSevenZipAssetUrl);
         if (result.error) {
             el('sevenZipUpdateStatus').textContent = result.error;
         } else {
             el('sevenZipUpdateStatus').textContent = 'Updated successfully.';
-            el('aboutSevenZipVersion').textContent = (await GetSevenZipVersion()) || 'unavailable';
+            el('aboutSevenZipVersion').textContent = (await App.GetSevenZipVersion()) || 'unavailable';
         }
     } catch (e) {
         el('sevenZipUpdateStatus').textContent = `Update failed: ${e}`;
@@ -2028,17 +2059,17 @@ function wireSettingsModal() {
     wireBackdropDismiss('settingsBackdrop', closeSettingsModal);
 
     el('btnBrowseBasePath').addEventListener('click', async () => {
-        const result = await PickFolder(el('settingsBasePath').value);
+        const result = await App.PickFolder(el('settingsBasePath').value);
         if (!result.canceled) el('settingsBasePath').value = result.path;
     });
 
     el('btnBrowseDriversBasePath').addEventListener('click', async () => {
-        const result = await PickFolder(el('settingsDriversBasePath').value);
+        const result = await App.PickFolder(el('settingsDriversBasePath').value);
         if (!result.canceled) el('settingsDriversBasePath').value = result.path;
     });
 
     el('btnBrowsePreinstallBasePath').addEventListener('click', async () => {
-        const result = await PickFolder(el('settingsPreinstallBasePath').value);
+        const result = await App.PickFolder(el('settingsPreinstallBasePath').value);
         if (!result.canceled) el('settingsPreinstallBasePath').value = result.path;
     });
 
@@ -2054,7 +2085,7 @@ function wireSettingsModal() {
             manufacturerUrls[input.dataset.mfg] = input.value;
         }
         const manufacturerOrder = currentManufacturerOrder();
-        const saved = await SaveSettings({
+        const saved = await App.SaveSettings({
             saveFileBasePath: el('settingsBasePath').value,
             driversBasePath: el('settingsDriversBasePath').value,
             preinstallBasePath: el('settingsPreinstallBasePath').value,
@@ -2068,7 +2099,7 @@ function wireSettingsModal() {
     });
 
     el('btnCheckUpdates').addEventListener('click', () => {
-        OpenManufacturerURL(el('defMfg').value);
+        App.OpenManufacturerURL(el('defMfg').value);
     });
 
     // Refresh: rescans the Drivers folder in place (RefreshDriverCatalog),
@@ -2083,14 +2114,14 @@ function wireSettingsModal() {
         const btn = el('btnRefreshDrivers');
         btn.disabled = true;
         try {
-            const status = await RefreshDriverCatalog();
+            const status = await App.RefreshDriverCatalog();
             el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
             if (!status.ok) {
                 logStatus('ERR', `Driver catalog refresh failed: ${status.error}`);
             } else {
                 const mfgSelect = el('defMfg');
                 if (mfgSelect.value) {
-                    el('defDriver').value = await DefaultDriverFor(mfgSelect.value);
+                    el('defDriver').value = await App.DefaultDriverFor(mfgSelect.value);
                 }
                 logStatus('OK', status.hasDrivers
                     ? 'Driver catalog refreshed.'
@@ -2105,7 +2136,7 @@ function wireSettingsModal() {
     // scaffold-then-open call Settings' own right-arrow button uses, just
     // reachable straight from the toolbar without opening Settings first.
     el('btnOpenDriversFolder').addEventListener('click', async () => {
-        const result = await OpenDriversBasePathInExplorer(state.settings.driversBasePath);
+        const result = await App.OpenDriversBasePathInExplorer(state.settings.driversBasePath);
         if (result.error) logStatus('ERR', `Could not open Drivers folder: ${result.error}`);
     });
 }
@@ -2137,7 +2168,7 @@ async function deploy() {
 
     const portPrefix = state.portPrefixEnabled ? state.portPrefixText : '';
     try {
-        await Deploy(selected.map(rowToPrinterRow), state.salesChainId, portPrefix);
+        await App.Deploy(selected.map(rowToPrinterRow), state.salesChainId, portPrefix);
     } finally {
         state.deploying = false;
         state.activeDeploy = null;

@@ -2,6 +2,22 @@
     box-sizing: border-box;
 }
 
+/* Platform-specific UI - main.js's init() adds exactly one of these two
+   classes to <body> from App.Platform(), before anything else renders.
+   .platform-windows-only marks Windows-only concepts with no macOS
+   equivalent yet (Spooler, Flash Drive/Sync, DEVMODE capture, SNMP/port-
+   prefix/Use-existing-port, APF, app self-update, 7-Zip); .platform-darwin-
+   only marks the macOS row shape's own additions (the Model field replacing
+   Driver). !important since some of these elements also carry their own
+   layout display value (flex/inline-flex on buttons, etc.) that a plain
+   `display: none` here must always win over. */
+body.platform-darwin .platform-windows-only {
+    display: none !important;
+}
+body.platform-windows .platform-darwin-only {
+    display: none !important;
+}
+
 #app {
     display: flex;
     flex-direction: column;

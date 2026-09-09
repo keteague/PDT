@@ -9,7 +9,6 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"PDT/internal/driver"
 	"PDT/internal/flashdrive"
 )
 
@@ -246,17 +245,14 @@ func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepPro
 	return errors.Join(errs...)
 }
 
-// syncDriversTo copies this laptop's own Drivers folder onto letter,
-// scaffolding any manufacturer folder the copy didn't already bring along,
-// then runs driver.BuildCatalog against the destination itself purely for
-// its side effects (zip/self-extracting-archive/msi/Kyocera auto-extraction
-// - see scanManufacturerFolders) - the resulting catalog is discarded, this
-// instance's own a.catalog is untouched, but any raw archive that just got
-// copied onto the flash drive is extracted right there, so it's immediately
-// usable rather than needing to be plugged into another computer first just
-// to trigger that. The shared step between writePortablePDTTo (full "Write
-// to Flash Drive") and the toolbar's Sync button (drivers only, no
-// exe/Configs/tools, for topping up a flash drive that already exists).
+// syncDriversTo copies this laptop's own Drivers folder onto letter, then
+// runs postSyncDriversHook (platform-specific - see app_windows.go/
+// app_darwin.go) for whatever platform-specific finishing touch a freshly-
+// copied Drivers folder needs before it's immediately usable from the flash
+// drive itself, without being plugged into another computer first. The
+// shared step between writePortablePDTTo (full "Write to Flash Drive") and
+// the toolbar's Sync button (drivers only, no exe/Configs/tools, for topping
+// up a flash drive that already exists).
 func syncDriversTo(letter string, onProgress func(done, total int)) error {
 	driversDest := filepath.Join(letter, "Drivers")
 	src := driversRoot()
@@ -277,9 +273,8 @@ func syncDriversTo(letter string, onProgress func(done, total int)) error {
 			errs = append(errs, fmt.Errorf("copying Drivers: %w", err))
 		}
 	}
-	if err := ensureDriversScaffold(driversDest); err != nil {
-		errs = append(errs, fmt.Errorf("scaffolding Drivers: %w", err))
+	if err := postSyncDriversHook(driversDest); err != nil {
+		errs = append(errs, err)
 	}
-	_, _ = driver.BuildCatalog(driversDest)
 	return errors.Join(errs...)
 }

@@ -4,44 +4,42 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
-## 2026-09-09 - Field-observed issues (Windows), not yet investigated/fixed
+## 2026-09-09 - Fixed: slow USB on-launch scan, JSON save not propagating
 
-Two issues Ken observed using PDT at a real client site (Windows, on-site deployment) - reported here,
-not yet reproduced or root-caused (this entry was written from a macOS session with no Windows/USB
-access to verify against), so the Windows-side session picking these up next has the full report
-rather than a secondhand summary.
+Two issues Ken observed using PDT at a real client site (Windows, on-site deployment), root-caused and
+fixed in this Windows-side session (picking up after the macOS-port session that filed the original
+field report below).
 
 - **On-launch Drivers scan is slow from a USB flash drive, especially over USB 2.0** - observed as a
-  series of `C:\Windows\System32\expand.exe` console windows flashing up during startup. `expand.exe`
-  is only ever invoked from `ensureMsiExtracted` (`internal/driver/msi.go`, part of the Lexmark
-  `.msi`-extraction pipeline - see the README's own "Lexmark" section), which already has a skip-if-
-  already-extracted check (`os.Stat(destDir)` before extracting) - so either that check is somehow not
-  holding across launches for this case, or (more likely, and worth checking first) `BuildCatalog`'s
-  full `filepath.WalkDir` over the whole Drivers tree - which every one of its `ensure*Extracted`
-  helpers does, unconditionally, on **every app startup and every Refresh Drivers click**, not just
-  once - is itself the slow part on a real, large Drivers folder (tens of thousands of files, per the
-  flash-drive-copy-speed work earlier in this changelog) over a slow USB 2.0 link, independent of
-  whether any actual extraction ends up happening. On Ken's own nVME-backed dev machine the same scan
-  takes ~10 seconds, which he considers acceptable - the concern is specific to slow removable media.
-  - **Ken's proposed fix**: only run the on-launch Drivers scan/extraction when running from a local
-    install (a technician's laptop), and/or when actually writing to a USB drive (Write to Flash
-    Drive/Sync) - never when running *from* the USB drive itself, since by the time a flash drive is
-    handed off for field use, everything on it should already be extracted. This fits the intended
-    real-world deployment: flash drives get a physical write-protect switch, and the only time one
-    should ever be written to is from the tech's own laptop's local install - a USB-run copy has no
-    business re-scanning/re-extracting at all under that model.
+  series of `C:\Windows\System32\expand.exe` console windows flashing up during startup. Root cause was
+  exactly Ken's own second hypothesis: `loadCatalog` (`app_windows.go`) unconditionally called
+  `driver.BuildCatalog`, which runs every `ensure*Extracted` helper (`internal/driver/catalog.go`'s
+  `scanManufacturerFolders`) - including a full `filepath.WalkDir` and an `expand.exe` invocation per
+  Lexmark `.msi` - on **every app startup and every Refresh Drivers click**, regardless of whether
+  anything actually needed extracting. Fixed by adding `driver.BuildCatalogNoExtract` (same `.inf`
+  scan, but skips every `ensure*Extracted` call outright) and having `loadCatalog` call it instead of
+  `BuildCatalog` whenever this exact running `PDT.exe` sits on a removable drive
+  (`flashdrive.IsRemovableDrive`, already used elsewhere to gate Write to Flash Drive). Matches the
+  intended real-world deployment exactly as Ken described: flash drives carry a physical write-protect
+  switch and are only ever written to from a technician's local install, so a USB-run copy can safely
+  assume everything on it is already extracted. `postSyncDriversHook` (Write to Flash Drive/Sync) is
+  unchanged - still always runs the full extracting `BuildCatalog`, since that's the one path that
+  should extract. A local/fixed-drive install is likewise unaffected - still gets the full extracting
+  scan Ken measured at ~10 seconds on his own nVME dev machine.
 - **Editing and re-saving a JSON configuration didn't propagate a fix to other endpoints** - Ken loaded
   a saved configuration on one endpoint, noticed a typo in a printer object's name, fixed it, used Save
   Configuration to overwrite the same file, then loaded what he expected to be the corrected file onto
-  other endpoints - the typo was still there. `config.SaveConfig`/`LoadConfig`
-  (`internal/config/json.go`) are a plain `os.WriteFile`/`os.ReadFile` round-trip with nothing
-  suspicious on inspection, so the likely cause is upstream of the actual file write - most likely
-  `SaveConfiguration`'s save dialog (`app.go`) defaulting to `configsRoot()` +
-  `<SalesChainID>.json` rather than reopening at the exact path the file was originally loaded from,
-  which would silently write the fix to a *different* file than the one being distributed to the other
-  endpoints if the two ever diverge. Needs reproducing interactively (what path did Open Configuration
-  load from vs. what path did Save Configuration's dialog default to/actually write to) before
-  concluding that's really it.
+  other endpoints - the typo was still there. Confirmed Ken's own hypothesis: `OpenConfiguration` and
+  `SaveConfiguration` (`app.go`) independently defaulted their dialogs to `configsRoot()` +
+  `<SalesChainID>.json`, with zero memory of the path a configuration was actually opened from - so
+  re-saving after a small edit silently created a second file in `configsRoot()` instead of overwriting
+  the one actually being distributed to other endpoints, unless the technician happened to navigate
+  Save's dialog back to the exact original file by hand every time. Fixed by tracking the most recent
+  Open/Save path (`App.lastConfigPath`) and having `SaveConfiguration` default its dialog back to that
+  exact file/folder when one is known, falling back to the old `configsRoot()`/SalesChainID-based
+  default otherwise (e.g. the first save of a brand-new configuration). A new `ResetConfigPath` method,
+  wired into the frontend's Reset action, clears this memory so a freshly-reset session doesn't default
+  Save back to whatever was open before the reset.
 
 ## 2026-09-09 (v0.4.0) - macOS support (data layer, darwin Deployer, Wails app, frontend)
 

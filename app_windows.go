@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"PDT/internal/driver"
+	"PDT/internal/flashdrive"
 	"PDT/internal/printer"
 	pdtwin "PDT/internal/printer/windows"
 	"PDT/internal/update"
@@ -31,8 +32,24 @@ func (a *App) platformStartup() {
 // driver.Catalog plus a Kyocera model index) and assigns the result under
 // catalogMu. Called from startup() and RefreshDriverCatalog
 // (drivercatalog_windows.go).
+//
+// Skips the ensure*Extracted archive-extraction helpers entirely
+// (BuildCatalogNoExtract) when this exact running PDT.exe sits on a
+// removable (USB flash) drive - confirmed live: on a USB 2.0 flash drive,
+// the on-launch scan could take a long time and threw up a visible
+// expand.exe console window per MSI, even when every archive on the drive
+// was already extracted. A flash drive's Drivers folder is only ever
+// populated by Write to Flash Drive/Sync from a technician's local install
+// (postSyncDriversHook always extracts fully - see its own doc comment), and
+// those flash drives carry a physical write-protect switch, so it's safe to
+// assume everything on one is already extracted by the time PDT itself runs
+// from it. A local/fixed-drive install still gets the full extracting scan.
 func (a *App) loadCatalog(driversRoot string) error {
-	catalog, err := driver.BuildCatalog(driversRoot)
+	buildFn := driver.BuildCatalog
+	if exe, err := os.Executable(); err == nil && flashdrive.IsRemovableDrive(exe) {
+		buildFn = driver.BuildCatalogNoExtract
+	}
+	catalog, err := buildFn(driversRoot)
 	if err != nil {
 		return err
 	}

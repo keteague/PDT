@@ -1148,6 +1148,7 @@ async function resetConfiguration() {
     setSalesChainId('');
     await resetDefaultsPanel();
     renderGrid();
+    await App.ResetConfigPath();
     logStatus('OK', 'Reset PDT to default settings.');
 }
 

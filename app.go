@@ -69,6 +69,18 @@ type App struct {
 	// no further row starts.
 	deployMu     sync.Mutex
 	deployCancel context.CancelFunc
+
+	// lastConfigPath is the full path OpenConfiguration most recently loaded
+	// from, or SaveConfiguration most recently wrote to - "" if neither has
+	// happened yet this session (or ResetConfigPath cleared it). Read by
+	// SaveConfiguration to default its own dialog back to that exact
+	// file/folder instead of always configsRoot() - confirmed live as a real
+	// gap: editing and re-saving a loaded configuration didn't actually
+	// overwrite the file it came from, since Save's dialog had no memory of
+	// where Open's dialog had navigated to, silently creating a second file
+	// in configsRoot() instead while the original (the one other endpoints
+	// were actually being handed) stayed unfixed.
+	lastConfigPath string
 }
 
 func NewApp() *App {
@@ -407,22 +419,35 @@ func (a *App) OpenConfiguration() (OpenConfigResult, error) {
 	if err != nil {
 		return OpenConfigResult{}, err
 	}
+	a.lastConfigPath = path
 	return OpenConfigResult{Config: cfg}, nil
 }
 
 // SaveConfiguration prompts for a save path and writes cfg there as JSON.
-// The suggested filename is cfg.SalesChainId (already restricted to
-// filesystem-safe characters by the frontend's own SalesChain ID input
-// validation) when set, falling back to a generic name otherwise.
+// The dialog defaults back to the exact file a.lastConfigPath points at (the
+// file OpenConfiguration most recently loaded, or SaveConfiguration most
+// recently wrote to) when one is known - confirmed live as a real gap:
+// without this, Save always defaulted to configsRoot() with a
+// SalesChainID-derived name regardless of what was actually opened, so
+// re-saving a loaded configuration after a small edit (e.g. fixing a typo)
+// silently created a second file instead of overwriting the one other
+// endpoints were actually being handed. Falls back to cfg.SalesChainId
+// (already restricted to filesystem-safe characters by the frontend's own
+// SalesChain ID input validation) when set, or a generic name otherwise.
 func (a *App) SaveConfiguration(cfg config.SavedConfig) (PathResult, error) {
 	<-a.ready
+	defaultDir := configsRoot()
 	defaultFilename := "printers.json"
 	if cfg.SalesChainID != "" {
 		defaultFilename = cfg.SalesChainID + ".json"
 	}
+	if a.lastConfigPath != "" {
+		defaultDir = filepath.Dir(a.lastConfigPath)
+		defaultFilename = filepath.Base(a.lastConfigPath)
+	}
 	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:            "Save Configuration",
-		DefaultDirectory: configsRoot(),
+		DefaultDirectory: defaultDir,
 		DefaultFilename:  defaultFilename,
 		Filters:          []runtime.FileFilter{jsonFilter},
 	})
@@ -432,7 +457,18 @@ func (a *App) SaveConfiguration(cfg config.SavedConfig) (PathResult, error) {
 	if err := config.SaveConfig(path, cfg); err != nil {
 		return PathResult{}, err
 	}
+	a.lastConfigPath = path
 	return PathResult{Path: path}, nil
+}
+
+// ResetConfigPath clears the memory of the most recently opened/saved
+// configuration file, so a subsequent SaveConfiguration falls back to
+// configsRoot() again instead of defaulting to whatever was last
+// open/saved before the reset. Wired into the frontend's "Reset" action,
+// which clears all in-memory rows/settings and should not leave Save
+// pointed at a file that no longer reflects what's on screen.
+func (a *App) ResetConfigPath() {
+	a.lastConfigPath = ""
 }
 
 // DeployRowResult is one row's outcome as sent to the frontend - Error is ""

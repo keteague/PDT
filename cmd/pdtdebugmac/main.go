@@ -1,3 +1,5 @@
+//go:build darwin
+
 // pdtdebugmac is a throwaway CLI for verifying the macOS driver-catalog and
 // darwin Deployer bindings (internal/driver's Mac* additions,
 // internal/printer/darwin) against real files/state on this machine -

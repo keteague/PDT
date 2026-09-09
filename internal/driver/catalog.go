@@ -122,6 +122,26 @@ func formatDateKey(t time.Time) string {
 // platform/version nesting) - keeps this working unmodified against existing
 // testdata fixtures and any pre-reorg Drivers folder.
 func BuildCatalog(driversRoot string) (Catalog, error) {
+	return buildCatalog(driversRoot, true)
+}
+
+// BuildCatalogNoExtract is BuildCatalog without ever running any of the
+// ensure*Extracted archive-extraction helpers first - it only ever scans
+// .inf files already sitting on disk. Confirmed live: running PDT from a USB
+// 2.0 flash drive made every on-launch scan re-walk (and, worse, pop up a
+// visible expand.exe console window per MSI) every manufacturer folder
+// looking for archives to extract, even when everything was already
+// extracted, which is slow enough on USB 2.0 to be disruptive. Drivers are
+// only ever extracted once, from the technician's local install, either on
+// its own on-launch scan or when writing/syncing to a flash drive
+// (postSyncDriversHook always uses the extracting BuildCatalog) - so a flash
+// drive's own on-launch scan can safely assume everything is already
+// extracted and skip straight to reading .infs.
+func BuildCatalogNoExtract(driversRoot string) (Catalog, error) {
+	return buildCatalog(driversRoot, false)
+}
+
+func buildCatalog(driversRoot string, extract bool) (Catalog, error) {
 	catalog := Catalog{}
 	for _, m := range Manufacturers {
 		catalog[m] = map[string]map[string]map[string]ArchEntry{}
@@ -143,7 +163,7 @@ func BuildCatalog(driversRoot string) (Catalog, error) {
 	}
 
 	if windowsRoot == "" {
-		scanManufacturerFolders(catalog, driversRoot)
+		scanManufacturerFolders(catalog, driversRoot, extract)
 		return catalog, nil
 	}
 
@@ -155,7 +175,7 @@ func BuildCatalog(driversRoot string) (Catalog, error) {
 		if !ve.IsDir() {
 			continue
 		}
-		scanManufacturerFolders(catalog, filepath.Join(windowsRoot, ve.Name()))
+		scanManufacturerFolders(catalog, filepath.Join(windowsRoot, ve.Name()), extract)
 	}
 	return catalog, nil
 }
@@ -165,7 +185,9 @@ func BuildCatalog(driversRoot string) (Catalog, error) {
 // Safe to call multiple times against the same catalog (e.g. once per
 // Windows version folder) - ArchEntry merging already keeps the newer file
 // whenever the same manufacturer/name/version/arch is seen more than once.
-func scanManufacturerFolders(catalog Catalog, root string) {
+// extract controls whether the ensure*Extracted archive-extraction helpers
+// run first at all - see BuildCatalogNoExtract's doc comment.
+func scanManufacturerFolders(catalog Catalog, root string, extract bool) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return
@@ -187,16 +209,18 @@ func scanManufacturerFolders(catalog Catalog, root string) {
 		}
 
 		mfgPath := filepath.Join(root, e.Name())
-		ensureZipsExtracted(mfgPath)
-		// Kyocera's own bespoke two-stage extraction runs before the generic
-		// self-extracting-archive scan below - ensureSfxArchivesExtracted
-		// already skips any Kyocera-named exe outright (see its own doc
-		// comment for why order alone wouldn't be enough), but running the
-		// correct extraction first keeps this in the obvious "more specific
-		// before more general" order regardless.
-		ensureKyoceraExesExtracted(mfgPath)
-		ensureSfxArchivesExtracted(mfgPath)
-		ensureMsiExtracted(mfgPath)
+		if extract {
+			ensureZipsExtracted(mfgPath)
+			// Kyocera's own bespoke two-stage extraction runs before the generic
+			// self-extracting-archive scan below - ensureSfxArchivesExtracted
+			// already skips any Kyocera-named exe outright (see its own doc
+			// comment for why order alone wouldn't be enough), but running the
+			// correct extraction first keeps this in the obvious "more specific
+			// before more general" order regardless.
+			ensureKyoceraExesExtracted(mfgPath)
+			ensureSfxArchivesExtracted(mfgPath)
+			ensureMsiExtracted(mfgPath)
+		}
 		_ = filepath.WalkDir(mfgPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil

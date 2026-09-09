@@ -1,6 +1,9 @@
 package driver
 
-import "testing"
+import (
+	"os/exec"
+	"testing"
+)
 
 func TestResolveMac_PicksNewestByModTime(t *testing.T) {
 	cat := testMacCatalog(t)
@@ -24,6 +27,13 @@ func TestResolveMac_LabelFromRealPackageInfo(t *testing.T) {
 	// CanonDriverNewer.pkg is a real flat .pkg fixture (built via pkgbuild
 	// --version 1.2.3) - proves PackageLabel actually reads a flat package's
 	// own PackageInfo rather than always falling back to the filename.
+	// PackageLabel shells out to the real macOS pkgutil binary (see
+	// macmount.go) - skip rather than fail when it's not on PATH, i.e. on
+	// every non-macOS dev machine, where PackageLabel can only ever exercise
+	// its filename fallback.
+	if _, err := exec.LookPath("pkgutil"); err != nil {
+		t.Skip("pkgutil not on PATH (not running on macOS) - cannot verify real PackageInfo parsing")
+	}
 	cat := testMacCatalog(t)
 	got := ResolveMac(cat, "Canon")
 	if got == nil {

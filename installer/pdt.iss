@@ -21,7 +21,12 @@
 ; Build with: iscc installer\pdt.iss
 ; (requires a `wails build` first, so build\bin\PDT.exe exists to package)
 
-#define AppVersion "0.3.9"
+; Read from the repo-root VERSION file rather than a hardcoded literal here -
+; see version.go's own doc comment for why (a stale hand-typed copy here is
+; exactly the bug that motivated this).
+#define VersionFile FileOpen("..\VERSION")
+#define AppVersion Trim(FileRead(VersionFile))
+#expr FileClose(VersionFile)
 
 [Setup]
 AppId={{40FB3E79-C3DC-4C78-A969-35012251BD36}

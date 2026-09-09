@@ -606,6 +606,19 @@ takes longer than the frontend needs to fire its first catalog-dependent call (`
 page load), which was silently seeing `catalog`/`modelIndex` still at their nil zero value and
 returning empty/wrong results with no error at all.
 
+### On-launch scan skips extraction on removable media (Windows)
+
+`loadCatalog` (`app_windows.go`) calls `driver.BuildCatalogNoExtract` instead of `driver.BuildCatalog`
+whenever this exact running `PDT.exe` sits on a removable drive (`flashdrive.IsRemovableDrive`) -
+`BuildCatalogNoExtract` does the same `.inf` scan but never runs any of the `ensure*Extracted` helpers
+(`internal/driver/catalog.go`). Confirmed live: the extracting scan popped up a visible `expand.exe`
+console window per Lexmark `.msi` and could take a long time over USB 2.0, even when every archive on
+the drive was already extracted. This assumes the field workflow described under "Write to Flash
+Drive"/Sync below - flash drives get a physical write-protect switch and are only ever written to from
+a technician's local install, which always runs the full extracting `BuildCatalog`
+(`postSyncDriversHook`) - so a USB-run copy can safely skip straight to reading already-extracted
+`.inf`s. A local/fixed-drive install is unaffected either way.
+
 ## Building / testing
 
 ```
@@ -630,9 +643,12 @@ path - `winget install JRSoftware.InnoSetup` is the fastest way to get it). Prod
 which would bloat the installer for no benefit (driver packages are hundreds of MB each; see "Drivers
 folder layout" above) since PDT already scaffolds an empty `Drivers\Windows\11\<Manufacturer>\`
 structure on first launch regardless (`ensureDriversScaffold`, `driversfolder.go`) ready for a
-technician to drop real packages into. Keep `installer/pdt.iss`'s own `AppVersion` preprocessor define
-in sync with `version.go`/`wails.json`'s `info.productVersion` by hand, the same as those two are kept
-in sync with each other today.
+technician to drop real packages into. Version numbering has one canonical source, the repo-root
+`VERSION` file: `version.go` embeds it directly (`go:embed`), and `installer/pdt.iss` reads it at
+compile time via its own preprocessor (`FileOpen`/`FileRead`) - a version bump only needs to edit
+`VERSION` itself. The one holdout is `wails.json`'s `info.productVersion` (used for the compiled exe's
+own Win32 version resource) - Wails has no mechanism to read it from elsewhere, so it still needs
+updating by hand to match `VERSION` on every bump.
 
 ## Installing PDT
 

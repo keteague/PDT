@@ -1,13 +1,32 @@
 package driver
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
+// testMacCatalog builds the catalog from testdata_mac, first forcing
+// deterministic, distinct mtimes on the two Canon fixtures that
+// TestResolveMac_PicksNewestByModTime depends on. git does not preserve
+// mtimes across a clone/checkout - both files land with essentially the same
+// checkout-time mtime - so without this, ResolveMac's "pick the newest by
+// mtime" comparison degenerates into a tie that resolves in scan order
+// rather than by the fixtures' intended Older/Newer semantics. Confirmed
+// live: this made the test flaky on a fresh checkout.
 func testMacCatalog(t *testing.T) MacCatalog {
 	t.Helper()
+	now := time.Now()
+	older := filepath.Join("testdata_mac", "macOS", "Canon", "15", "CanonDriverOlder.dmg")
+	newer := filepath.Join("testdata_mac", "macOS", "Canon", "26", "CanonDriverNewer.pkg")
+	if err := os.Chtimes(older, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", older, err)
+	}
+	if err := os.Chtimes(newer, now.Add(-1*time.Hour), now.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", newer, err)
+	}
 	cat, err := BuildMacCatalog("testdata_mac")
 	if err != nil {
 		t.Fatalf("BuildMacCatalog: %v", err)

@@ -6,13 +6,25 @@ import {config} from '../models';
 
 export function AllManufacturers():Promise<Array<string>>;
 
+export function ApplyUpdate(arg1:string,arg2:string):Promise<main.ApplyUpdateResult>;
+
+export function BrowseDevModeFile(arg1:string,arg2:string):Promise<main.DevModeResult>;
+
+export function CaptureDevModeForPrinter(arg1:string,arg2:string):Promise<main.DevModeResult>;
+
 export function CheckExportCollisions(arg1:string,arg2:string):Promise<main.ExportCollisionResult>;
+
+export function CheckForUpdate():Promise<main.UpdateCheckResult>;
+
+export function CheckSevenZipUpdate():Promise<main.UpdateCheckResult>;
 
 export function DefaultDriverFor(arg1:string):Promise<string>;
 
 export function Deploy(arg1:Array<printer.PrinterRow>,arg2:string,arg3:string):Promise<Array<main.DeployRowResult>>;
 
 export function DriverCandidates(arg1:string,arg2:string,arg3:string):Promise<Array<string>>;
+
+export function EnumerateLocalPrinters():Promise<Array<main.LocalPrinterCandidate>>;
 
 export function ExportConfigs(arg1:string,arg2:string,arg3:string):Promise<main.ExportResult>;
 
@@ -26,6 +38,8 @@ export function GetCatalogStatus():Promise<main.CatalogStatus>;
 
 export function GetSettings():Promise<main.Settings>;
 
+export function GetSevenZipVersion():Promise<string>;
+
 export function ImportCsv():Promise<main.ImportResult>;
 
 export function IsRunningFromRemovableDrive():Promise<boolean>;
@@ -35,6 +49,8 @@ export function ListPreinstallFolders(arg1:string):Promise<main.PreinstallFolder
 export function ListRemovableDrives():Promise<main.ListDrivesResult>;
 
 export function Manufacturers():Promise<Array<string>>;
+
+export function Models(arg1:string):Promise<Array<string>>;
 
 export function NewCsvTemplate():Promise<main.PathResult>;
 
@@ -46,18 +62,32 @@ export function OpenManufacturerURL(arg1:string):Promise<void>;
 
 export function OpenRepoURL():Promise<void>;
 
+export function OpenSevenZipHomepage():Promise<void>;
+
 export function PickFolder(arg1:string):Promise<main.PathResult>;
 
 export function Platform():Promise<string>;
 
 export function RefreshDriverCatalog():Promise<main.CatalogStatus>;
 
+export function ResetConfigPath():Promise<void>;
+
+export function RestartSpooler():Promise<main.SpoolerResult>;
+
 export function SaveConfiguration(arg1:config.SavedConfig):Promise<main.PathResult>;
 
 export function SaveSettings(arg1:main.Settings):Promise<main.Settings>;
 
+export function SpoolerStatus():Promise<main.SpoolerResult>;
+
+export function StartSpooler():Promise<main.SpoolerResult>;
+
 export function StopDeploy():Promise<void>;
 
+export function StopSpooler():Promise<main.SpoolerResult>;
+
 export function SyncDriversToFlashDrives(arg1:Array<string>):Promise<main.BatchDriveResult>;
+
+export function UpdateSevenZip(arg1:string):Promise<main.ApplyUpdateResult>;
 
 export function WritePortablePDT(arg1:Array<string>):Promise<main.BatchDriveResult>;

@@ -4,6 +4,31 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-09 - Fixed: runaway self-nested MSI extraction (Canon DiasSetup)
+
+Found while investigating further on-launch scan speedups after v0.4.0 shipped: `ensureMsiExtracted`
+(`internal/driver/msi.go`) walked a manufacturer folder for `.msi` files with no bound on how deep it
+would chase them. Canon's `DiasSetup.msi` (a bundled device-status-monitor utility, unrelated to the
+actual PCL6/PS3/UFRII print driver `.inf`s) administratively installs a verbatim copy of itself one
+level into its own output - apparently for its own uninstaller's use - and `ensureMsiExtracted` had no
+way to recognize that nested copy as "the same package already handled." Every fresh app run (each
+`wails dev`/`go test` invocation against a real local Drivers folder during development) found that
+leftover nested `.msi` as new, unextracted work and extracted it again, nesting one level deeper -
+forever, with no bound. Confirmed live on this dev machine: 12-13 levels deep across all three Canon
+packages (PCL6/PS3/UFRII, both 32BIT and x64 - six instances total), ~310MB and 258 files of pure
+duplication, containing zero `.inf` files the catalog scan could ever have wanted.
+
+Fixed by having `ensureMsiExtracted` skip descending into any directory that is itself a prior
+extraction's destination (a directory whose name plus `.msi` exists as its own sibling file) - it never
+needs to hunt for more `.msi` packages inside output it already produced. Measured impact on this
+nVME-backed dev machine was small (BuildCatalog: ~935ms -> ~899ms) since a few hundred extra file stats
+barely register at nVME speeds - the real payoff is that this can no longer silently keep growing worse
+with every run, and it meaningfully cuts the file/byte count that would otherwise get copied onto and
+scanned from a real USB flash drive, which is exactly the slow-media case v0.4.0's own USB fix targets.
+Worth checking any already-prepared local installs/USB drives for the same bloat (`Drivers\Windows\11\
+Canon\*\*\misc\DiasSetup\DiasSetup\` nested further than one level) - this fix only stops it from
+growing further, it doesn't retroactively clean up copies that already exist elsewhere.
+
 ## 2026-09-09 - Fixed: slow USB on-launch scan, JSON save not propagating
 
 Two issues Ken observed using PDT at a real client site (Windows, on-site deployment), root-caused and

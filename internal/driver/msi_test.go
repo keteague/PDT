@@ -41,3 +41,35 @@ func TestEnsureMsiExtracted_SkipsAlreadyExtracted(t *testing.T) {
 		t.Error("expected the already-extracted Foo/ folder to be left alone, not removed")
 	}
 }
+
+// TestEnsureMsiExtracted_DoesNotRecurseIntoOwnExtractionOutput guards the
+// real, confirmed-live bug: a package's own administrative-install output
+// can legitimately contain a verbatim copy of itself one level in (Canon's
+// DiasSetup.msi does this, apparently for its own uninstaller's use). Every
+// fresh run used to treat that leftover nested .msi as new, unextracted
+// work and extract it again - nesting one level deeper on every single run,
+// forever, with no bound (confirmed live: 12+ levels, 100+MB, zero .inf
+// files gained). This fixture simulates exactly one such already-completed
+// extraction (Foo.msi -> Foo/, containing a real nested Foo.msi) and
+// confirms a second run doesn't extract that nested copy into a further
+// Foo/Foo/.
+func TestEnsureMsiExtracted_DoesNotRecurseIntoOwnExtractionOutput(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Foo.msi"), []byte("not a real msi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fooDir := filepath.Join(dir, "Foo")
+	if err := os.Mkdir(fooDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The genuine nested copy a real administrative install can produce.
+	if err := os.WriteFile(filepath.Join(fooDir, "Foo.msi"), []byte("not a real msi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureMsiExtracted(dir)
+
+	if _, err := os.Stat(filepath.Join(fooDir, "Foo")); !os.IsNotExist(err) {
+		t.Errorf("expected Foo/Foo/ to NOT be created - ensureMsiExtracted must not re-extract a .msi found inside its own prior extraction output, got err=%v", err)
+	}
+}

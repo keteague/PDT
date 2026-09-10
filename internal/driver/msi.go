@@ -42,6 +42,21 @@ func ensureMsiExtracted(root string) {
 			if strings.EqualFold(d.Name(), "etc") || strings.EqualFold(d.Name(), "Archive") {
 				return filepath.SkipDir
 			}
+			// A directory whose name plus ".msi" exists as its own sibling
+			// file is itself a prior extraction's destination (Foo.msi ->
+			// Foo/) - never hunt for more .msi files to extract inside one,
+			// even across separate runs. Confirmed against a real package
+			// (Canon's DiasSetup.msi administratively installs a verbatim
+			// copy of itself one level into its own output, apparently for
+			// its own uninstaller's use) that without this guard, every
+			// fresh run treated that leftover copy as new, unextracted work
+			// and extracted it again - nesting one level deeper on every
+			// single run, forever, with no bound. Confirmed live: 12+ levels
+			// and 100+MB of pure duplication from exactly this, containing
+			// zero .inf files the catalog scan could ever have wanted.
+			if info, statErr := os.Stat(path + ".msi"); statErr == nil && !info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if !strings.EqualFold(filepath.Ext(path), ".msi") {

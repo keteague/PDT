@@ -124,6 +124,16 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 // same package is a no-op from CUPS' point of view, just a few extra seconds
 // per row rather than the multi-minute cost the NUL: workaround existed
 // for on Windows).
+// resolveDriver picks the PPD to deploy with. row.Model is the primary
+// signal once a manufacturer resolves to more than one plausible PPD (either
+// among a single install's own newly-registered PPDs, or across a
+// manufacturer's whole OpenPrinting bucket) - the planned behavior the
+// README's own "Planned: Model-driven PPD selection on macOS" section
+// described before this was built. row.Driver, when it holds an *exact*
+// OpenPrintingCandidates label (the technician explicitly picked one from
+// the Driver dropdown rather than just typing a Model and moving on), is
+// preferred over re-deriving a guess from Model - a real selection beats a
+// best guess.
 func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, log *printer.Logger) (ppdPath string, err error) {
 	if resolved := driver.ResolveMac(d.Catalog, row.Manufacturer); resolved != nil {
 		log.Info("Resolved package %q (%s) for %s.", resolved.Path, resolved.Label, row.Manufacturer)
@@ -136,39 +146,58 @@ func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, lo
 			return "", nil
 		}
 		log.OK("Installed %q (registered %d PPD(s)).", resolved.Path, len(newPPDs))
-		return choosePPD(newPPDs, row.Driver), nil
+		chosen, ambiguous := choosePPD(newPPDs, row.Model)
+		if ambiguous {
+			log.Warn("Model %q did not clearly identify one PPD among the %d this install registered - best guess: %q. Set this row's Model to the printer's real model if that's wrong.", row.Model, len(newPPDs), chosen)
+		} else {
+			log.Info("Selected PPD %q for model %q.", chosen, row.Model)
+		}
+		return chosen, nil
 	}
 
-	if path, ok := driver.ResolveOpenPrintingPPD(d.Catalog, row.Manufacturer, row.Driver); ok {
-		log.Info("No local installer package for %s; using OpenPrinting fallback PPD %q.", row.Manufacturer, path)
+	if row.Driver != "" {
+		if path, ok := driver.OpenPrintingPPDByLabel(d.Catalog, row.Manufacturer, row.Driver); ok {
+			log.Info("Using explicitly-selected OpenPrinting PPD %q for %s.", row.Driver, row.Manufacturer)
+			return path, nil
+		}
+	}
+	if path, ok := driver.ResolveOpenPrintingPPD(d.Catalog, row.Manufacturer, row.Model); ok {
+		log.Info("No local installer package for %s; matched OpenPrinting fallback PPD %q from model %q.", row.Manufacturer, path, row.Model)
 		return path, nil
 	}
 
-	return "", fmt.Errorf("no usable driver package or fallback PPD found locally for manufacturer %q, driver selection %q", row.Manufacturer, row.Driver)
+	return "", fmt.Errorf("no usable driver package or fallback PPD found locally for manufacturer %q (model %q, driver selection %q)", row.Manufacturer, row.Model, row.Driver)
 }
 
-// choosePPD picks the best of an install's newly-registered PPDs for the
-// row's own Driver field (free text, typically a model name or fragment of
-// one - the same field a fuzzy-matched OpenPrinting PPD label would have
-// come from too, see App.DriverCandidates on darwin) - most driver packages
-// register several PPDs (one per supported model in the family, as seen
-// installing the real Kyocera package: a single install adds one PPD per
-// model it supports), fuzzy-matched against each PPD's own filename (the
-// same substring/subsequence ranking FuzzyMatchScore already provides),
-// falling back to the first one when driverSelection is blank or matches
-// nothing (still a usable PPD, just not guaranteed to be the exact model's
-// own).
-func choosePPD(candidates []string, driverSelection string) string {
-	if driverSelection == "" {
-		return candidates[0]
+// choosePPD picks the best of an install's newly-registered PPDs for model -
+// most driver packages register several (one per supported model in the
+// family, as seen installing the real Kyocera package: a single install adds
+// one PPD per model it supports), fuzzy-matched against each PPD's own
+// filename. ambiguous reports whether the pick was actually confident: a
+// blank model, or two-or-more candidates tying for the best score, both mean
+// there wasn't enough signal to be sure - the caller logs a [WARN] rather
+// than silently guessing wrong with no indication, the gap the README's own
+// "Planned: Model-driven PPD selection on macOS" section called out as still
+// unbuilt (a full interactive disambiguation prompt remains a further
+// possible enhancement, not attempted here).
+func choosePPD(candidates []string, model string) (chosen string, ambiguous bool) {
+	if len(candidates) == 1 {
+		return candidates[0], false
 	}
-	best := candidates[0]
-	bestScore := -1
-	for _, c := range candidates {
-		if score := driver.FuzzyMatchScore(c, driverSelection); score > bestScore {
-			bestScore = score
-			best = c
+	if model == "" {
+		return candidates[0], true
+	}
+	bestIdx, bestScore, secondScore := 0, -1, -1
+	for i, c := range candidates {
+		score := driver.FuzzyMatchScore(c, model)
+		if score > bestScore {
+			bestIdx, secondScore, bestScore = i, bestScore, score
+		} else if score > secondScore {
+			secondScore = score
 		}
 	}
-	return best
+	if bestScore < 0 {
+		return candidates[0], true
+	}
+	return candidates[bestIdx], bestScore == secondScore
 }

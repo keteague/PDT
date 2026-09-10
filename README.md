@@ -98,23 +98,34 @@ nothing analogous to create ahead of the queue itself.
 | `internal/printer/darwin/printdefaults_darwin.go` | Best-effort duplex/color defaults, by reading each queue's actual PPD-declared option keywords/choices (`lpoptions -l`) rather than hardcoding one vendor's naming - confirmed against a real installed Kyocera PPD (`Duplex`: `None`/`DuplexTumble`/`DuplexNoTumble`; `ColorModel`: `CMYK`/`Gray`) that PPD option naming is inconsistent enough across vendors that this has to stay dynamic, the same lesson `devmode_windows.go` already learned for DEVMODE on Windows. |
 | `internal/printer/darwin/deploy_darwin.go` | The orchestrator (`Deployer.Deploy`) - resolve driver -> ensure it's installed -> resolve/create queue -> best-effort print defaults. No NUL:-port workaround (nothing here is ever created against a placeholder port; CUPS queue creation doesn't have the multi-minute-against-a-live-port problem that motivated it on Windows) and no APF/"print spooled documents first" (both Windows spooler-specific concepts with no CUPS equivalent). |
 
-### Planned: Model-driven PPD selection on macOS (not yet implemented)
+### Model-driven PPD selection on macOS
 
 The grid's row-level **Model** field (`row.model` in `frontend/src/main.js`, `PrinterRow.Model`/
-`SavedRow.Model` - always existed in the data layer/CSV/JSON, just had no grid UI until this was added)
-is meant to eventually do more on macOS than just narrow the Windows-side Driver dropdown (its only
-current use - see `driver.Candidates`/`driver.Models`). The idea, not yet built: at Deploy time on
-macOS, when a manufacturer has no single resolvable installer package (`driver.ResolveMac` returns
-nil, so `deploy_darwin.go` falls back to the OpenPrinting PPD bucket), use the row's own Model text to
-pick the specific PPD that actually matches the printer, rather than resolving one arbitrarily. This is
-mostly already possible with existing pieces - `driver.ResolveOpenPrintingPPD(catalog, manufacturer,
-model)` already does exactly this fuzzy match, it's just never called anywhere in the actual deploy
-path today (`OpenPrintingCandidates` only drives the interactive Driver dropdown, which resolves a PPD
-by the *label the technician picked*, not by re-deriving it from `model` at deploy time). What's still
-genuinely unbuilt: when narrowing by model produces more than one plausible PPD candidate (or none),
-prompt the technician with the candidate list (or the full OpenPrinting bucket for that manufacturer)
-to pick from, instead of silently guessing wrong. Deliberately deferred - this needs live iteration
-against real macOS PPD data to get right, which isn't possible from a Windows-only development session.
+`SavedRow.Model` - always existed in the data layer/CSV/JSON, only got a grid UI once the Windows side
+brought the field back) does double duty on macOS: it narrows the Driver dropdown's own candidates
+(`App.DriverCandidates` -> `driver.OpenPrintingCandidates(catalog, manufacturer, model, filterText)` -
+model and whatever's actually being typed into Driver both have to match, ranked by their combined
+score), and - the part left as planned work until a real macOS session could iterate against real PPD
+data - `deploy_darwin.go`'s own `resolveDriver` now uses it too:
+
+- When a manufacturer resolves to an installer package that registers more than one PPD (the common
+  case - a single Kyocera install registers one PPD per supported model, confirmed against a real
+  install), `choosePPD` fuzzy-matches Model against the newly-registered PPDs directly, not just the
+  package's own generic label - confirmed against a real fixture (`Kyocera TASKalfa MZ6001ci` vs.
+  `MZ6001i`) that a bare-substring Model query doesn't always land on a clean winner the way it looks
+  like it should: `FuzzyMatchScore`'s own tie-break (shorter matched text wins) means one of two same-
+  family names can outscore the other even when the model text alone doesn't actually distinguish them,
+  which is a `choosePPD` implementation detail worth knowing about, not a bug.
+- When there's no installer package at all (the OpenPrinting-bucket fallback), `row.Driver` is checked
+  first for an *exact* `OpenPrintingCandidates` label match (`driver.OpenPrintingPPDByLabel` - the
+  technician explicitly picked one from the dropdown, the most authoritative signal available) before
+  falling back to fuzzy-matching Model via `driver.ResolveOpenPrintingPPD`.
+- **Still not built**: an interactive disambiguation prompt for a genuinely ambiguous match (two
+  candidates tying for best score, or Model left blank with several candidates to choose from) - today
+  this logs a `[WARN]` naming the best guess it made instead (`choosePPD`'s own `ambiguous` return),
+  rather than pausing to ask. A real prompt would need more than `printer.Confirm`'s yes/no shape (a
+  candidate-list picker), which is a real, separable piece of future work if the `[WARN]`-and-guess
+  behavior turns out not to be good enough in practice.
 
 ### `cmd/pdtdebugmac`
 

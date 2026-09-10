@@ -68,3 +68,30 @@ func TestResolveOpenPrintingPPD_EmptyModelNoMatch(t *testing.T) {
 		t.Error("expected not-found for an empty model - nothing to base a match on")
 	}
 }
+
+func TestOpenPrintingCandidates_EmptyQueriesReturnsEverything(t *testing.T) {
+	cat := testMacCatalog(t)
+	got := OpenPrintingCandidates(cat, "Ricoh", "", "")
+	if len(got) != 2 {
+		t.Fatalf("expected both Ricoh OpenPrinting PPDs with no query, got %v", got)
+	}
+}
+
+func TestOpenPrintingCandidates_ModelNarrows(t *testing.T) {
+	cat := testMacCatalog(t)
+	got := OpenPrintingCandidates(cat, "Ricoh", "MP C3003", "")
+	if len(got) != 1 || got[0] != "Ricoh MP C3003" {
+		t.Errorf("OpenPrintingCandidates(model=%q) = %v, want just [%q]", "MP C3003", got, "Ricoh MP C3003")
+	}
+}
+
+func TestOpenPrintingCandidates_ModelAndFilterTextBothMustMatch(t *testing.T) {
+	cat := testMacCatalog(t)
+	// "MP C3003" matches only the Ricoh MP C3003 PPD; a filterText that
+	// doesn't also match it (nothing in that label resembles "zzz") should
+	// exclude it even though model alone would have matched.
+	got := OpenPrintingCandidates(cat, "Ricoh", "MP C3003", "zzz-no-such-text")
+	if len(got) != 0 {
+		t.Errorf("OpenPrintingCandidates(model matches, filterText doesn't) = %v, want none", got)
+	}
+}

@@ -4,6 +4,37 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-10 - macOS: Model-driven PPD selection; Windows-style paths bug fixed
+
+### Added
+- **Model-driven PPD selection on macOS** - the planned work the Windows-side v0.5.0 session (Model
+  field back in the grid) explicitly deferred for a real macOS session to pick up. `deploy_darwin.go`'s
+  `resolveDriver` now uses the row's own Model to pick the right PPD both when an installer package
+  registers several (`choosePPD`, fuzzy-matched, `[WARN]`s rather than silently guessing when the match
+  isn't confident - see `ambiguous`'s own doc comment for exactly what counts as confident) and in the
+  OpenPrinting-bucket fallback (`row.Driver`'s exact dropdown selection preferred over a fresh Model
+  fuzzy-match when there is one - `driver.OpenPrintingPPDByLabel`). `App.DriverCandidates` on darwin
+  also now actually uses `model` (previously accepted but ignored) to narrow the Driver dropdown's own
+  candidates, matching Windows' own Candidates behavior. See the README's "Model-driven PPD selection
+  on macOS" section for the full writeup, including what's still genuinely unbuilt (an interactive
+  disambiguation prompt for a real tie, versus today's log-a-warning-and-guess).
+
+### Fixed
+- **A real, until-now-shipped bug**: `settings.go`'s default Drivers/Configs base paths were hardcoded
+  to Windows path syntax (`.\Drivers`, `.\Configs`, `%LocalAppData%\PDT`) with no macOS equivalent -
+  confirmed live as more than a cosmetic display issue (the "Known issues" list in the v0.4.0 entry
+  below undersold it): handing `.\Drivers` to `filepath.Join`/`resolveExeRelative` on macOS doesn't
+  split on the backslash at all, so it created a folder literally *named* `.\Drivers` right next to the
+  running `.app`'s own executable, severely enough that it broke `wails build`'s own codesign step once
+  that malformed folder existed inside the bundle (`codesign failed... bundle format unrecognized`).
+  Split into `settings_windows.go`/`settings_darwin.go`; the macOS side resolves a portable copy's
+  relative path as plain `Drivers`/`Configs` (no backslash to begin with) and an installed copy's base
+  to `~/Library/Application Support/PDT` (the macOS analog of `%LocalAppData%\PDT`). This may also
+  explain (not yet confirmed) the previously-reported Settings > General browse-button issue - a
+  malformed starting directory fed to the native folder picker is a plausible cause - worth re-testing
+  now.
+
+## 2026-09-09 (v0.4.0) - macOS support (data layer, darwin Deployer, Wails app, frontend)
 ## 2026-09-10 - Added: Model field back in the grid; planned macOS PPD-by-model work noted
 
 Ken's idea: Windows-side row data is already nearly enough to create macOS CUPS LPD queues too - the

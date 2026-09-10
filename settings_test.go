@@ -10,18 +10,9 @@ import (
 	"PDT/internal/driver"
 )
 
-func TestInstalledAppDataDir(t *testing.T) {
-	t.Setenv("LOCALAPPDATA", `C:\Users\Test\AppData\Local`)
-	want := filepath.Join(`C:\Users\Test\AppData\Local`, "PDT")
-	if got := installedAppDataDir(); got != want {
-		t.Errorf("installedAppDataDir() = %q, want %q", got, want)
-	}
-
-	t.Setenv("LOCALAPPDATA", "")
-	if got := installedAppDataDir(); got != "" {
-		t.Errorf("installedAppDataDir() with no LOCALAPPDATA = %q, want empty", got)
-	}
-}
+// TestInstalledAppDataDir: see settings_windows_test.go/settings_darwin_test.go -
+// installedAppDataDir itself is platform-specific now (settings_windows.go/
+// settings_darwin.go), so there's no one shared behavior left to test here.
 
 func TestEnsureDriversScaffold_CreatesManufacturerFolders(t *testing.T) {
 	dir := t.TempDir()

@@ -45,9 +45,10 @@ func (a *App) GetCatalogStatus() CatalogStatus {
 // manufacturer has a local installer package, there's only one real
 // candidate - the package resolves automatically (see
 // internal/printer/darwin/deploy_darwin.go's resolveDriver) - so this offers
-// its own label as the sole entry, fuzzy-filtered like everything else;
-// when there's no package, falls back to every OpenPrinting PPD label for
-// manufacturer, ranked against filterText.
+// its own label as the sole entry, fuzzy-filtered like everything else and
+// unaffected by model (nothing to narrow among one candidate); when there's
+// no package, falls back to every OpenPrinting PPD label for manufacturer,
+// narrowed/ranked by both model and filterText (see OpenPrintingCandidates).
 func (a *App) DriverCandidates(manufacturer, model, filterText string) []string {
 	<-a.ready
 	catalog, _ := a.macCatalogSnapshot()
@@ -57,7 +58,7 @@ func (a *App) DriverCandidates(manufacturer, model, filterText string) []string 
 		}
 		return []string{resolved.Label}
 	}
-	return driver.OpenPrintingCandidates(catalog, manufacturer, filterText)
+	return driver.OpenPrintingCandidates(catalog, manufacturer, model, filterText)
 }
 
 // DefaultDriverFor is the Defaults panel's pre-selected Driver value for

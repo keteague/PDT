@@ -78,13 +78,16 @@ func ResolveOpenPrintingPPD(catalog MacCatalog, manufacturer, model string) (str
 // OpenPrintingCandidates is the Driver combobox's darwin data source when
 // manufacturer has no installer package (see ResolveOpenPrintingPPD's own
 // doc comment for the underscore/space normalization this shares with it):
-// every OpenPrinting PPD label for manufacturer, ranked by FuzzyMatchScore
-// against filterText (all of them, unranked-but-alphabetical-ish by catalog
-// order, when filterText is empty - the "click to see everything available"
-// case). Returns labels (see ppdMatchLabel), not raw paths - App.DriverCandidates
-// on darwin hands these straight to the frontend combobox the same way
+// every OpenPrinting PPD label for manufacturer that matches *both* model and
+// filterText (whichever of the two is non-empty - model narrows first, the
+// same role it plays in Windows' own Candidates, then filterText further
+// refines what's actually being typed into the Driver box live), ranked by
+// the sum of their two FuzzyMatchScores. All of them, unranked-but-catalog-
+// order, when both are empty - the "click to see everything available" case.
+// Returns labels (see ppdMatchLabel), not raw paths - App.DriverCandidates on
+// darwin hands these straight to the frontend combobox the same way
 // Candidates (Windows) hands back driver names, not .inf paths.
-func OpenPrintingCandidates(catalog MacCatalog, manufacturer, filterText string) []string {
+func OpenPrintingCandidates(catalog MacCatalog, manufacturer, model, filterText string) []string {
 	type scored struct {
 		label string
 		score int
@@ -92,9 +95,22 @@ func OpenPrintingCandidates(catalog MacCatalog, manufacturer, filterText string)
 	var candidates []scored
 	for _, path := range catalog.OpenPrintingPPDs[manufacturer] {
 		label := ppdMatchLabel(path)
-		if score := FuzzyMatchScore(label, filterText); score >= 0 {
-			candidates = append(candidates, scored{label, score})
+		total := 0
+		if model != "" {
+			s := FuzzyMatchScore(label, model)
+			if s < 0 {
+				continue
+			}
+			total += s
 		}
+		if filterText != "" {
+			s := FuzzyMatchScore(label, filterText)
+			if s < 0 {
+				continue
+			}
+			total += s
+		}
+		candidates = append(candidates, scored{label, total})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
 	out := make([]string, len(candidates))
@@ -102,6 +118,22 @@ func OpenPrintingCandidates(catalog MacCatalog, manufacturer, filterText string)
 		out[i] = c.label
 	}
 	return out
+}
+
+// OpenPrintingPPDByLabel looks up an exact OpenPrintingCandidates label (what
+// a technician actually picked from the Driver dropdown, e.g.
+// row.Driver after committing a candidate - see setupCombobox's own commit()
+// in main.js) back to its real PPD path. Deploy-time resolution
+// (deploy_darwin.go) prefers this over re-deriving a PPD from Model's own
+// fuzzy match whenever the technician explicitly picked one - a real
+// selection is always more authoritative than a best guess.
+func OpenPrintingPPDByLabel(catalog MacCatalog, manufacturer, label string) (string, bool) {
+	for _, path := range catalog.OpenPrintingPPDs[manufacturer] {
+		if ppdMatchLabel(path) == label {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // ppdMatchLabel turns a PPD's own filename into the space-separated form a

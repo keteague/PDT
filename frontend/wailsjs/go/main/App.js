@@ -94,8 +94,8 @@ export function Manufacturers() {
   return window['go']['main']['App']['Manufacturers']();
 }
 
-export function Models(arg1) {
-  return window['go']['main']['App']['Models'](arg1);
+export function Models(arg1, arg2) {
+  return window['go']['main']['App']['Models'](arg1, arg2);
 }
 
 export function NewCsvTemplate() {

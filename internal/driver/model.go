@@ -2,6 +2,7 @@ package driver
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -38,4 +39,43 @@ func BuildModelIndex(catalog Catalog) map[string]map[string][]string {
 		}
 	}
 	return index
+}
+
+// Models lists manufacturer's known models from modelIndex (see
+// BuildModelIndex - Kyocera only today, since other manufacturers' driver
+// names aren't model-specific), ranked by FuzzyMatchScore against filterText
+// the same way Candidates ranks driver names. Alphabetical when filterText
+// is empty, since every candidate then ties at score 0. []string{}, not nil,
+// for a manufacturer with no model data at all - a nil slice marshals to
+// JSON `null`, and the grid row's own Model field combobox calls this with
+// no defensive fallback (same class of bug ManufacturersWithDrivers' own
+// comment already documents) - []string{} is what tells that combobox "no
+// lookup available, leave this a plain free-text input" without crashing.
+func Models(modelIndex map[string]map[string][]string, manufacturer, filterText string) []string {
+	byModel := modelIndex[manufacturer]
+	type scored struct {
+		name  string
+		score int
+	}
+	candidates := make([]scored, 0, len(byModel))
+	for m := range byModel {
+		score := 0
+		if filterText != "" {
+			if score = FuzzyMatchScore(m, filterText); score < 0 {
+				continue
+			}
+		}
+		candidates = append(candidates, scored{m, score})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].name < candidates[j].name
+	})
+	models := make([]string, len(candidates))
+	for i, c := range candidates {
+		models[i] = c.name
+	}
+	return models
 }

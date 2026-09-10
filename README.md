@@ -98,6 +98,24 @@ nothing analogous to create ahead of the queue itself.
 | `internal/printer/darwin/printdefaults_darwin.go` | Best-effort duplex/color defaults, by reading each queue's actual PPD-declared option keywords/choices (`lpoptions -l`) rather than hardcoding one vendor's naming - confirmed against a real installed Kyocera PPD (`Duplex`: `None`/`DuplexTumble`/`DuplexNoTumble`; `ColorModel`: `CMYK`/`Gray`) that PPD option naming is inconsistent enough across vendors that this has to stay dynamic, the same lesson `devmode_windows.go` already learned for DEVMODE on Windows. |
 | `internal/printer/darwin/deploy_darwin.go` | The orchestrator (`Deployer.Deploy`) - resolve driver -> ensure it's installed -> resolve/create queue -> best-effort print defaults. No NUL:-port workaround (nothing here is ever created against a placeholder port; CUPS queue creation doesn't have the multi-minute-against-a-live-port problem that motivated it on Windows) and no APF/"print spooled documents first" (both Windows spooler-specific concepts with no CUPS equivalent). |
 
+### Planned: Model-driven PPD selection on macOS (not yet implemented)
+
+The grid's row-level **Model** field (`row.model` in `frontend/src/main.js`, `PrinterRow.Model`/
+`SavedRow.Model` - always existed in the data layer/CSV/JSON, just had no grid UI until this was added)
+is meant to eventually do more on macOS than just narrow the Windows-side Driver dropdown (its only
+current use - see `driver.Candidates`/`driver.Models`). The idea, not yet built: at Deploy time on
+macOS, when a manufacturer has no single resolvable installer package (`driver.ResolveMac` returns
+nil, so `deploy_darwin.go` falls back to the OpenPrinting PPD bucket), use the row's own Model text to
+pick the specific PPD that actually matches the printer, rather than resolving one arbitrarily. This is
+mostly already possible with existing pieces - `driver.ResolveOpenPrintingPPD(catalog, manufacturer,
+model)` already does exactly this fuzzy match, it's just never called anywhere in the actual deploy
+path today (`OpenPrintingCandidates` only drives the interactive Driver dropdown, which resolves a PPD
+by the *label the technician picked*, not by re-deriving it from `model` at deploy time). What's still
+genuinely unbuilt: when narrowing by model produces more than one plausible PPD candidate (or none),
+prompt the technician with the candidate list (or the full OpenPrinting bucket for that manufacturer)
+to pick from, instead of silently guessing wrong. Deliberately deferred - this needs live iteration
+against real macOS PPD data to get right, which isn't possible from a Windows-only development session.
+
 ### `cmd/pdtdebugmac`
 
 The macOS analog of `cmd/pdtdebug` - `catalog`/`installpkg`/`deployqueue` commands for exercising the

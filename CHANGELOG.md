@@ -4,6 +4,36 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-10 - Added: Model field back in the grid; planned macOS PPD-by-model work noted
+
+Ken's idea: Windows-side row data is already nearly enough to create macOS CUPS LPD queues too - the
+main gap is that macOS PPDs are often model-specific, and PDT had no per-row way to record a model at
+all (`PrinterRow.Model`/`SavedRow.Model`/CSV's own `Model` column all already existed end to end in the
+data layer - only the interactive grid itself never had an input for it). Theoretical/future macOS work
+noted below rather than built now, since Ken is on Windows and it needs live iteration against real
+macOS PPD data to get right.
+
+### Added
+- **Model field back in the grid** (`row-model`, between Manufacturer and Driver) - optional free text,
+  never highlighted as needing a value (unlike Name/IP/Manufacturer/Driver). Narrows the Driver
+  dropdown's own candidate list the same way typing a model straight into Driver's filter text already
+  did (`driver.Candidates` already accepted a `model` argument - this just finally feeds it a real
+  value instead of always `""`). A suggestions dropdown only appears when real per-model data actually
+  exists for the selected manufacturer - Kyocera only, today, via the existing model index
+  (`driver.BuildModelIndex`) - anyone else's Model field is honestly just a plain text box, no fake
+  search offered. New `driver.Models(modelIndex, manufacturer, filterText)` (ranked by
+  `FuzzyMatchScore`, mirroring `Candidates`), replacing the never-actually-called-from-the-frontend
+  `App.Models(manufacturer)` that already existed. Selecting a different Manufacturer clears Model, same
+  as it already clears Driver.
+- **Planned (not yet implemented): use Model to pick a model-specific PPD during macOS Deploy.**
+  `driver.ResolveOpenPrintingPPD(catalog, manufacturer, model)` already does the actual fuzzy-matching
+  logic this needs - it's just never called from the real deploy path today (only
+  `OpenPrintingCandidates`, which drives the interactive Driver dropdown, is). Still unbuilt: prompting
+  the technician with candidate PPDs (or the full OpenPrinting bucket for that manufacturer) when
+  narrowing by model is ambiguous or fails, instead of silently guessing wrong. See the README's own
+  "Planned: Model-driven PPD selection on macOS" section (under "macOS support") for the fuller writeup
+  to pick this back up from on a real macOS session.
+
 ## 2026-09-09 - Fixed: flash copy ETA swinging wildly (v0.4.2 follow-up)
 
 Ken reported the new ETA (v0.4.2) swinging from 150-160 minutes down to 37, then up to 44, while

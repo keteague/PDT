@@ -23,7 +23,7 @@ const TIP = {
     salesChainId: 'Used to name saved configuration/DEVMODE files for this job. Letters, numbers, hyphen, and underscore only.',
     manufacturer: 'Printer manufacturer - determines which drivers are offered.',
     driver: 'Driver to install/use for this printer. Type to fuzzy-search; multiple local versions of the same driver appear as separate dated entries - for a model-specific driver name (Kyocera, mainly), typing part of the model narrows the list the same way.',
-    model: 'Printer model - used to pick the right PPD when the manufacturer has multiple local driver packages, or to fuzzy-match a fallback PPD when no manufacturer package is installed. Optional when a manufacturer has just one installer package.',
+    model: 'Printer model - optional, free text. Narrows the Driver list the same way typing it there does; a dropdown of known models only appears when that data is actually available (Kyocera, today).',
     subnet: 'Pre-fills new rows\' IP with this subnet (a trailing "." is added automatically if you don\'t type one) - e.g. "10.1.1." so you only need to type the last octet per row.',
     portPrefixEnabled: 'When creating a new Standard TCP/IP port, prefix its name with the text to the right instead of using the bare IP address.',
     portPrefixText: 'Prefix text used when Port name prefix is checked, e.g. "IP_" - the port would be named "IP_10.1.1.50".',
@@ -417,6 +417,7 @@ document.querySelector('#app').innerHTML = `
           <th title="${tip('name')}">Name</th>
           <th title="${tip('ip')}">IP</th>
           <th title="${tip('manufacturer')}">Manufacturer</th>
+          <th title="${tip('model')}">Model</th>
           <th title="${tip('driver')}">Driver</th>
           <th class="platform-windows-only" title="${tip('snmpGrid')}">SNMP</th>
           <th title="${tip('mono')}">Mono</th>
@@ -903,6 +904,7 @@ function rowHtml(r) {
       <td><input type="text" class="row-name${isValidName(r.name) ? '' : ' input-needs-value'}" value="${attr(r.name)}" title="${tip('name')}"></td>
       <td><input type="text" class="row-ip${isValidPortValue(r.ip) ? '' : ' input-needs-value'}" value="${attr(r.ip)}" placeholder="or NUL" title="${tip('ip')}"></td>
       <td>${mfgSelectHtml(r)}</td>
+      <td><div class="combo"><input type="text" class="row-model" value="${attr(r.model)}" title="${tip('model')}"><div class="combo-list" hidden></div></div></td>
       <td><div class="combo"><input type="text" class="row-driver${r.driver ? '' : ' input-needs-value'}" value="${attr(r.driver)}" title="${tip('driver')}"><div class="combo-list" hidden></div></div></td>
       <td class="platform-windows-only"><input type="text" class="row-snmp" value="${attr(r.snmpCommunity)}" placeholder="off" title="${tip('snmpGrid')}"></td>
       <td class="checkbox-cell"><input type="checkbox" class="row-mono" ${r.mono ? 'checked' : ''} title="${tip('mono')}"></td>
@@ -1006,13 +1008,14 @@ function wireRowEvents() {
         setupCombobox(
             driverInput,
             driverCombo.querySelector('.combo-list'),
-            // Model has no field of its own - typing part of a model name
-            // (e.g. "MA4500") straight into Driver's own filter text narrows
-            // the list the same way a separate Model field would, since a
-            // driver/PPD name that's model-specific already spells the model
-            // out (Kyocera's, mainly, on Windows; a macOS PPD's own filename
-            // usually does too - see driver.ppdMatchLabel).
-            (filterText) => App.DriverCandidates(row.manufacturer, '', filterText),
+            // row.model (typed into the Model field below, or left blank)
+            // narrows the candidate list server-side the same way typing
+            // part of a model name straight into Driver's own filter text
+            // already did - a driver/PPD name that's model-specific already
+            // spells the model out (Kyocera's, mainly, on Windows; a macOS
+            // PPD's own filename usually does too - see
+            // driver.ppdMatchLabel), so both keep working together.
+            (filterText) => App.DriverCandidates(row.manufacturer, row.model, filterText),
             (value) => {
                 row.driver = value;
                 driverInput.classList.toggle('input-needs-value', !value);
@@ -1020,10 +1023,29 @@ function wireRowEvents() {
             () => addPrinterRow(true),
         );
 
+        const modelCombo = tr.querySelector('.row-model').closest('.combo');
+        const modelInput = modelCombo.querySelector('input');
+        setupCombobox(
+            modelInput,
+            modelCombo.querySelector('.combo-list'),
+            // Optional field - no data lookup pretending to exist where
+            // there's really nothing to search. isMac() short-circuits
+            // before ever calling App.Models, which only exists as a bound
+            // method on the Windows build at all (see this file's own
+            // namespace-import doc comment up top). On Windows, an empty
+            // result (every manufacturer except Kyocera today) means the
+            // dropdown just never appears - same "plain free-text input"
+            // behavior either way.
+            (filterText) => isMac() ? [] : App.Models(row.manufacturer, filterText),
+            (value) => { row.model = value; },
+            () => addPrinterRow(true),
+        );
+
         const mfgSelect = tr.querySelector('.row-mfg');
         mfgSelect.addEventListener('change', (e) => {
             row.manufacturer = e.target.value;
             row.driver = '';
+            row.model = '';
             renderGrid();
         });
 

@@ -50,7 +50,7 @@ export function ListRemovableDrives():Promise<main.ListDrivesResult>;
 
 export function Manufacturers():Promise<Array<string>>;
 
-export function Models(arg1:string):Promise<Array<string>>;
+export function Models(arg1:string,arg2:string):Promise<Array<string>>;
 
 export function NewCsvTemplate():Promise<main.PathResult>;
 

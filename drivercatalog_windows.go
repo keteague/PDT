@@ -1,8 +1,6 @@
 package main
 
 import (
-	"sort"
-
 	"PDT/internal/driver"
 )
 
@@ -54,21 +52,13 @@ func (a *App) GetCatalogStatus() CatalogStatus {
 	return CatalogStatus{OK: true, HasDrivers: hasDrivers}
 }
 
-// Models lists the known models for manufacturer (Kyocera only - other
-// manufacturers' driver names aren't model-specific; see driver.ModelFromDriverName).
-func (a *App) Models(manufacturer string) []string {
+// Models is the grid row's Model field combobox's data source - see
+// driver.Models for the actual ranking logic and why an empty result is the
+// expected, deliberate outcome for every manufacturer except Kyocera today.
+func (a *App) Models(manufacturer, filterText string) []string {
 	<-a.ready
 	_, modelIndex, _ := a.catalogSnapshot()
-	byModel, ok := modelIndex[manufacturer]
-	if !ok {
-		return nil
-	}
-	models := make([]string, 0, len(byModel))
-	for m := range byModel {
-		models = append(models, m)
-	}
-	sort.Strings(models)
-	return models
+	return driver.Models(modelIndex, manufacturer, filterText)
 }
 
 // DriverCandidates lists selectable driver labels for a row's dropdown -

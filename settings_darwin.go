@@ -28,13 +28,18 @@ func installedAppDataDir() string {
 // executable, falling back to installedAppDataDir() for an installed copy.
 //
 // The portable case's relative-path literal is spelled "Drivers"/"Configs" -
-// no leading ".\" the way the Windows side writes it - since a bare relative
-// name means the same thing to resolveExeRelative's own filepath.IsAbs
-// check either way, and macOS has no backslash-as-separator convention to
-// echo here at all (confirmed live as a real, until-now-shipped bug: handing
-// Windows' own ".\Drivers" spelling to filepath.Join on macOS doesn't split
-// on the backslash, so it created a folder literally *named* ".\Drivers"
-// instead of a "Drivers" subfolder - see settings.go's own doc comment).
+// no leading "./" - matching settings_windows.go's own portable case exactly
+// (also bare, no leading ".\") rather than echoing either OS's own separator
+// convention: a bare relative name means the same thing to
+// resolveExeRelative's own filepath.IsAbs check on any platform, and keeping
+// both sides identical means Settings' displayed base path never shows a
+// platform-specific character that could look wrong (or, worse, actually be
+// wrong - confirmed live as a real, until-now-shipped bug: handing Windows'
+// own ".\Drivers" spelling to filepath.Join on macOS doesn't split on the
+// backslash at all, so it created a folder literally *named* ".\Drivers"
+// instead of a "Drivers" subfolder - see settings.go's own doc comment) if a
+// technician's own workflow ever moves the same flash drive between a
+// Windows and a macOS machine.
 func defaultDriversBasePath() string {
 	if exe, err := os.Executable(); err == nil {
 		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {

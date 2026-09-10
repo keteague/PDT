@@ -20,15 +20,23 @@ type Settings struct {
 }
 
 // installedAppDataDir, defaultDriversBasePath, defaultSaveFileBasePath: see
-// settings_windows.go/settings_darwin.go - both platform-specific, since the
-// portable-copy case's relative-path literal only means "relative path" if
-// it's spelled in this OS's own separator (confirmed live as a real bug: a
-// literal ".\Drivers" - Windows' own spelling - handed to filepath.Join on
-// macOS doesn't split on the backslash at all, so it created a folder
-// literally *named* ".\Drivers" right next to the running .app's own
-// executable instead of a "Drivers" subfolder, which even broke `wails
-// build`'s own codesign step once that malformed folder existed inside the
-// bundle).
+// settings_windows.go/settings_darwin.go - installedAppDataDir is genuinely
+// platform-specific (%LocalAppData%\PDT vs ~/Library/Application
+// Support/PDT), but the two defaultXBasePath functions themselves are split
+// only because of a real bug found live: the portable-copy case used to
+// return a literal ".\Drivers" - Windows' own separator baked into the
+// string - which meant nothing as a relative path once handed to
+// filepath.Join on macOS (it doesn't split on the backslash at all), so it
+// created a folder literally *named* ".\Drivers" right next to the running
+// .app's own executable instead of a "Drivers" subfolder - severely enough
+// that it broke `wails build`'s own codesign step once that malformed folder
+// existed inside the bundle. Both platforms' portable case now returns the
+// same bare "Drivers"/"Configs" literal (no leading ".\" or "./" on either
+// side) rather than each echoing its own OS's separator convention -
+// deliberate: it means Settings' own displayed base path never shows a
+// platform-specific character at all, so a technician moving the same flash
+// drive between a Windows and a macOS machine never sees it look "wrong" on
+// one side or the other.
 
 // defaultPreinstallBasePath is Documents\Preinstall under the current user's
 // home directory on THIS computer - created on demand by the OS folder-

@@ -4,6 +4,23 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-10 - Unified the portable-copy default path literal across platforms
+
+### Changed
+- **Settings > General's portable-copy Drivers/Configs base path no longer shows a platform-specific
+  separator on either OS.** The v0.5.1 fix below split the portable-copy default into
+  `settings_windows.go` (`.\Drivers`/`.\Configs`) vs. `settings_darwin.go` (bare `Drivers`/`Configs`) -
+  Ken's own follow-up question ("when running from flash, it could be from a mac or Windows... needs
+  to change dynamically") led to a simpler answer: since a bare relative name means exactly the same
+  thing to `resolveExeRelative` on every platform, there was never a real need for either side to echo
+  its own OS's separator convention at all. Windows' portable case now also returns bare
+  `Drivers`/`Configs` (no leading `.\`), matching macOS exactly - the displayed base path can no longer
+  look "wrong" (or actually resolve wrong) if the same flash drive/technician workflow ever moves
+  between a Windows and a macOS machine. Also fixed two frontend tooltips (`saveFileBasePath`/
+  `driversBasePath` in `frontend/src/main.js`) that still hardcoded `%LocalAppData%\PDT\...` and a
+  trailing `\` - Windows-only text shown to macOS users too, since the tooltip strings are shared.
+
+## 2026-09-10 - macOS: Model-driven PPD selection; Windows-style paths bug fixed
 ## 2026-09-10 - macOS: Model-driven PPD selection; Windows-style paths bug fixed
 
 ### Added

@@ -38,8 +38,8 @@ const TIP = {
     name: 'Printer object name.',
     ip: 'Printer\'s IP address, or "NUL" to bind permanently to the local NUL: port.',
     selectAllHeader: 'Check/uncheck every row.',
-    saveFileBasePath: 'Where PDT keeps saved JSON configs and captured DEVMODE/Device Settings files, and where Open/Save Configuration start from by default. Defaults to Configs\\ on this flash drive when running portably, or %LocalAppData%\\PDT\\Configs for an installed copy.',
-    driversBasePath: 'Where PDT looks for printer drivers (Drivers\\Windows\\<version>\\<Manufacturer>\\...) - click Refresh (or restart PDT) after changing this to rescan the new location. Defaults to Drivers\\ on this flash drive when running portably, or %LocalAppData%\\PDT\\Drivers for an installed copy.',
+    saveFileBasePath: 'Where PDT keeps saved JSON configs and captured DEVMODE/Device Settings files, and where Open/Save Configuration start from by default. Defaults to Configs alongside PDT itself when running portably, or a per-user PDT data folder for an installed copy.',
+    driversBasePath: 'Where PDT looks for printer drivers (Drivers\\Windows\\<version>\\<Manufacturer>\\... on Windows, Drivers/macOS/<Manufacturer>/<version>/... on macOS) - click Refresh (or restart PDT) after changing this to rescan the new location. Defaults to Drivers alongside PDT itself when running portably, or a per-user PDT data folder for an installed copy.',
     preinstallBasePath: 'Where site-survey "<SaveID> - <Client> - <Address>" subfolders live - Export Configs looks here for the one matching the current Save ID.',
     manufacturerOrder: 'Drag to reorder - controls the Manufacturer dropdown\'s order in Defaults and in the grid. Settings > External Sites is always alphabetical regardless of this order.',
 };

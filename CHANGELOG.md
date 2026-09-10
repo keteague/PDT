@@ -4,6 +4,29 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-09 - Fixed: flash copy ETA swinging wildly (v0.4.2 follow-up)
+
+Ken reported the new ETA (v0.4.2) swinging from 150-160 minutes down to 37, then up to 44, while
+copying a real Drivers folder - exactly matching a known failure mode (the same one Windows' own copy
+dialog is notorious for). Root cause: the ETA averaged bytes-done over the *entire* step's elapsed
+time. A real Drivers folder's file sizes are bimodal - long runs of tiny files (.cat/.inf) where
+per-file open/write/close overhead dominates almost independent of actual byte count, interrupted by a
+handful of huge installers - so a slow, overhead-bound run of small files drags that average down hard,
+and it stays wrong for a long time afterward even once a big file's real throughput starts coming in,
+because the average has to "unwind" every sample since the step began before it reflects current
+conditions at all.
+
+Fixed by replacing the since-the-start average with a time-decayed windowed rate (`etaEstimator`,
+`flashdrive.go`): each new sample decays a running (bytes, seconds) pair by
+`e^(-realElapsed/etaRateTimeConstant)` (6 seconds) before adding its own delta - decaying by actual
+wall-clock time elapsed, not by call count, so a burst of a thousand tiny files arriving within
+milliseconds barely decays the window at all, rather than being treated as if a lot of real time had
+passed. This means the estimate "forgets" a slow phase within roughly the time constant's own span once
+real throughput changes, instead of staying anchored to minutes of stale history. Added
+`TestEtaEstimator_RecoversQuicklyAfterRateChanges` as a direct regression test, simulating a full
+minute of slow throughput followed by a rate increase and confirming the estimate converges toward the
+new rate rather than staying dragged down by the old one.
+
 ## 2026-09-09 - Improved: faster flash drive copy, with a time estimate
 
 Ken reported a manual File Explorer copy of the real Drivers repo took about 21 minutes to a freshly

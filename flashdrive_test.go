@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"testing"
+	"time"
 
 	"PDT/internal/driver"
 )
@@ -179,5 +180,93 @@ func TestSyncDriversTo_SkipsWhenTargetIsTheSameAsSource(t *testing.T) {
 	data, err := os.ReadFile(realFile)
 	if err != nil || string(data) != "original content" {
 		t.Errorf("expected the source file to be completely untouched: data=%q err=%v", data, err)
+	}
+}
+
+// TestEtaEstimator_NoEstimateBeforeMinElapsed guards the "don't flash a
+// wrong number immediately" gate - a rate measured over a fraction of a
+// second is unreliable.
+func TestEtaEstimator_NoEstimateBeforeMinElapsed(t *testing.T) {
+	var est etaEstimator
+	start := time.Now()
+	est.reset(start, 0)
+
+	if got := est.sample(start.Add(time.Second), 10_000_000, 100_000_000); got != 0 {
+		t.Errorf("sample() before etaMinElapsed = %d, want 0 (not known yet)", got)
+	}
+}
+
+// TestEtaEstimator_ZeroOnceTotalReached guards against reporting a stale
+// nonzero ETA once there's nothing left to copy.
+func TestEtaEstimator_ZeroOnceTotalReached(t *testing.T) {
+	var est etaEstimator
+	start := time.Now()
+	est.reset(start, 0)
+	now := start
+	for i := 0; i < 10; i++ {
+		now = now.Add(time.Second)
+		est.sample(now, int64(i+1)*10_000_000, 100_000_000)
+	}
+	if got := est.sample(now, 100_000_000, 100_000_000); got != 0 {
+		t.Errorf("sample() once doneBytes reached totalBytes = %d, want 0", got)
+	}
+}
+
+// TestEtaEstimator_RecoversQuicklyAfterRateChanges is the direct regression
+// test for the real bug reported live: Ken saw the ETA swing from
+// 150-160 minutes down to 37, then up to 44 - because the original
+// implementation averaged bytes-done over the entire step's elapsed time,
+// which a long run of small, overhead-bound files (rate barely
+// distinguishable from zero throughput) drags down hard and keeps dragging
+// down for a long time afterward, even once real high-throughput copying of
+// a large file starts. A time-decayed window should "forget" that slow
+// history within roughly etaRateTimeConstant's own span once the real rate
+// changes, tracking current conditions instead of being anchored to
+// whatever happened minutes ago.
+func TestEtaEstimator_RecoversQuicklyAfterRateChanges(t *testing.T) {
+	var est etaEstimator
+	start := time.Now()
+	est.reset(start, 0)
+
+	const totalBytes = 2_000_000_000 // 2GB - comfortably more than both phases copy
+	const slowRate = 200_000         // 200KB/s - many tiny files, overhead-bound
+	const fastRate = 20_000_000      // 20MB/s - one huge file's real throughput
+
+	var done int64
+	now := start
+	// Phase 1: a full minute of slow, overhead-bound small-file copying -
+	// long enough that a plain since-the-start average would be dominated
+	// by it for a long time afterward.
+	for i := 0; i < 60; i++ {
+		now = now.Add(time.Second)
+		done += slowRate
+		est.sample(now, done, totalBytes)
+	}
+
+	// Phase 2: throughput jumps up sharply. After just a couple of
+	// etaRateTimeConstant spans of new fast samples, the estimate should
+	// already mostly reflect the NEW rate.
+	for i := 0; i < int(etaRateTimeConstant.Seconds())*2; i++ {
+		now = now.Add(time.Second)
+		done += fastRate
+		est.sample(now, done, totalBytes)
+	}
+	got := est.sample(now, done, totalBytes)
+
+	remaining := int64(totalBytes) - done
+	wantEta := int(float64(remaining) / float64(fastRate))
+	if got > wantEta*2 {
+		t.Errorf("ETA after switching to a fast rate = %ds, want within 2x of %ds (the fast-rate-only estimate) - looks still anchored to the old slow rate", got, wantEta)
+	}
+
+	// A plain cumulative since-the-start average is still dominated by the
+	// 60 seconds of slow throughput at this point - confirm the decayed
+	// estimate is meaningfully better (lower) than that naive number would
+	// be, demonstrating the fix actually changes behavior rather than
+	// happening to land in the same place.
+	cumulativeRate := float64(done) / now.Sub(start).Seconds()
+	naiveEta := int(float64(remaining) / cumulativeRate)
+	if got >= naiveEta {
+		t.Errorf("decayed estimate (%ds) should be lower than the naive cumulative-average estimate (%ds) after the rate increased", got, naiveEta)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -32,47 +33,112 @@ type FlashCopyProgress struct {
 	EtaSeconds int    `json:"etaSeconds"`
 }
 
-// etaMinElapsed is how long a step's own byte-rate has to be observed
-// before newFlashCopyProgressFunc will report an ETA at all - a rate
-// measured over the first fraction of a second (or the first handful of
-// tiny files) swings wildly and would flash a wrong, confidence-destroying
-// estimate at the very start of a copy; waiting this long trades a few
-// seconds of "no estimate yet" for one that's actually stable.
-const etaMinElapsed = 2 * time.Second
+// etaMinElapsed is how long a step has to run before newFlashCopyProgressFunc
+// will report an ETA at all - a rate measured over the first fraction of a
+// second (or the first handful of tiny files) is unreliable and would flash
+// a wrong, confidence-destroying estimate at the very start of a copy;
+// waiting this long trades a few seconds of "no estimate yet" for one that's
+// actually stable.
+const etaMinElapsed = 3 * time.Second
+
+// etaRateTimeConstant is the "memory span" of the exponentially time-decayed
+// bytes-per-second estimate newFlashCopyProgressFunc computes: roughly how
+// far back in wall-clock time recent activity still meaningfully influences
+// the current rate, with older activity fading out smoothly rather than
+// being cut off sharply. See newFlashCopyProgressFunc's own doc comment for
+// why a plain since-the-start average doesn't work.
+const etaRateTimeConstant = 6 * time.Second
+
+// etaEstimator tracks a time-decayed bytes-per-second rate for one copy
+// step and turns it into a time-remaining estimate - a plain "bytes done /
+// time elapsed since the step started" average swings wildly and is slow to
+// recover, confirmed live: a real Drivers folder's file sizes are bimodal
+// (long runs of tiny files, e.g. .cat/.inf, interrupted by a handful of huge
+// installers), and per-file open/write/close overhead dominates for the
+// tiny-file runs almost independent of their actual byte count - so a
+// since-the-start average gets dragged down hard by a slow, overhead-bound
+// run of small files, then stays wrong for a long time afterward even once
+// a big file's real throughput starts coming in, because that average has
+// to "unwind" every sample since the step began before it reflects current
+// conditions at all.
+//
+// The fix is to weight recent samples far more than old ones: each call to
+// sample decays a running (bytes, seconds) pair by
+// e^(-realElapsed/etaRateTimeConstant) before adding this call's own delta -
+// decaying by actual wall-clock time elapsed, not by call count, is what
+// keeps this stable regardless of how bunched-up calls are (a burst of a
+// thousand tiny files arriving within a few milliseconds barely decays the
+// window at all, correctly treating them as one small contribution rather
+// than shrinking the window's memory of whatever larger file came before
+// it). Zero value is not ready to use - call reset first.
+type etaEstimator struct {
+	stepStart       time.Time
+	lastSampleTime  time.Time
+	lastSampleBytes int64
+	windowBytes     float64
+	windowSeconds   float64
+}
+
+// reset starts a new step's estimate from scratch at now, with doneBytes as
+// that step's own starting point (normally 0, but need not be).
+func (e *etaEstimator) reset(now time.Time, doneBytes int64) {
+	e.stepStart = now
+	e.lastSampleTime = now
+	e.lastSampleBytes = doneBytes
+	e.windowBytes = 0
+	e.windowSeconds = 0
+}
+
+// sample feeds one new (now, doneBytes) observation into the decayed
+// window and returns the current estimated seconds remaining until
+// doneBytes reaches totalBytes - 0 ("not known yet") until at least
+// etaMinElapsed has passed since reset, or once totalBytes is reached.
+func (e *etaEstimator) sample(now time.Time, doneBytes, totalBytes int64) int {
+	if dt := now.Sub(e.lastSampleTime).Seconds(); dt > 0 {
+		decay := math.Exp(-dt / etaRateTimeConstant.Seconds())
+		e.windowBytes = e.windowBytes*decay + float64(doneBytes-e.lastSampleBytes)
+		e.windowSeconds = e.windowSeconds*decay + dt
+		e.lastSampleTime = now
+		e.lastSampleBytes = doneBytes
+	}
+	if doneBytes >= totalBytes || now.Sub(e.stepStart) < etaMinElapsed || e.windowSeconds <= 0 {
+		return 0
+	}
+	rate := e.windowBytes / e.windowSeconds
+	if rate <= 0 {
+		return 0
+	}
+	return int(float64(totalBytes-doneBytes) / rate)
+}
 
 // newFlashCopyProgressFunc returns a stepProgressFunc that emits
 // flashCopyProgressEvent for letter, throttled to at most once every 150ms
 // per step - except the step's own final update (every file processed),
 // always sent so the dialog never sits on a stale percentage once a step
-// actually finishes. Tracks each step's own start time (reset whenever the
-// step name changes) and estimates time remaining from that step's own
-// observed bytes-per-second so far, extrapolated against its remaining
-// bytes - a byte rate rather than a file rate, since file count alone is a
-// poor time signal once file sizes vary as wildly as a real Drivers folder's
-// do (thousands of tiny files, then one enormous installer).
+// actually finishes. See etaEstimator for how the ETA itself is computed.
 func (a *App) newFlashCopyProgressFunc(letter string) stepProgressFunc {
 	var lastEmit time.Time
 	var curStep string
-	var stepStart time.Time
+	var est etaEstimator
+
 	return func(step string, p CopyProgress) {
 		now := time.Now()
 		if step != curStep {
 			curStep = step
-			stepStart = now
+			est.reset(now, p.DoneBytes)
 		}
+		// Every call feeds the estimator, regardless of the emit throttle
+		// below - otherwise, whatever bytes/time occur between two
+		// throttled emits would simply never be counted at all.
+		etaSeconds := est.sample(now, p.DoneBytes, p.TotalBytes)
+
 		final := p.DoneFiles == p.TotalFiles
 		if !final && now.Sub(lastEmit) < 150*time.Millisecond {
 			return
 		}
 		lastEmit = now
-
-		etaSeconds := 0
-		if !final {
-			if elapsed := now.Sub(stepStart); elapsed >= etaMinElapsed && p.DoneBytes > 0 {
-				if rate := float64(p.DoneBytes) / elapsed.Seconds(); rate > 0 {
-					etaSeconds = int(float64(p.TotalBytes-p.DoneBytes) / rate)
-				}
-			}
+		if final {
+			etaSeconds = 0
 		}
 		runtime.EventsEmit(a.ctx, flashCopyProgressEvent, FlashCopyProgress{
 			Letter:     letter,

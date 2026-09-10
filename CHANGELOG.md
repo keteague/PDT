@@ -4,6 +4,48 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-09 - Improved: faster flash drive copy, with a time estimate
+
+Ken reported a manual File Explorer copy of the real Drivers repo took about 21 minutes to a freshly
+formatted flash drive, and PDT's own Write to Flash Drive gave no sense of how much longer it had left
+- especially misleading with a file-count-based percentage once file sizes vary as wildly as a real
+Drivers folder's do (thousands of tiny files, then one huge installer).
+
+### Changed
+- **`copyTreeMerge` (`copytree.go`) now copies files on a small worker pool** (`copyTreeWorkers = 4`)
+  instead of one file at a time - a newly formatted destination gets zero benefit from the existing
+  skip-unchanged-file optimization (there's nothing to skip yet), so every file has to actually be
+  copied, and USB media is latency-bound as much as bandwidth-bound: overlapping a handful of files'
+  worth of per-file open/write/close latency helps more than raw sequential throughput alone. Directory
+  creation stays a single sequential pass first (cheap, and sidesteps any concurrent-`MkdirAll`
+  question entirely) before file copies are handed to the pool.
+- **`copyFile` now copies with an explicit 1MB buffer** (`io.CopyBuffer`) instead of `io.Copy`'s default
+  32KB, cutting the read/write syscall count for the larger driver installer files a real Drivers
+  folder also contains.
+- **The copy-progress dialog now shows a time estimate** ("~Xm Ys remaining") and its bar is now
+  byte-based, not file-count-based, for the same file-size-variance reason above - `CopyProgress` now
+  carries byte totals alongside file counts, and `newFlashCopyProgressFunc` (`flashdrive.go`) estimates
+  time remaining from the current step's own observed bytes-per-second, waiting at least 2 seconds of
+  real throughput data before showing anything rather than flashing an unstable estimate from the very
+  first file.
+
+### Fixed
+- **A directory symlink/junction under Drivers copied as a broken, silently empty 0-byte file** - Ken
+  reported this independently, having noticed the same thing while investigating (specifically
+  "hardlinks to folders"; Windows junctions/directory symlinks are what that colloquially refers to).
+  Root cause: `filepath.WalkDir` does not follow a symlink it encounters - Go reports it as a small
+  non-directory entry regardless of what it actually points to - so `copyTreeMerge` opened the link's
+  own path expecting file bytes, which created the destination file (truncating it to empty first)
+  before failing to read anything from what is actually a directory. Confirmed live against a real
+  Drivers folder that aliases several macOS version folders to one real shared driver folder this way
+  (`macOS/Canon/15-Sequoia` -> `26-Tahoe`, etc., to avoid keeping duplicate copies locally). exFAT (what
+  a flash drive is always formatted as) has no symlink/junction support at all, so there's no way to
+  preserve the link itself across the copy - `copyTreeMerge` now follows any symlink/junction it finds
+  (`collectCopyJobs`, replacing the plain `filepath.WalkDir`) and copies its resolved real content in
+  its place instead, duplicating bytes across every alias of the same target rather than leaving a
+  broken stand-in. Guards against a link that resolves to one of its own ancestors (a genuine cycle)
+  rather than recursing forever.
+
 ## 2026-09-09 - Fixed: runaway self-nested MSI extraction (Canon DiasSetup)
 
 Found while investigating further on-launch scan speedups after v0.4.0 shipped: `ensureMsiExtracted`

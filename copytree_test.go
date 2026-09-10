@@ -1,9 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestSamePath(t *testing.T) {
@@ -123,5 +126,164 @@ func TestCopyTreeMerge_OneFailingFileDoesNotStopTheRest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "z-after.txt")); err != nil {
 		t.Errorf("expected the file after the poisoned one to still be copied - this is the exact real bug (Ricoh/Sharp/Toshiba/Xerox never copied after Lexmark failed): %v", err)
+	}
+}
+
+// TestCopyTreeMerge_ConcurrentCopyIsCorrectAndComplete stresses the
+// copyTreeWorkers-wide worker pool with enough files (well more than
+// copyTreeWorkers) that every worker goroutine necessarily handles more than
+// one job, guarding against the class of bug concurrency introduces that a
+// single-threaded implementation can't have: a file silently dropped or
+// double-processed, a corrupted/truncated copy from a shared buffer, or a
+// progress total that doesn't land exactly on 100% at the end.
+func TestCopyTreeMerge_ConcurrentCopyIsCorrectAndComplete(t *testing.T) {
+	src := t.TempDir()
+	const fileCount = 200
+	var wantTotalBytes int64
+	for i := 0; i < fileCount; i++ {
+		content := fmt.Sprintf("file number %d\n", i)
+		if err := os.WriteFile(filepath.Join(src, fmt.Sprintf("file-%03d.txt", i)), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		wantTotalBytes += int64(len(content))
+	}
+
+	dest := t.TempDir()
+	var (
+		mu       sync.Mutex
+		progress []CopyProgress
+	)
+	err := copyTreeMerge(dest, src, func(p CopyProgress) {
+		mu.Lock()
+		progress = append(progress, p)
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatalf("copyTreeMerge failed: %v", err)
+	}
+
+	for i := 0; i < fileCount; i++ {
+		want := fmt.Sprintf("file number %d\n", i)
+		got, err := os.ReadFile(filepath.Join(dest, fmt.Sprintf("file-%03d.txt", i)))
+		if err != nil {
+			t.Errorf("file-%03d.txt missing at destination: %v", i, err)
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("file-%03d.txt content = %q, want %q (corrupted by concurrent copy?)", i, got, want)
+		}
+	}
+
+	if len(progress) != fileCount {
+		t.Fatalf("got %d progress callbacks, want exactly %d (one per file, no drops/duplicates)", len(progress), fileCount)
+	}
+	last := progress[len(progress)-1]
+	if last.DoneFiles != fileCount || last.TotalFiles != fileCount {
+		t.Errorf("final progress DoneFiles/TotalFiles = %d/%d, want %d/%d", last.DoneFiles, last.TotalFiles, fileCount, fileCount)
+	}
+	if last.DoneBytes != wantTotalBytes || last.TotalBytes != wantTotalBytes {
+		t.Errorf("final progress DoneBytes/TotalBytes = %d/%d, want %d/%d", last.DoneBytes, last.TotalBytes, wantTotalBytes, wantTotalBytes)
+	}
+}
+
+// symlinkOrSkip creates a symlink and skips the test if this machine can't
+// (Windows requires either Developer Mode or an elevated process to create
+// one at all - "A required privilege is not held by the client" otherwise),
+// rather than failing a test suite run on a machine that simply doesn't have
+// that configured.
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create symlinks on this machine (%v) - skipping", err)
+	}
+}
+
+// TestCopyTreeMerge_DereferencesDirectorySymlink guards the exact real bug
+// reported live: a real Drivers folder can alias several macOS version
+// folders to one real shared driver folder via a directory symlink/junction
+// (e.g. "15-Sequoia" -> "26-Tahoe", to avoid keeping duplicate copies
+// locally) - filepath.WalkDir doesn't follow it, so it was treated as a
+// small non-directory file, and copying "it" created a truncated, silently
+// empty 0-byte file at the destination instead of any of the real content.
+// exFAT (what every flash drive is formatted as) can't represent a
+// symlink/junction at all, so the fix is to follow the link and copy its
+// real resolved content in its place - confirmed here by checking the
+// aliased folder's file actually landed at the destination with real
+// content, not as an empty stand-in.
+func TestCopyTreeMerge_DereferencesDirectorySymlink(t *testing.T) {
+	src := t.TempDir()
+	realDir := filepath.Join(src, "26-Tahoe")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "driver.ppd"), []byte("real ppd content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, realDir, filepath.Join(src, "15-Sequoia"))
+
+	dest := t.TempDir()
+	if err := copyTreeMerge(dest, src, nil); err != nil {
+		t.Fatalf("copyTreeMerge failed: %v", err)
+	}
+
+	for _, name := range []string{"26-Tahoe", "15-Sequoia"} {
+		data, err := os.ReadFile(filepath.Join(dest, name, "driver.ppd"))
+		if err != nil {
+			t.Errorf("%s/driver.ppd missing at destination: %v", name, err)
+			continue
+		}
+		if string(data) != "real ppd content" {
+			t.Errorf("%s/driver.ppd content = %q, want the real content, not an empty stand-in", name, data)
+		}
+	}
+}
+
+// TestCopyTreeMerge_DereferencesFileSymlink guards the file-level version of
+// the same problem - a symlink to a single file, not a whole directory.
+func TestCopyTreeMerge_DereferencesFileSymlink(t *testing.T) {
+	src := t.TempDir()
+	realFile := filepath.Join(src, "real.inf")
+	if err := os.WriteFile(realFile, []byte("real inf content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, realFile, filepath.Join(src, "alias.inf"))
+
+	dest := t.TempDir()
+	if err := copyTreeMerge(dest, src, nil); err != nil {
+		t.Fatalf("copyTreeMerge failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dest, "alias.inf"))
+	if err != nil {
+		t.Fatalf("alias.inf missing at destination: %v", err)
+	}
+	if string(data) != "real inf content" {
+		t.Errorf("alias.inf content = %q, want the real content, not an empty stand-in", data)
+	}
+}
+
+// TestCopyTreeMerge_SymlinkCycleDoesNotHang guards against a directory
+// symlink that resolves to one of its own ancestors - without ancestor
+// tracking, collectCopyJobs would recurse into that same real directory
+// forever. This must report an error and return, not hang or crash.
+func TestCopyTreeMerge_SymlinkCycleDoesNotHang(t *testing.T) {
+	src := t.TempDir()
+	sub := filepath.Join(src, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// sub/loop points back at src itself - a direct cycle.
+	symlinkOrSkip(t, src, filepath.Join(sub, "loop"))
+
+	dest := t.TempDir()
+	done := make(chan error, 1)
+	go func() { done <- copyTreeMerge(dest, src, nil) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("expected an error reporting the symlink cycle")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("copyTreeMerge did not return - likely stuck in a symlink cycle")
 	}
 }

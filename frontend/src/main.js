@@ -1806,14 +1806,32 @@ function closeFlashCopyProgressModal() {
     el('flashCopyProgressBackdrop').hidden = true;
 }
 
+// formatEta renders a whole number of seconds as a short "~Xm Ys remaining"/
+// "~Xs remaining" string. Only called once the backend has actually decided
+// an estimate is stable enough to report (see newFlashCopyProgressFunc's own
+// doc comment) - there's no "estimating..." placeholder here because
+// updateFlashCopyProgress simply omits the whole phrase until then, rather
+// than showing a number known to still be unreliable.
+function formatEta(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return m > 0 ? `~${m}m ${s}s remaining` : `~${s}s remaining`;
+}
+
 function updateFlashCopyProgress(progress) {
     const row = el('flashCopyProgressBackdrop').querySelector(`.flash-copy-row[data-letter="${CSS.escape(progress.letter)}"]`);
     if (!row) return;
+    const eta = progress.etaSeconds > 0 ? ` - ${formatEta(progress.etaSeconds)}` : '';
     row.querySelector('.flash-copy-row-label').textContent =
-        `${progress.letter} - ${progress.step} (${progress.done} / ${progress.total} files)`;
+        `${progress.letter} - ${progress.step} (${progress.done} / ${progress.total} files)${eta}`;
     const bar = row.querySelector('.flash-copy-row-bar');
-    bar.max = Math.max(progress.total, 1);
-    bar.value = progress.done;
+    // Bytes, not file count, drive the bar itself - a file-count percentage
+    // is a poor proxy for actual progress once file sizes vary as wildly as
+    // a real Drivers folder's do (thousands of tiny files, then one huge
+    // installer), the same reason the backend estimates the ETA from bytes
+    // too (see CopyProgress's own doc comment).
+    bar.max = Math.max(progress.totalBytes, 1);
+    bar.value = progress.doneBytes;
 }
 
 function openSettingsModal() {

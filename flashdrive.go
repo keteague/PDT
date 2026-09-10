@@ -19,28 +19,70 @@ import (
 // indication it hadn't just hung (confirmed live).
 const flashCopyProgressEvent = "flashcopy-progress"
 
-// FlashCopyProgress is flashCopyProgressEvent's payload.
+// FlashCopyProgress is flashCopyProgressEvent's payload. EtaSeconds is 0
+// until it's actually known (see newFlashCopyProgressFunc) - the frontend
+// treats 0 as "no estimate yet" rather than "0 seconds remaining".
 type FlashCopyProgress struct {
-	Letter string `json:"letter"`
-	Step   string `json:"step"`
-	Done   int    `json:"done"`
-	Total  int    `json:"total"`
+	Letter     string `json:"letter"`
+	Step       string `json:"step"`
+	Done       int    `json:"done"`
+	Total      int    `json:"total"`
+	DoneBytes  int64  `json:"doneBytes"`
+	TotalBytes int64  `json:"totalBytes"`
+	EtaSeconds int    `json:"etaSeconds"`
 }
+
+// etaMinElapsed is how long a step's own byte-rate has to be observed
+// before newFlashCopyProgressFunc will report an ETA at all - a rate
+// measured over the first fraction of a second (or the first handful of
+// tiny files) swings wildly and would flash a wrong, confidence-destroying
+// estimate at the very start of a copy; waiting this long trades a few
+// seconds of "no estimate yet" for one that's actually stable.
+const etaMinElapsed = 2 * time.Second
 
 // newFlashCopyProgressFunc returns a stepProgressFunc that emits
 // flashCopyProgressEvent for letter, throttled to at most once every 150ms
-// per step - except the step's own final update (done == total), always
-// sent so the dialog never sits on a stale percentage once a step actually
-// finishes.
+// per step - except the step's own final update (every file processed),
+// always sent so the dialog never sits on a stale percentage once a step
+// actually finishes. Tracks each step's own start time (reset whenever the
+// step name changes) and estimates time remaining from that step's own
+// observed bytes-per-second so far, extrapolated against its remaining
+// bytes - a byte rate rather than a file rate, since file count alone is a
+// poor time signal once file sizes vary as wildly as a real Drivers folder's
+// do (thousands of tiny files, then one enormous installer).
 func (a *App) newFlashCopyProgressFunc(letter string) stepProgressFunc {
 	var lastEmit time.Time
-	return func(step string, done, total int) {
+	var curStep string
+	var stepStart time.Time
+	return func(step string, p CopyProgress) {
 		now := time.Now()
-		if done != total && now.Sub(lastEmit) < 150*time.Millisecond {
+		if step != curStep {
+			curStep = step
+			stepStart = now
+		}
+		final := p.DoneFiles == p.TotalFiles
+		if !final && now.Sub(lastEmit) < 150*time.Millisecond {
 			return
 		}
 		lastEmit = now
-		runtime.EventsEmit(a.ctx, flashCopyProgressEvent, FlashCopyProgress{Letter: letter, Step: step, Done: done, Total: total})
+
+		etaSeconds := 0
+		if !final {
+			if elapsed := now.Sub(stepStart); elapsed >= etaMinElapsed && p.DoneBytes > 0 {
+				if rate := float64(p.DoneBytes) / elapsed.Seconds(); rate > 0 {
+					etaSeconds = int(float64(p.TotalBytes-p.DoneBytes) / rate)
+				}
+			}
+		}
+		runtime.EventsEmit(a.ctx, flashCopyProgressEvent, FlashCopyProgress{
+			Letter:     letter,
+			Step:       step,
+			Done:       p.DoneFiles,
+			Total:      p.TotalFiles,
+			DoneBytes:  p.DoneBytes,
+			TotalBytes: p.TotalBytes,
+			EtaSeconds: etaSeconds,
+		})
 	}
 }
 
@@ -163,7 +205,7 @@ func (a *App) SyncDriversToFlashDrives(letters []string) BatchDriveResult {
 	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}}
 	for _, letter := range letters {
 		progress := a.newFlashCopyProgressFunc(letter)
-		if err := syncDriversTo(letter, func(done, total int) { progress("Drivers", done, total) }); err != nil {
+		if err := syncDriversTo(letter, func(p CopyProgress) { progress("Drivers", p) }); err != nil {
 			result.Failed[letter] = err.Error()
 			continue
 		}
@@ -189,11 +231,11 @@ func (a *App) SyncDriversToFlashDrives(letters []string) BatchDriveResult {
 // it finds - confirmed live as a real bug (see copyTreeMerge's own doc
 // comment).
 // stepProgressFunc reports progress for one named copy step ("Drivers",
-// "Configs", "7-Zip tools") - done/total files processed so far within that
-// step specifically, each step restarting its own count from zero. nil is a
+// "Configs", "7-Zip tools") - files/bytes processed so far within that step
+// specifically, each step restarting its own count from zero. nil is a
 // valid, no-op value (existing tests, and anything that doesn't need to show
 // a progress dialog, pass nil throughout).
-type stepProgressFunc func(step string, done, total int)
+type stepProgressFunc func(step string, progress CopyProgress)
 
 func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepProgressFunc) error {
 	if err := os.WriteFile(filepath.Join(letter, exeName), exeData, 0o755); err != nil {
@@ -208,9 +250,9 @@ func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepPro
 	// file part-way through Drivers previously skipped Configs and tools
 	// entirely too, on top of whatever Drivers itself already skipped.
 	var errs []error
-	driversProgress := func(done, total int) {
+	driversProgress := func(p CopyProgress) {
 		if progress != nil {
-			progress("Drivers", done, total)
+			progress("Drivers", p)
 		}
 	}
 	if err := syncDriversTo(letter, driversProgress); err != nil {
@@ -219,9 +261,9 @@ func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepPro
 
 	configsDest := filepath.Join(letter, "Configs")
 	if dirExists(configsRoot()) {
-		configsProgress := func(done, total int) {
+		configsProgress := func(p CopyProgress) {
 			if progress != nil {
-				progress("Configs", done, total)
+				progress("Configs", p)
 			}
 		}
 		if err := copyTreeMerge(configsDest, configsRoot(), configsProgress); err != nil {
@@ -233,9 +275,9 @@ func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepPro
 	}
 
 	if dirExists(sevenZipToolsDir()) {
-		toolsProgress := func(done, total int) {
+		toolsProgress := func(p CopyProgress) {
 			if progress != nil {
-				progress("7-Zip tools", done, total)
+				progress("7-Zip tools", p)
 			}
 		}
 		if err := copyTreeMerge(filepath.Join(letter, "tools", "7zip"), sevenZipToolsDir(), toolsProgress); err != nil {
@@ -253,7 +295,7 @@ func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepPro
 // shared step between writePortablePDTTo (full "Write to Flash Drive") and
 // the toolbar's Sync button (drivers only, no exe/Configs/tools, for topping
 // up a flash drive that already exists).
-func syncDriversTo(letter string, onProgress func(done, total int)) error {
+func syncDriversTo(letter string, onProgress func(CopyProgress)) error {
 	driversDest := filepath.Join(letter, "Drivers")
 	src := driversRoot()
 	if samePath(driversDest, src) {

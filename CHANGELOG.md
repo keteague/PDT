@@ -4,6 +4,48 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-10 - macOS: model-driven driver-family and PPD selection (Canon UFR II/PS/PPD)
+
+### Added
+- **`driver.ResolveMacFamily` (`internal/driver/macfamily.go`)**: for a manufacturer that ships more
+  than one genuinely distinct driver as separate packages - not just version variants of the same one,
+  which `ResolveMac`'s plain newest-by-mtime pick already handled - resolves the row's Model against
+  each family's own PPD payload (newest-first, in a declared preference order) before picking which
+  package to install. `macFamilyPreference` today has one entry, matching Ken's own stated preference:
+  `"Canon": {"UFRII", "PS", "PPD"}` (UFR II first, then PostScript, then the plain-PPD-only package).
+  Falls back through lower-preference families with a `[WARN]` note if the preferred family's PPDs
+  don't cover the requested model, and all the way back to plain `ResolveMac` (also warned) if none of
+  them do, or Model is blank. Every other manufacturer (no family table) is unaffected.
+- **`internal/driver/macppd.go`**: `ReadPPDNickName` reads a PPD's own `*NickName`/`*ModelName` field
+  (transparently gzip-decompressing `.ppd.gz`); `PackagePPDNickNames`/`PackageBestModelScore` do the
+  same read-only `pkgutil --expand-full` inspection `PackageLabel` already used, but collect every
+  PPD's NickName and score it against a model string - lets a package be checked against Model
+  *before* installing it, which is what `ResolveMacFamily` uses to compare families.
+
+### Fixed
+- **`choosePPD` (`deploy_darwin.go`) was matching a newly-installed PPD's *filename* against Model,
+  and Canon's real filenames make that a hard failure.** Confirmed live against a real Canon UFR II
+  package (mounted the actual `.dmg`, which contained a nested `.dmg`, containing
+  `UFRII_LT_LIPS_LX_Installer.pkg`) that the PPD for the iR-ADV C5840 is filed as
+  `CNPZUIRAC5840ZU.ppd.gz` - a cryptic vendor code sharing no matchable substring, or even in-order
+  character sequence, with how a technician would type the model (`iR-ADV C5840`);
+  `FuzzyMatchScore`'s subsequence fallback specifically fails on the `-` and ` ` characters the
+  filename never contains, so this was a hard `-1`, not just a weak match. That PPD's own `*NickName`
+  reads `"Canon iR-ADV C5840/5850"` - `choosePPD` now reads each candidate's NickName
+  (`driver.ReadPPDNickName`) before scoring, falling back to the filename only when a PPD has none at
+  all. Fixes model selection for every manufacturer, not just Canon.
+
+### Testing
+- `internal/driver/macfamily_test.go`: 6 tests against synthetic `pkgbuild`-built fixtures
+  (`internal/driver/testdata_mac_family/`, standing in for Canon's real UFRII/PS/PPD split) covering
+  the direct match, each fallback tier, the no-match-anywhere case, a blank Model, and a manufacturer
+  with no family table.
+- `internal/printer/darwin/deploy_darwin_test.go`: new `TestChoosePPD_MatchesRealCanonStyleCrypticFilenameByNickNameContent`
+  proves the actual bug this was built to fix, using real cryptic Canon-style filenames with real
+  NickName content.
+- All validated first against the user's real Canon UFR II download before being reduced to permanent,
+  fast synthetic fixtures.
+
 ## 2026-09-10 - macOS: auto-extract .zip driver packages (Canon ships this way)
 
 ### Fixed

@@ -113,9 +113,15 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 }
 
 // resolveDriver ports ensureDriverCurrent's role: resolve row's manufacturer
-// to a local package (or an OpenPrinting fallback PPD), installing it if it's
-// a package, and returns the PPD path EnsureQueue should use ("" for the
-// -m everywhere fallback - see EnsureDriverInstalled's own doc comment).
+// (and, for a manufacturer that ships more than one distinct driver family -
+// see driver.ResolveMacFamily - row's own Model) to a local package or an
+// OpenPrinting fallback PPD, installing it if it's a package, and returns
+// the PPD path EnsureQueue should use ("" for the -m everywhere fallback -
+// see EnsureDriverInstalled's own doc comment). row.Driver, when it holds an
+// *exact* OpenPrintingCandidates label (the technician explicitly picked one
+// from the Driver dropdown rather than just typing a Model and moving on),
+// is preferred over re-deriving a guess from Model in the OpenPrinting-
+// fallback branch - a real selection beats a best guess.
 //
 // Unlike Windows, there's no cheap "read the currently-installed version"
 // check to skip a redundant reinstall (see PackageLabel's own doc comment for
@@ -124,18 +130,11 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 // same package is a no-op from CUPS' point of view, just a few extra seconds
 // per row rather than the multi-minute cost the NUL: workaround existed
 // for on Windows).
-// resolveDriver picks the PPD to deploy with. row.Model is the primary
-// signal once a manufacturer resolves to more than one plausible PPD (either
-// among a single install's own newly-registered PPDs, or across a
-// manufacturer's whole OpenPrinting bucket) - the planned behavior the
-// README's own "Planned: Model-driven PPD selection on macOS" section
-// described before this was built. row.Driver, when it holds an *exact*
-// OpenPrintingCandidates label (the technician explicitly picked one from
-// the Driver dropdown rather than just typing a Model and moving on), is
-// preferred over re-deriving a guess from Model - a real selection beats a
-// best guess.
 func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, log *printer.Logger) (ppdPath string, err error) {
-	if resolved := driver.ResolveMac(d.Catalog, row.Manufacturer); resolved != nil {
+	if resolved, note := driver.ResolveMacFamily(d.Catalog, row.Manufacturer, row.Model); resolved != nil {
+		if note != "" {
+			log.Warn("%s", note)
+		}
 		log.Info("Resolved package %q (%s) for %s.", resolved.Path, resolved.Label, row.Manufacturer)
 		newPPDs, err := EnsureDriverInstalled(ctx, resolved)
 		if err != nil {
@@ -172,14 +171,24 @@ func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, lo
 // choosePPD picks the best of an install's newly-registered PPDs for model -
 // most driver packages register several (one per supported model in the
 // family, as seen installing the real Kyocera package: a single install adds
-// one PPD per model it supports), fuzzy-matched against each PPD's own
-// filename. ambiguous reports whether the pick was actually confident: a
-// blank model, or two-or-more candidates tying for the best score, both mean
-// there wasn't enough signal to be sure - the caller logs a [WARN] rather
-// than silently guessing wrong with no indication, the gap the README's own
-// "Planned: Model-driven PPD selection on macOS" section called out as still
-// unbuilt (a full interactive disambiguation prompt remains a further
-// possible enhancement, not attempted here).
+// one PPD per model it supports). Matches against each PPD's own *NickName
+// (driver.ReadPPDNickName), not its filename - confirmed necessary against a
+// real Canon install: Canon's PPD filenames are cryptic codes
+// ("CNPZUIRAC5840ZU.ppd.gz") sharing no matchable substring, or even in-order
+// character sequence, with how a technician would actually type the model
+// ("iR-ADV C5840") - FuzzyMatchScore's subsequence fallback specifically
+// fails on the "-" and " " characters the filename never contains, so
+// filename matching isn't just weaker here, it's a hard zero. Falls back to
+// the bare filename only when a PPD has no readable NickName at all (rare -
+// every real PPD inspected so far has one).
+//
+// ambiguous reports whether the pick was actually confident: a blank model,
+// or two-or-more candidates tying for the best score, both mean there wasn't
+// enough signal to be sure - the caller logs a [WARN] rather than silently
+// guessing wrong with no indication, the gap the README's own "Model-driven
+// PPD selection on macOS" section calls out as still unbuilt (a full
+// interactive disambiguation prompt remains a further possible enhancement,
+// not attempted here).
 func choosePPD(candidates []string, model string) (chosen string, ambiguous bool) {
 	if len(candidates) == 1 {
 		return candidates[0], false
@@ -189,7 +198,11 @@ func choosePPD(candidates []string, model string) (chosen string, ambiguous bool
 	}
 	bestIdx, bestScore, secondScore := 0, -1, -1
 	for i, c := range candidates {
-		score := driver.FuzzyMatchScore(c, model)
+		label := c
+		if nick, ok := driver.ReadPPDNickName(c); ok {
+			label = nick
+		}
+		score := driver.FuzzyMatchScore(label, model)
 		if score > bestScore {
 			bestIdx, secondScore, bestScore = i, bestScore, score
 		} else if score > secondScore {

@@ -1,6 +1,10 @@
 package darwin
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // Fixture drawn from a real install: a single Kyocera driver install
 // registered both "Kyocera TASKalfa MZ6001ci" and "Kyocera TASKalfa MZ6001i"
@@ -73,5 +77,38 @@ func TestChoosePPD_ModelMatchingNothingFallsBackToFirst(t *testing.T) {
 	chosen, ambiguous := choosePPD(realKyoceraPPDs, "zzz-no-such-model")
 	if chosen != realKyoceraPPDs[0] || !ambiguous {
 		t.Errorf("choosePPD(no-match) = (%q, %v), want (%q, true)", chosen, ambiguous, realKyoceraPPDs[0])
+	}
+}
+
+// TestChoosePPD_MatchesRealCanonStyleCrypticFilenameByNickNameContent proves
+// the actual bug this was built to fix: real Canon PPD filenames are cryptic
+// codes ("CNPZUIRAC5840ZU.ppd") with no matchable relationship to how a
+// technician would type the model ("iR-ADV C5840") - confirmed live that
+// FuzzyMatchScore(filename, "iR-ADV C5840") is a hard -1 for a real Canon
+// filename, since its subsequence fallback fails outright on the "-" and " "
+// characters the filename never contains. choosePPD has to read each
+// candidate's own *NickName (driver.ReadPPDNickName) to have any chance of
+// matching a package with cryptic-but-real vendor filenames like this.
+func TestChoosePPD_MatchesRealCanonStyleCrypticFilenameByNickNameContent(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, nickName string) string {
+		path := filepath.Join(dir, name)
+		content := "*PPD-Adobe: \"4.3\"\n*NickName: \"" + nickName + "\"\n"
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", path, err)
+		}
+		return path
+	}
+	// Real cryptic Canon-style filenames, confirmed live to score a hard -1
+	// against "iR-ADV C5840" if matched by filename alone.
+	wrongModel := write("CNPZUIRAC5250ZU.ppd", "Canon iR-ADV C5250/5255")
+	rightModel := write("CNPZUIRAC5840ZU.ppd", "Canon iR-ADV C5840/5850")
+
+	chosen, ambiguous := choosePPD([]string{wrongModel, rightModel}, "iR-ADV C5840")
+	if chosen != rightModel {
+		t.Errorf("choosePPD matched %q, want the real C5840 PPD %q - filename-only matching would have failed to distinguish either (or both) of these", chosen, rightModel)
+	}
+	if ambiguous {
+		t.Errorf("expected a confident match (only one candidate's NickName contains \"C5840\"), got ambiguous=true")
 	}
 }

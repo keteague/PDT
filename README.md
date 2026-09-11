@@ -92,6 +92,8 @@ nothing analogous to create ahead of the queue itself.
 | `internal/driver/maccatalog.go`, `maczip.go` | Scans `Drivers/macOS/<Manufacturer>/<any version folder>/*.dmg`/`*.pkg` (version nested under manufacturer, the other way from the Windows side - see "Drivers folder layout" below for why), plus a flat `Drivers/macOS/OpenPrinting/<Manufacturer>/*.ppd` fallback bucket. `.zip` is auto-extracted first (`ensureMacZipsExtracted`, reusing the Windows side's own `extractZip`/`flattenRedundantWrapperDir` - no Windows-only dependency in either) - confirmed necessary against a real Canon download, which ships as a `.zip` directly wrapping one `.dmg` with no installer of its own inside. `__MACOSX/` and `._`-prefixed AppleDouble resource-fork stubs (macOS's own zip tooling litters these into any zip made on a Mac) are explicitly skipped - confirmed live one of these shares its real file's own `.dmg` extension, at a few hundred bytes instead of 80+ MB, so without this it would show up as a second, bogus catalog entry that fails the moment something tries to mount it. |
 | `internal/driver/macmount.go` | `LocatePkg` resolves a `.dmg` to the real `.pkg` inside it (mounts via `hdiutil`, recurses into one level of nested `.dmg` - confirmed necessary against a real Kyocera package that wraps a nested image), with no bundled extraction tool needed - unlike Windows' bundled 7-Zip, macOS driver packages need no pre-extraction step at all. `PackageLabel` is a best-effort *display* label only (see below) - never used to decide which package is newest. |
 | `internal/driver/macresolve.go` | `ResolveMac` picks the newest package for a manufacturer **by file modification time**, not by any version parsed out of the package - confirmed against a real Kyocera distribution-style package that there's no reliable per-package version field on macOS at all (every component's own declared "version" was boilerplate `1.0`/`0`); the file's own mtime is the only honest signal available. `ResolveOpenPrintingPPD`/`OpenPrintingCandidates` fuzzy-match a technician-typed driver/model string against the OpenPrinting fallback bucket's own filenames (normalized from `Ricoh_MP_C3003.ppd`-style underscores to spaces first - confirmed necessary, `FuzzyMatchScore`'s subsequence matching is strict about order and does not treat `_` and ` ` as interchangeable). |
+| `internal/driver/macppd.go` | `ReadPPDNickName` reads a PPD's own `*NickName` (falling back to `*ModelName`), transparently gzip-decompressing `.ppd.gz` - confirmed live necessary against real Canon PPDs, whose filenames (`CNPZUIRAC5840ZU.ppd.gz`) are cryptic vendor codes sharing no matchable substring, or even in-order character sequence, with how a technician would actually type the model (`iR-ADV C5840`); `FuzzyMatchScore` against the raw filename is a hard `-1`. `PackagePPDNickNames`/`PackageBestModelScore` do the same read-only `pkgutil --expand-full` inspection `PackageLabel` already does, but collect every PPD's `*NickName` and score them against a model string - lets a package be checked for whether it even supports a given model *before* installing it. |
+| `internal/driver/macfamily.go` | `ResolveMacFamily` wraps `ResolveMac` for a manufacturer that ships more than one genuinely distinct driver as separate packages, not just version variants of one driver (`macFamilyPreference`: today just `"Canon": {"UFRII", "PS", "PPD"}`, Ken's own stated preference order) - tries each family newest-first, pre-checking its PPD payload against Model via `PackageBestModelScore` before committing to it, falling through to the next-preferred family on no match. Degrades silently to plain `ResolveMac` for any manufacturer with no family table. |
 | `internal/printer/darwin/elevate_darwin.go` | Every privileged command (`installer`, `lpadmin`) runs through `osascript`'s `do shell script ... with administrator privileges` - the closest available equivalent to Windows' manifest-driven auto-UAC-elevation without a paid code-signing certificate. **Confirmed live that a bare, ad-hoc-signed CLI binary gets killed by AMFI** (`AppleMobileFileIntegrityError -423`) the moment the privileged command actually starts, even after the password prompt is accepted - whether a real signed `.app` bundle avoids this too is still an open question (see the file's own doc comment for the full story and what to try next). |
 | `internal/printer/darwin/install_darwin.go`, `ppdinventory_darwin.go` | Installs a resolved package via `installer -pkg ... -target /`, and diffs `/Library/Printers/PPDs/Contents/Resources` before/after to discover which PPD(s) it actually registered - there's no Windows-registry-like "installed driver version" to read directly on macOS, so a before/after PPD-directory diff is the closest real signal (confirmed live against a real Kyocera install: hundreds of new PPDs appeared, including an exact match for a real deployed printer's own model). |
 | `internal/printer/darwin/queue_darwin.go` | Creates/reuses a CUPS queue via `lpadmin`/`lpstat` - `lpd://<ip>/` with no queue name, confirmed against this machine's own already-deployed real queues (`Jenks_Kyocera`, `Jackson_Streets`) to be exactly the working convention already in use in this environment. Reuses an existing queue already targeting the same device URI rather than ever creating a duplicate, the same rule `portlookup_windows.go` applies to Standard TCP/IP ports. |
@@ -105,27 +107,53 @@ The grid's row-level **Model** field (`row.model` in `frontend/src/main.js`, `Pr
 brought the field back) does double duty on macOS: it narrows the Driver dropdown's own candidates
 (`App.DriverCandidates` -> `driver.OpenPrintingCandidates(catalog, manufacturer, model, filterText)` -
 model and whatever's actually being typed into Driver both have to match, ranked by their combined
-score), and - the part left as planned work until a real macOS session could iterate against real PPD
-data - `deploy_darwin.go`'s own `resolveDriver` now uses it too:
+score), and it drives `deploy_darwin.go`'s own `resolveDriver` at two separate points: which *package*
+to install (for a manufacturer that ships more than one genuinely distinct driver), and which *PPD*
+that install actually registers to hand CUPS (most packages register one PPD per supported model).
 
-- When a manufacturer resolves to an installer package that registers more than one PPD (the common
-  case - a single Kyocera install registers one PPD per supported model, confirmed against a real
-  install), `choosePPD` fuzzy-matches Model against the newly-registered PPDs directly, not just the
-  package's own generic label - confirmed against a real fixture (`Kyocera TASKalfa MZ6001ci` vs.
-  `MZ6001i`) that a bare-substring Model query doesn't always land on a clean winner the way it looks
-  like it should: `FuzzyMatchScore`'s own tie-break (shorter matched text wins) means one of two same-
-  family names can outscore the other even when the model text alone doesn't actually distinguish them,
-  which is a `choosePPD` implementation detail worth knowing about, not a bug.
+**Picking the package** (`driver.ResolveMacFamily`, `internal/driver/macfamily.go`): confirmed against
+Canon's real macOS downloads that "newest package for this manufacturer" (`ResolveMac`'s plain rule,
+still used for every manufacturer with no family concept) isn't good enough on its own - Canon ships
+three genuinely different drivers as three separate packages (UFR II, PostScript, and a plain-PPD-only
+package), each supporting a different, overlapping-but-not-identical set of models, not just version
+variants of one driver. `macFamilyPreference` maps a manufacturer to its family tokens in preference
+order (today: `"Canon": {"UFRII", "PS", "PPD"}`, Ken's own stated order - UFR II first, then PS, then
+PPD) and `ResolveMacFamily` tries each family newest-first, pre-checking whether its own PPD payload
+even supports Model (`driver.PackageBestModelScore` - read-only, `pkgutil --expand-full` to a scratch
+dir, no install) before committing to it. Falls through to the next-preferred family on no match, and
+all the way back to plain `ResolveMac` (logging why, as a `[WARN]`) if no family's payload matches
+Model at all, or Model is blank. A manufacturer absent from `macFamilyPreference` behaves exactly like
+`ResolveMac` always did - no behavior change for Kyocera, Ricoh, Sharp, etc.
+
+**Picking the PPD** (`choosePPD` in `deploy_darwin.go`, run after a package installs): fuzzy-matches
+Model against the newly-registered PPDs' own **`*NickName` content** (`driver.ReadPPDNickName`,
+`internal/driver/macppd.go`), not their filenames or the package's own generic label - a real, load-
+bearing fix, not a style choice. Confirmed live against a real Canon UFR II package
+(`UFRII_LT_LIPS_LX_Installer.pkg`, found by mounting the real `.dmg`, which itself contained a nested
+`.dmg`) that its PPD for the iR-ADV C5840 is filed as `CNPZUIRAC5840ZU.ppd.gz` - a cryptic vendor code
+sharing no matchable substring, or even in-order character sequence, with how a technician would
+actually type the model (`iR-ADV C5840`); `FuzzyMatchScore`'s subsequence fallback specifically fails
+on the `-` and ` ` characters the filename never contains, so filename-based matching wasn't just
+weaker for a manufacturer shaped like this, it was a hard `-1` every time. That same PPD's own
+`*NickName` field reads `"Canon iR-ADV C5840/5850"` - a clean, high-confidence match. `choosePPD` reads
+each candidate's NickName (falling back to the filename only when a PPD has none at all, which is rare)
+before scoring, fixing model selection for every manufacturer, not just Canon - confirmed still correct
+against a real Kyocera fixture (`Kyocera TASKalfa MZ6001ci` vs. `MZ6001i`) that a bare-substring Model
+query doesn't always land on a clean winner the way it looks like it should: `FuzzyMatchScore`'s own
+tie-break (shorter matched text wins) means one of two same-family names can outscore the other even
+when the model text alone doesn't actually distinguish them, which is a `choosePPD` implementation
+detail worth knowing about, not a bug.
+
 - When there's no installer package at all (the OpenPrinting-bucket fallback), `row.Driver` is checked
   first for an *exact* `OpenPrintingCandidates` label match (`driver.OpenPrintingPPDByLabel` - the
   technician explicitly picked one from the dropdown, the most authoritative signal available) before
   falling back to fuzzy-matching Model via `driver.ResolveOpenPrintingPPD`.
 - **Still not built**: an interactive disambiguation prompt for a genuinely ambiguous match (two
   candidates tying for best score, or Model left blank with several candidates to choose from) - today
-  this logs a `[WARN]` naming the best guess it made instead (`choosePPD`'s own `ambiguous` return),
-  rather than pausing to ask. A real prompt would need more than `printer.Confirm`'s yes/no shape (a
-  candidate-list picker), which is a real, separable piece of future work if the `[WARN]`-and-guess
-  behavior turns out not to be good enough in practice.
+  this logs a `[WARN]` naming the best guess it made instead (`choosePPD`'s own `ambiguous` return, or
+  `ResolveMacFamily`'s own `note` return), rather than pausing to ask. A real prompt would need more
+  than `printer.Confirm`'s yes/no shape (a candidate-list picker), which is a real, separable piece of
+  future work if the `[WARN]`-and-guess behavior turns out not to be good enough in practice.
 
 ### `cmd/pdtdebugmac`
 

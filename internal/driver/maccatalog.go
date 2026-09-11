@@ -110,16 +110,33 @@ func BuildMacCatalog(driversRoot string) (MacCatalog, error) {
 
 // scanMacPackages walks mfgPath (a manufacturer's Drivers/macOS/<Manufacturer>
 // folder, containing one or more version subfolders) for .dmg/.pkg files,
-// appending each one found to catalog.Packages[mfg].
+// appending each one found to catalog.Packages[mfg]. ensureMacZipsExtracted
+// runs first, so a manufacturer whose macOS packages ship as .zip (confirmed
+// against a real Canon download: a .zip directly wrapping one .dmg, no
+// installer of its own inside the zip itself) gets extracted before this
+// walk runs, exactly the same "extract first, then let the generic walk find
+// whatever's inside" order the Windows side's own ensureZipsExtracted/
+// BuildCatalog pairing already uses.
 func scanMacPackages(catalog MacCatalog, mfg, mfgPath string) {
+	ensureMacZipsExtracted(mfgPath)
 	_ = filepath.WalkDir(mfgPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			if strings.EqualFold(d.Name(), "etc") || strings.EqualFold(d.Name(), "Archive") {
+			if strings.EqualFold(d.Name(), "etc") || strings.EqualFold(d.Name(), "Archive") || d.Name() == "__MACOSX" {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		// Skip AppleDouble resource-fork stub files (macOS's own zip/Archive
+		// Utility, or anything else that zips a folder on a Mac, litters
+		// these in as "._RealFileName" - confirmed against a real Canon
+		// download that one of these carries the *same* .dmg extension as
+		// the real 80+ MB file it shadows, at a few hundred bytes - without
+		// this, it would show up as a second, bogus catalog entry that fails
+		// outright the moment something tries to mount it).
+		if strings.HasPrefix(d.Name(), "._") {
 			return nil
 		}
 		kind, ok := macPackageExts[strings.ToLower(filepath.Ext(path))]
@@ -164,7 +181,10 @@ func scanOpenPrintingPPDs(catalog MacCatalog, openPrintingRoot string) {
 			continue
 		}
 		for _, pe := range ppdEntries {
-			if pe.IsDir() {
+			// "._Something.ppd" is an AppleDouble resource-fork stub, not a
+			// real PPD - see scanMacPackages' own comment for why this needs
+			// skipping explicitly rather than trusting the extension alone.
+			if pe.IsDir() || strings.HasPrefix(pe.Name(), "._") {
 				continue
 			}
 			lower := strings.ToLower(pe.Name())

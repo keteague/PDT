@@ -4,6 +4,25 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-10 - macOS: auto-extract .zip driver packages (Canon ships this way)
+
+### Fixed
+- **Canon's real macOS driver downloads (UFR II, PS, PPD - all three) ship as a `.zip` directly
+  wrapping one `.dmg`, which `BuildMacCatalog` didn't recognize at all** - confirmed live against a
+  real Drivers folder (`internal/driver/maccatalog.go`'s `macPackageExts` only ever matched `.dmg`/
+  `.pkg`), so Canon silently showed as having nothing locally despite real files being present. New
+  `internal/driver/maczip.go`'s `ensureMacZipsExtracted` runs before the catalog walk (same "extract
+  first, then let the generic scan find whatever's inside" order `BuildCatalog`'s own
+  `ensureZipsExtracted` already uses on the Windows side) - reuses that same file's `extractZip`/
+  `flattenRedundantWrapperDir` directly, since neither has any Windows-only dependency at all.
+- **A second bug found while fixing the first one**: macOS's own zip tooling (Archive Utility, or
+  anything else zipping a folder on a Mac) litters `__MACOSX/._<name>` AppleDouble resource-fork stubs
+  into the archive - confirmed live one of these shares the real file's own `.dmg` extension, at a few
+  hundred bytes instead of 80+ MB, so without explicitly skipping `__MACOSX/` directories and `._`-
+  prefixed files, it showed up as a second, bogus catalog entry that would fail the moment something
+  tried to mount it (`LocatePkg`/`mountDmg`). Applied to both the installer-package scan and the
+  OpenPrinting PPD bucket scan.
+
 ## 2026-09-10 - Unified the portable-copy default path literal across platforms
 
 ### Changed

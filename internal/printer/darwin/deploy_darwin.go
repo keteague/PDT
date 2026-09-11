@@ -3,6 +3,8 @@ package darwin
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"PDT/internal/driver"
 	"PDT/internal/printer"
@@ -10,14 +12,16 @@ import (
 
 // Deployer implements printer.Deployer against a real CUPS installation,
 // using the lpadmin/installer/hdiutil-driven bindings in this package.
-// Catalog is built once (driver.BuildMacCatalog) and shared across every row
-// in a run, the same lifecycle as internal/printer/windows.Deployer.Catalog.
+// Catalog and ModelIndex are both built once (driver.BuildMacCatalog,
+// driver.BuildMacModelIndex) and shared across every row in a run, the same
+// lifecycle as internal/printer/windows.Deployer.Catalog.
 type Deployer struct {
-	Catalog driver.MacCatalog
+	Catalog    driver.MacCatalog
+	ModelIndex driver.MacModelIndex
 }
 
-func NewDeployer(catalog driver.MacCatalog) *Deployer {
-	return &Deployer{Catalog: catalog}
+func NewDeployer(catalog driver.MacCatalog, modelIndex driver.MacModelIndex) *Deployer {
+	return &Deployer{Catalog: catalog, ModelIndex: modelIndex}
 }
 
 // Deploy ports deploy_windows.go's Deployer.Deploy to CUPS/LPD: resolve
@@ -117,11 +121,28 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 // see driver.ResolveMacFamily - row's own Model) to a local package or an
 // OpenPrinting fallback PPD, installing it if it's a package, and returns
 // the PPD path EnsureQueue should use ("" for the -m everywhere fallback -
-// see EnsureDriverInstalled's own doc comment). row.Driver, when it holds an
-// *exact* OpenPrintingCandidates label (the technician explicitly picked one
-// from the Driver dropdown rather than just typing a Model and moving on),
-// is preferred over re-deriving a guess from Model in the OpenPrinting-
-// fallback branch - a real selection beats a best guess.
+// see EnsureDriverInstalled's own doc comment).
+//
+// The build-once model index (driver.MacModelIndex, populated only for a
+// manufacturer macFamilyPreference lists - Canon today) is checked first:
+// when row.Model resolves to a real entry, driver.MacVariantForDeploy
+// already knows exactly which PPD this deploy needs - which package to
+// install and which filename it registers, or which permanently-cached PPD
+// to use directly for a no-installer family - straight from a catalog built
+// once at startup/Refresh, with no per-deploy package re-inspection at all
+// (see installVariant). Only when Model doesn't resolve to any index entry
+// (manufacturer not in macFamilyPreference, Model left blank, or a typo that
+// doesn't fold-match any known model) does this fall back to the older
+// guess-based path: driver.ResolveMacFamily picks *a* package to install,
+// then choosePPD fuzzy-matches Model against whatever PPDs that install
+// actually registers, logging a [WARN] if the pick wasn't a clear winner.
+//
+// row.Driver, when it holds an *exact* OpenPrintingCandidates label (the
+// technician explicitly picked one from the Driver dropdown rather than just
+// typing a Model and moving on), is preferred over re-deriving a guess from
+// Model in the OpenPrinting-fallback branch - a real selection beats a best
+// guess, the same rule MacVariantForDeploy itself applies to row.Driver
+// first when the model index has an entry.
 //
 // Unlike Windows, there's no cheap "read the currently-installed version"
 // check to skip a redundant reinstall (see PackageLabel's own doc comment for
@@ -131,6 +152,10 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 // per row rather than the multi-minute cost the NUL: workaround existed
 // for on Windows).
 func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, log *printer.Logger) (ppdPath string, err error) {
+	if variant, ok := driver.MacVariantForDeploy(d.ModelIndex, row.Manufacturer, row.Model, row.Driver); ok {
+		return d.installVariant(ctx, variant, row, log)
+	}
+
 	if resolved, note := driver.ResolveMacFamily(d.Catalog, row.Manufacturer, row.Model); resolved != nil {
 		if note != "" {
 			log.Warn("%s", note)
@@ -166,6 +191,39 @@ func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, lo
 	}
 
 	return "", fmt.Errorf("no usable driver package or fallback PPD found locally for manufacturer %q (model %q, driver selection %q)", row.Manufacturer, row.Model, row.Driver)
+}
+
+// installVariant deploys a driver.MacPPDVariant resolved straight from the
+// manufacturer's own build-once model index - no post-install diffing or
+// NickName re-matching needed at all, since the index already recorded
+// exactly which PPD filename this variant registers (an installer-backed
+// family - PackagePath set) or which permanent local copy to use directly (a
+// loose, no-installer family - LooseCachedPPDPath set instead, see
+// MacPPDVariant's own doc comment for why Canon's own "PPD" bucket needs no
+// install step at all: its PPDs declare no *cupsFilter, so there's no vendor
+// filter binary an installer would even need to deposit).
+func (d *Deployer) installVariant(ctx context.Context, variant driver.MacPPDVariant, row printer.PrinterRow, log *printer.Logger) (string, error) {
+	if variant.PackagePath == "" {
+		if variant.LooseCachedPPDPath == "" {
+			return "", fmt.Errorf("catalog entry for %q (%s) has neither a package nor a cached PPD to use - try Refresh Drivers", variant.NickName, variant.Language)
+		}
+		log.Info("Using cached %s PPD %q for %s (no installer needed for this family).", variant.Language, variant.NickName, row.Manufacturer)
+		return variant.LooseCachedPPDPath, nil
+	}
+
+	resolved := &driver.ResolvedMacPackage{Path: variant.PackagePath, Label: variant.NickName}
+	log.Info("Installing %s package %q for %q (%s).", variant.Language, variant.PackagePath, variant.NickName, row.Manufacturer)
+	if _, err := EnsureDriverInstalled(ctx, resolved); err != nil {
+		return "", fmt.Errorf("installing %s: %w", variant.PackagePath, err)
+	}
+
+	ppdPath := filepath.Join(ppdResourcesDir, variant.Filename)
+	if _, err := os.Stat(ppdPath); err != nil {
+		log.Warn("Expected %q to register %q, but it's not there after install (%v) - the vendor package may have changed since this catalog was built. Try Refresh Drivers. Falling back to IPP-Everywhere autoconfiguration.", variant.PackagePath, ppdPath, err)
+		return "", nil
+	}
+	log.OK("Installed %q (registered %q).", variant.PackagePath, ppdPath)
+	return ppdPath, nil
 }
 
 // choosePPD picks the best of an install's newly-registered PPDs for model -

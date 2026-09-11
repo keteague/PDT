@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"PDT/internal/driver"
 	"PDT/internal/printer"
@@ -133,8 +134,9 @@ func cmdDeployQueue(driversRoot, manufacturer, ip string) error {
 	if err != nil {
 		return fmt.Errorf("BuildMacCatalog: %w", err)
 	}
+	modelIndex := driver.BuildMacModelIndex(cat, filepath.Join(os.TempDir(), "pdtdebugmac-ppdcache"))
 
-	deployer := pdtdarwin.NewDeployer(cat)
+	deployer := pdtdarwin.NewDeployer(cat, modelIndex)
 	req := printer.DeployRequest{
 		Row: printer.PrinterRow{
 			Name:         "PDT Debug Test Queue",

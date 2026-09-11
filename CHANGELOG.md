@@ -4,6 +4,61 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-10 - macOS: build-once model->PPD catalog for Canon (replaces per-deploy guessing)
+
+### Added
+- **`driver.MacModelIndex` (`internal/driver/macmodel.go`)**: a real Kyocera-on-Windows-style
+  model catalog for macOS - `manufacturer -> friendly model -> []MacPPDVariant` - built once
+  (`BuildMacModelIndex`) at the same points `BuildMacCatalog` already runs (startup, Refresh
+  Drivers), for every manufacturer `macFamilyPreference` lists (Canon today). Inspects only each
+  family's own single newest package, not every version-folder's own copy, keeping the one-time
+  cost bounded. `App.Models`/`App.DriverCandidates` (`drivercatalog_darwin.go`) are now real,
+  catalog-backed lookups on macOS - Model narrows Driver's own candidate list exactly the way it
+  already does for Kyocera on Windows, offering language-variant labels like
+  `"Canon iR-ADV C5840/5850 (UFR II)"` / `"(PostScript)"` / `"(Generic PPD)"`.
+- **`deploy_darwin.go`'s `resolveDriver` now resolves a row's `(Model, Driver)` straight to a
+  `driver.MacPPDVariant` (`driver.MacVariantForDeploy`) with no package re-inspection at deploy
+  time at all** - a real behavior change from the v0.5.4 design, which called
+  `pkgutil --expand-full` fresh on every single deploy just to guess which package/PPD applied.
+  The catalog already knows which package to install and which exact PPD filename it registers
+  (or, for the no-installer family below, a permanently-cached PPD to use directly), pulled from
+  a build-once index instead of live per-deploy inspection.
+- **`driver.LocateLoosePPDs`/`driver.CachePPDFile`**: a real finding while building the catalog -
+  Canon's own "PPD" bucket download (`PPDv5.50_mac.dmg`) turned out to have no `.pkg` installer
+  inside it at all, just a nested `.dmg` wrapping a plain folder-per-model tree of loose
+  `*.PPD.gz` files. Confirmed by reading one directly: no `*cupsFilter` line, a real Generic
+  PostScript Level 3 PPD - unlike UFR II/PS, whose PPDs declare `*cupsFilter` entries pointing at
+  vendor filter binaries only `installer -pkg` deposits, this family needs no install step at
+  all. `LocateLoosePPDs` mounts/locates these the same way `LocatePkg` does (one level of nested
+  `.dmg`), and `BuildMacModelIndex` permanently copies each matched PPD to
+  `~/Library/Application Support/PDT/PPDCache/` (the source `.dmg` won't still be mounted at
+  deploy time) - deploy hands that cached path straight to `lpadmin -P`, skipping `installer`
+  entirely for this one family.
+- **`stripLanguageSuffix`**: confirmed against all three of Canon's real downloads for the same
+  physical model that each family's own PPD `*NickName` differs only by a trailing language
+  token - `"Canon iR-ADV C5840/5850"` (UFR II, no suffix) vs. `"...PS"` vs. `"...PPD"` - so
+  stripping that known token is what unifies all three into one canonical model name for the
+  Model dropdown.
+
+### Changed
+- The v0.5.4 guess-based path (`driver.ResolveMacFamily` + `choosePPD`) still exists and still
+  runs, now strictly as the fallback for whatever the catalog doesn't have an entry for: a
+  manufacturer `macFamilyPreference` doesn't list, Model left blank, or a typo that doesn't
+  fold-match any known model. Every manufacturer with just one real driver package (Kyocera,
+  Ricoh, Sharp - no family table, so no catalog entry at all) is unaffected and keeps using this
+  path exactly as it did in v0.5.4.
+
+### Testing
+- `internal/driver/macmodel_test.go`: 11 tests against `internal/driver/testdata_mac_model/` -
+  two real `pkgbuild`-built `.pkg` fixtures (UFR II, PostScript) plus one real nested-`.dmg`
+  fixture built with `hdiutil` (no `.pkg` inside, matching the real "PPD" bucket shape), covering
+  cross-family model unification, a model with only one language variant, ranking/filtering,
+  explicit-label-wins-over-guess deploy resolution, case/space-insensitive model matching, and
+  the "no catalog entry" fallback signal.
+- All validated first against the user's real Canon UFR II/PS/PPD downloads (all three families'
+  real `*NickName`/`*cupsFilter` content) before being reduced to permanent, fast synthetic
+  fixtures.
+
 ## 2026-09-10 - macOS: model-driven driver-family and PPD selection (Canon UFR II/PS/PPD)
 
 ### Added

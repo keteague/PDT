@@ -68,17 +68,23 @@ func ReadPPDNickName(ppdPath string) (string, bool) {
 	return "", false
 }
 
-// PackagePPDNickNames returns the *NickName of every PPD pkgPath's own
-// payload would install, without installing anything - pkgutil --expand-full
-// (already used by PackageLabel) fully decompresses a package's Payload,
-// landing PPDs at the exact same Library/Printers/PPDs/Contents/Resources
-// path a real install would use (confirmed live against a real Canon
-// package), so this is safe, read-only inspection: mount/locate the pkg (see
-// LocatePkg), expand it to a scratch directory, read every .ppd/.ppd.gz
-// found anywhere in it. Lets deploy-time model matching happen *before*
-// deciding which of a manufacturer's several packages (see
-// ResolveMacFamily) to actually install.
-func PackagePPDNickNames(pkgPath string) ([]string, error) {
+// ppdEntry is one PPD found inside an expanded package payload - its own
+// path (inside the scratch expand dir - gone once the caller's temp dir is
+// removed, so only its Base() is safe to keep around) alongside its
+// *NickName. packagePPDEntries' own return type; MacPPDVariant's own
+// Filename field is filepath.Base of one of these.
+type ppdEntry struct {
+	Path     string
+	NickName string
+}
+
+// packagePPDEntries expands pkgPath (pkgutil --expand-full, same as
+// PackageLabel) to a scratch directory and returns every .ppd/.ppd.gz found
+// anywhere inside it, alongside its own *NickName - the shared primitive
+// behind both PackagePPDNickNames (Package Body/score matching) and
+// indexFamilyPackage (macmodel.go's own build-once model index), so both
+// read the exact same real payload the same way.
+func packagePPDEntries(pkgPath string) ([]ppdEntry, error) {
 	tmpDir, err := os.MkdirTemp("", "pdt-ppdinspect-*")
 	if err != nil {
 		return nil, err
@@ -90,7 +96,7 @@ func PackagePPDNickNames(pkgPath string) ([]string, error) {
 		return nil, fmt.Errorf("expanding %s: %w", pkgPath, err)
 	}
 
-	var names []string
+	var entries []ppdEntry
 	_ = filepath.WalkDir(expandDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -100,11 +106,50 @@ func PackagePPDNickNames(pkgPath string) ([]string, error) {
 			return nil
 		}
 		if name, ok := ReadPPDNickName(path); ok {
-			names = append(names, name)
+			entries = append(entries, ppdEntry{Path: path, NickName: name})
 		}
 		return nil
 	})
+	return entries, nil
+}
+
+// PackagePPDNickNames returns the *NickName of every PPD pkgPath's own
+// payload would install, without installing anything - lets deploy-time
+// model matching happen *before* deciding which of a manufacturer's several
+// packages (see ResolveMacFamily) to actually install.
+func PackagePPDNickNames(pkgPath string) ([]string, error) {
+	entries, err := packagePPDEntries(pkgPath)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.NickName
+	}
 	return names, nil
+}
+
+// CachePPDFile copies srcPath (a PPD file, typically still on a mounted
+// volume LocateLoosePPDs' own caller will unmount once it returns) into
+// cacheDir/filename, creating cacheDir if needed - the permanent local copy
+// a loose (no-installer) family's MacPPDVariant.LooseCachedPPDPath points at,
+// made once during BuildMacModelIndex rather than re-mounting the source
+// .dmg at deploy time. Overwrites any existing file at the destination -
+// idempotent, a later catalog refresh re-copying the same PPD is a no-op in
+// effect, not an error.
+func CachePPDFile(srcPath, cacheDir, filename string) (string, error) {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return "", err
+	}
+	dest := filepath.Join(cacheDir, filename)
+	if err := os.WriteFile(dest, data, 0o644); err != nil {
+		return "", err
+	}
+	return dest, nil
 }
 
 // PackageBestModelScore is PackagePPDNickNames plus FuzzyMatchScore in one

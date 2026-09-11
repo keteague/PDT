@@ -1029,14 +1029,13 @@ function wireRowEvents() {
             modelInput,
             modelCombo.querySelector('.combo-list'),
             // Optional field - no data lookup pretending to exist where
-            // there's really nothing to search. isMac() short-circuits
-            // before ever calling App.Models, which only exists as a bound
-            // method on the Windows build at all (see this file's own
-            // namespace-import doc comment up top). On Windows, an empty
-            // result (every manufacturer except Kyocera today) means the
-            // dropdown just never appears - same "plain free-text input"
-            // behavior either way.
-            (filterText) => isMac() ? [] : App.Models(row.manufacturer, filterText),
+            // there's really nothing to search. App.Models exists on both
+            // builds (drivercatalog_windows.go/drivercatalog_darwin.go) -
+            // Kyocera on Windows, Canon on macOS today, empty for every
+            // other manufacturer either way, which just means the dropdown
+            // never appears - same "plain free-text input" behavior either
+            // way.
+            (filterText) => App.Models(row.manufacturer, filterText),
             (value) => { row.model = value; },
             () => addPrinterRow(true),
         );

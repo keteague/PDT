@@ -53,12 +53,13 @@ type App struct {
 	// (app_windows.go/app_darwin.go) actually populates is ever non-zero -
 	// the same way internal/printer/windows and internal/printer/darwin are
 	// two packages that never both link into the same binary.
-	catalogMu  sync.RWMutex
-	catalog    driver.Catalog
-	modelIndex map[string]map[string][]string
-	macCatalog driver.MacCatalog
-	catalogErr error
-	settings   Settings
+	catalogMu     sync.RWMutex
+	catalog       driver.Catalog
+	modelIndex    map[string]map[string][]string
+	macCatalog    driver.MacCatalog
+	macModelIndex driver.MacModelIndex
+	catalogErr    error
+	settings      Settings
 
 	// deployCancel is set for the duration of a running Deploy call (nil
 	// otherwise) - guarded by deployMu since StopDeploy can be called from a
@@ -340,14 +341,20 @@ func applyManufacturerOrder(items []string, order []string) []string {
 	return out
 }
 
-// Models, DriverCandidates, DefaultDriverFor: Windows-only bound methods -
-// see drivercatalog_windows.go. All three are Driver-combobox concepts
-// (a per-manufacturer driver-name index, fuzzy-ranked candidate labels, a
-// pre-selected default driver name) with nothing analogous on macOS, where a
-// manufacturer's driver package resolves automatically
-// (internal/printer/darwin's deploy_darwin.go) and the frontend's mac row
-// shape has a plain Model text field instead of a Driver combobox at all -
-// not stubbed out here since nothing on a darwin build ever calls them.
+// Models, DriverCandidates, DefaultDriverFor: platform-specific bound
+// methods - see drivercatalog_windows.go/drivercatalog_darwin.go. Same
+// method names/signatures on both builds so the frontend's combobox wiring
+// needs no platform branch (frontend/src/main.js). On Windows, Models is a
+// per-manufacturer driver-name index (Kyocera only - see driver.Models);
+// DriverCandidates is that index's own fuzzy-ranked labels; DefaultDriverFor
+// is a pre-selected default driver name. On macOS, a manufacturer's driver
+// package usually resolves automatically with nothing to pick between at
+// all (internal/printer/darwin's deploy_darwin.go) - except a manufacturer
+// macFamilyPreference lists (Canon today), which needs the exact same
+// Model-narrows-Driver two-step Kyocera does on Windows, since Model is what
+// disambiguates which of several genuinely different driver packages
+// (UFR II/PostScript/Generic PPD) actually supports it (see
+// driver.MacModelIndex).
 
 // PathResult is a file dialog's outcome: Canceled is true (with Path empty)
 // if the user dismissed the dialog without choosing a file.

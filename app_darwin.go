@@ -1,6 +1,8 @@
 package main
 
 import (
+	"path/filepath"
+
 	"PDT/internal/driver"
 	"PDT/internal/printer"
 	pdtdarwin "PDT/internal/printer/darwin"
@@ -17,16 +19,29 @@ import (
 func (a *App) platformStartup() {}
 
 // loadCatalog scans driversRoot for macOS driver packages (installer-
-// package-shaped - driver.MacCatalog, see internal/driver/maccatalog.go) and
-// assigns the result under catalogMu. Called from startup() and
-// RefreshDriverCatalog (drivercatalog_darwin.go).
+// package-shaped - driver.MacCatalog, see internal/driver/maccatalog.go),
+// then builds the model index on top of it (driver.BuildMacModelIndex -
+// Canon's own UFR II/PostScript/Generic PPD split today, see
+// internal/driver/macmodel.go), and assigns both under catalogMu. Called
+// from startup() and RefreshDriverCatalog (drivercatalog_darwin.go). The
+// model index's own cache directory (for a no-installer family's PPDs - see
+// MacPPDVariant's own doc comment) lives under installedAppDataDir() even
+// for a portable/flash-drive copy, same reasoning driversRoot()/configsRoot()
+// don't apply to it: it's a derived, rebuildable artifact, not something a
+// technician's own flash-drive Drivers folder should carry around.
 func (a *App) loadCatalog(driversRoot string) error {
 	catalog, err := driver.BuildMacCatalog(driversRoot)
 	if err != nil {
 		return err
 	}
+	cacheDir := ""
+	if dir := installedAppDataDir(); dir != "" {
+		cacheDir = filepath.Join(dir, "PPDCache")
+	}
+	modelIndex := driver.BuildMacModelIndex(catalog, cacheDir)
 	a.catalogMu.Lock()
 	a.macCatalog = catalog
+	a.macModelIndex = modelIndex
 	a.catalogMu.Unlock()
 	return nil
 }
@@ -36,8 +51,8 @@ func (a *App) loadCatalog(driversRoot string) error {
 // hard-coding pdtdarwin.NewDeployer directly, so app.go itself stays
 // platform-independent.
 func (a *App) newPlatformDeployer() printer.Deployer {
-	catalog, _ := a.macCatalogSnapshot()
-	return pdtdarwin.NewDeployer(catalog)
+	catalog, modelIndex, _ := a.macCatalogSnapshot()
+	return pdtdarwin.NewDeployer(catalog, modelIndex)
 }
 
 // sevenZipToolsDir: no bundled 7-Zip on macOS at all (sevenzip_windows.go) -

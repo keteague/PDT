@@ -60,6 +60,85 @@ func findFirstByExt(root, ext string) string {
 	return found
 }
 
+// collectByExt walks root collecting every file whose extension matches one
+// of exts (case-insensitive) - findFirstByExt's own "first match" traversal
+// (same Archive/etc-skipping convention), but every match instead of just
+// one. Also skips __MACOSX dirs and "._"-prefixed AppleDouble stub files, the
+// same convention maccatalog.go's own scanMacPackages/scanOpenPrintingPPDs
+// already apply when walking a real vendor image.
+func collectByExt(root string, exts ...string) []string {
+	var out []string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if strings.EqualFold(d.Name(), "etc") || strings.EqualFold(d.Name(), "Archive") || d.Name() == "__MACOSX" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), "._") {
+			return nil
+		}
+		lower := strings.ToLower(path)
+		for _, ext := range exts {
+			if strings.HasSuffix(lower, strings.ToLower(ext)) {
+				out = append(out, path)
+				return nil
+			}
+		}
+		return nil
+	})
+	return out
+}
+
+// LocateLoosePPDs mounts path (like LocatePkg) and returns every loose
+// *.ppd/*.ppd.gz file found inside - for a package shape with no installer
+// .pkg at all (confirmed live against Canon's own "PPD" bucket download:
+// PPDv5.50_mac.dmg wraps one nested mac-ppd-*.dmg, itself a plain
+// folder-per-model tree of *.PPD.gz files with no *cupsFilter line in any of
+// them - real Generic PostScript PPDs, not a proprietary driver, so there's
+// no installer to look for at all). Same one-level-of-nesting mount
+// convention as LocatePkg - checks the outer mount first, then one level of
+// nested .dmg. cleanup unmounts everything this call mounted; always call
+// it, even after an error.
+func LocateLoosePPDs(path string) (ppdPaths []string, cleanup func(), err error) {
+	if !strings.EqualFold(filepath.Ext(path), ".dmg") {
+		return nil, func() {}, fmt.Errorf("%s is not a .dmg", path)
+	}
+
+	var detaches []func() error
+	cleanup = func() {
+		for i := len(detaches) - 1; i >= 0; i-- {
+			_ = detaches[i]()
+		}
+	}
+
+	mountPoint, detach, err := mountDmg(path)
+	if err != nil {
+		return nil, cleanup, err
+	}
+	detaches = append(detaches, detach)
+
+	if found := collectByExt(mountPoint, ".ppd", ".ppd.gz"); len(found) > 0 {
+		return found, cleanup, nil
+	}
+
+	if nested := findFirstByExt(mountPoint, ".dmg"); nested != "" {
+		nestedMount, nestedDetach, err := mountDmg(nested)
+		if err != nil {
+			return nil, cleanup, err
+		}
+		detaches = append(detaches, nestedDetach)
+		if found := collectByExt(nestedMount, ".ppd", ".ppd.gz"); len(found) > 0 {
+			return found, cleanup, nil
+		}
+	}
+
+	return nil, cleanup, fmt.Errorf("no loose PPD files found inside %s", path)
+}
+
 // LocatePkg resolves path (a .pkg or .dmg found by BuildMacCatalog) to an
 // actual, on-disk .pkg ready for `installer -pkg`/`pkgutil --expand-full`. A
 // .pkg passes through unchanged with a no-op cleanup. A .dmg is mounted, and

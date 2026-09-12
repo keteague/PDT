@@ -11,8 +11,21 @@ import (
 // in service.go) and no Select field (that's frontend/JSON-only UI state, never
 // part of the data a deploy actually needs).
 type PrinterRow struct {
-	Name         string
-	IP           string
+	Name string
+	IP   string
+	// LPDQueueName is the optional queue-name segment of a macOS deploy's LPD
+	// device URI (lpd://<ip>/<LPDQueueName> - see
+	// internal/printer/darwin/deploy_darwin.go's own Deploy). Most
+	// manufacturers' MFDs ignore it and respond to any/no queue name; HP
+	// ("raw") and Xerox ("lp") are the two known exceptions, which the
+	// frontend auto-fills for those manufacturers (still overridable per
+	// row) - see frontend/src/main.js's defaultLpdQueueFor. Carried on
+	// Windows too, and round-tripped through Open/Save Configuration
+	// (config.SavedRow) and CSV, even though Windows' own Deploy never reads
+	// it - Standard TCP/IP ports have no LPD-queue concept at all - purely so
+	// a config saved on Windows already has the right value the moment it's
+	// opened on a Mac, without a technician needing to redo this per row.
+	LPDQueueName string
 	Manufacturer string
 	Model        string
 	Driver       string

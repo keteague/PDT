@@ -17,6 +17,28 @@ var realKyoceraPPDs = []string{
 	"Kyocera ECOSYS MA4500ifx",
 }
 
+func TestLpdDeviceURI(t *testing.T) {
+	tests := []struct {
+		name      string
+		queueName string
+		want      string
+	}{
+		{"blank - most manufacturers", "", "lpd://10.1.1.50/"},
+		{"HP's raw default", "raw", "lpd://10.1.1.50/raw"},
+		{"Xerox's lp default", "lp", "lpd://10.1.1.50/lp"},
+		{"stray leading slash trimmed", "/raw", "lpd://10.1.1.50/raw"},
+		{"stray trailing slash trimmed", "raw/", "lpd://10.1.1.50/raw"},
+		{"surrounding whitespace trimmed", "  raw  ", "lpd://10.1.1.50/raw"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lpdDeviceURI("10.1.1.50", tt.queueName); got != tt.want {
+				t.Errorf("lpdDeviceURI(%q, %q) = %q, want %q", "10.1.1.50", tt.queueName, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestChoosePPD_SingleCandidateNeverAmbiguous(t *testing.T) {
 	chosen, ambiguous := choosePPD([]string{"Kyocera TASKalfa MZ6001ci"}, "")
 	if chosen != "Kyocera TASKalfa MZ6001ci" || ambiguous {

@@ -63,7 +63,7 @@ func TestSaveLoadConfig_RoundTrip(t *testing.T) {
 		SalesChainID: "12345",
 		Printers: []SavedRow{
 			RowFromPrinterRow(printer.PrinterRow{
-				Name: "Front Desk", IP: "10.1.1.50", Manufacturer: "HP",
+				Name: "Front Desk", IP: "10.1.1.50", LPDQueueName: "raw", Manufacturer: "HP",
 				Driver: "HP Universal Printing PCL 6", SNMP: true, OneSided: true,
 			}, true),
 		},
@@ -77,5 +77,15 @@ func TestSaveLoadConfig_RoundTrip(t *testing.T) {
 	}
 	if loaded.SalesChainID != original.SalesChainID || len(loaded.Printers) != len(original.Printers) {
 		t.Errorf("round trip mismatch: got %+v, want %+v", loaded, original)
+	}
+	// LPDQueueName round-trips even though this saves/loads on Windows too,
+	// which never reads it - confirmed this way so a config saved on Windows
+	// already carries the right value the moment it's opened on a Mac (see
+	// printer.PrinterRow's own doc comment).
+	if got := loaded.Printers[0].LPDQueueName; got != "raw" {
+		t.Errorf("loaded.Printers[0].LPDQueueName = %q, want %q", got, "raw")
+	}
+	if got := loaded.Printers[0].ToPrinterRow().LPDQueueName; got != "raw" {
+		t.Errorf("ToPrinterRow().LPDQueueName = %q, want %q", got, "raw")
 	}
 }

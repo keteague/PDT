@@ -37,6 +37,7 @@ const TIP = {
     select: 'Included in the next deploy.',
     name: 'Printer object name.',
     ip: 'Printer\'s IP address, or "NUL" to bind permanently to the local NUL: port.',
+    lpdQueue: 'Optional LPD queue name (macOS deploys only - Windows carries this through for portability but never uses it). Most manufacturers ignore it and respond to any/no queue name; HP ("raw") and Xerox ("lp") are the two known exceptions, auto-filled when you pick that Manufacturer - blank is fine for everyone else.',
     selectAllHeader: 'Check/uncheck every row.',
     saveFileBasePath: 'Where PDT keeps saved JSON configs and captured DEVMODE/Device Settings files, and where Open/Save Configuration start from by default. Defaults to Configs alongside PDT itself when running portably, or a per-user PDT data folder for an installed copy.',
     driversBasePath: 'Where PDT looks for printer drivers (Drivers\\Windows\\<version>\\<Manufacturer>\\... on Windows, Drivers/macOS/<Manufacturer>/<version>/... on macOS) - click Refresh (or restart PDT) after changing this to rescan the new location. Defaults to Drivers alongside PDT itself when running portably, or a per-user PDT data folder for an installed copy.',
@@ -69,7 +70,7 @@ let nextRowId = 1;
 function newRow(overrides = {}) {
     return Object.assign({
         _id: nextRowId++,
-        select: true, name: '', ip: '', manufacturer: '', model: '', driver: '',
+        select: true, name: '', ip: '', lpdQueueName: '', manufacturer: '', model: '', driver: '',
         // '' disables SNMP on this row's port; any other text enables it and
         // is the community string used (only applies when a new port is
         // actually created) - see tip('snmpGrid').
@@ -95,7 +96,7 @@ function inferSnmpCommunity(snmpEnabled, community) {
 
 function rowToPrinterRow(r) {
     return {
-        Name: r.name, IP: r.ip, Manufacturer: r.manufacturer, Model: r.model, Driver: r.driver,
+        Name: r.name, IP: r.ip, LPDQueueName: r.lpdQueueName, Manufacturer: r.manufacturer, Model: r.model, Driver: r.driver,
         SNMP: !!r.snmpCommunity, SNMPCommunity: r.snmpCommunity, Mono: r.mono, OneSided: r.oneSided,
         UseExistingPort: r.useExistingPort, AdvancedPrintingFeatures: r.advancedPrintingFeatures,
         DevModeFile: r.devModeFile,
@@ -104,7 +105,7 @@ function rowToPrinterRow(r) {
 
 function printerRowToRow(pr, select = true) {
     return newRow({
-        select, name: pr.Name, ip: pr.IP, manufacturer: pr.Manufacturer, model: pr.Model, driver: pr.Driver,
+        select, name: pr.Name, ip: pr.IP, lpdQueueName: pr.LPDQueueName || '', manufacturer: pr.Manufacturer, model: pr.Model, driver: pr.Driver,
         snmpCommunity: inferSnmpCommunity(pr.SNMP, pr.SNMPCommunity), mono: pr.Mono, oneSided: pr.OneSided,
         useExistingPort: pr.UseExistingPort, advancedPrintingFeatures: pr.AdvancedPrintingFeatures,
         devModeFile: pr.DevModeFile || '',
@@ -113,7 +114,7 @@ function printerRowToRow(pr, select = true) {
 
 function rowToSavedRow(r) {
     return {
-        Select: r.select, Name: r.name, IP: r.ip, Manufacturer: r.manufacturer, Model: r.model, Driver: r.driver,
+        Select: r.select, Name: r.name, IP: r.ip, LPDQueueName: r.lpdQueueName, Manufacturer: r.manufacturer, Model: r.model, Driver: r.driver,
         Snmp: !!r.snmpCommunity, SnmpCommunity: r.snmpCommunity, Mono: r.mono, OneSided: r.oneSided,
         UseExistingPort: r.useExistingPort, AdvancedPrintingFeatures: r.advancedPrintingFeatures,
         DevModeFile: r.devModeFile,
@@ -122,11 +123,24 @@ function rowToSavedRow(r) {
 
 function savedRowToRow(sr) {
     return newRow({
-        select: sr.Select, name: sr.Name, ip: sr.IP, manufacturer: sr.Manufacturer, model: sr.Model, driver: sr.Driver,
+        select: sr.Select, name: sr.Name, ip: sr.IP, lpdQueueName: sr.LPDQueueName || '', manufacturer: sr.Manufacturer, model: sr.Model, driver: sr.Driver,
         snmpCommunity: inferSnmpCommunity(sr.Snmp, sr.SnmpCommunity), mono: sr.Mono, oneSided: sr.OneSided,
         useExistingPort: sr.UseExistingPort, advancedPrintingFeatures: sr.AdvancedPrintingFeatures,
         devModeFile: sr.DevModeFile || '',
     });
+}
+
+// defaultLpdQueueFor: most major MFD brands ignore the LPD device URI's own
+// queue-name segment and respond to any/no queue at all - HP ("raw") and
+// Xerox ("lp") are the two known exceptions that actually need one. Set
+// whenever a row's Manufacturer is picked/changed - both for a fresh row
+// (addPrinterRow) and an existing row's own Manufacturer dropdown - so
+// LPD-Q always reflects whichever manufacturer is currently selected,
+// rather than a stale value left over from whatever it was set to before.
+function defaultLpdQueueFor(manufacturer) {
+    if (manufacturer === 'HP') return 'raw';
+    if (manufacturer === 'Xerox') return 'lp';
+    return '';
 }
 
 const state = {
@@ -191,7 +205,7 @@ document.querySelector('#app').innerHTML = `
         <polyline points="9,12 5,16 9,20"/>
       </svg>
     </button>
-    <button id="btnOpenDriversFolder" class="icon-btn-inline" title="Open the Drivers folder in File Explorer.">&#128194;</button>
+    <button id="btnOpenDriversFolder" class="icon-btn-inline" title="Open Drivers folder">&#128194;</button>
     <span class="catalog-warning" id="catalogWarning" hidden></span>
     <button id="btnSettings" class="icon-btn" title="Settings">&#9881;</button>
   </div>
@@ -371,29 +385,31 @@ document.querySelector('#app').innerHTML = `
   <div class="defaults-panel">
     <fieldset class="defaults-outer">
       <legend>Defaults (used by "Add Printer")</legend>
-      <div class="defaults-row">
-        <label title="${tip('manufacturer')}">Manufacturer <select id="defMfg" title="${tip('manufacturer')}"></select></label>
-        <button type="button" id="btnCheckUpdates" title="Open the selected manufacturer's driver page (configured in Settings &gt; External Sites).">Check for Updates</button>
-        <label class="driver-label" title="${tip('driver')}">Driver <div class="combo"><input type="text" id="defDriver" title="${tip('driver')}"><div class="combo-list" id="defDriverList" hidden></div></div></label>
+      <div class="defaults-body">
+        <div class="defaults-row">
+          <label title="${tip('manufacturer')}">Manufacturer <select id="defMfg" title="${tip('manufacturer')}"></select></label>
+          <button type="button" id="btnCheckUpdates" title="Open the selected manufacturer's driver page (configured in Settings &gt; External Sites).">Check for Updates</button>
+          <label class="driver-label" title="${tip('driver')}">Driver <div class="combo"><input type="text" id="defDriver" title="${tip('driver')}"><div class="combo-list" id="defDriverList" hidden></div></div></label>
+        </div>
+        <fieldset class="defaults-sub">
+          <legend>Port</legend>
+          <label title="${tip('subnet')}">Subnet <input type="text" id="defSubnet" placeholder="10.1.1." title="${tip('subnet')}"></label>
+          <label class="platform-windows-only" title="${tip('portPrefixEnabled')}"><input type="checkbox" id="portPrefixEnabled" title="${tip('portPrefixEnabled')}"> Port name prefix</label>
+          <input type="text" id="portPrefixText" size="6" placeholder="IP_" class="platform-windows-only" title="${tip('portPrefixText')}">
+          <label class="platform-windows-only" title="${tip('useExistingPort')}"><input type="checkbox" id="defUseExistingPort" title="${tip('useExistingPort')}"> Use existing port</label>
+          <label class="platform-windows-only" title="${tip('snmp')}"><input type="checkbox" id="defSnmp" title="${tip('snmp')}"> SNMP</label>
+          <input type="text" id="defSnmpCommunity" size="8" placeholder="public" class="platform-windows-only" title="${tip('snmpCommunity')}">
+        </fieldset>
+        <fieldset class="defaults-sub">
+          <legend>Print Defaults</legend>
+          <label title="${tip('mono')}"><input type="checkbox" id="defMono" checked title="${tip('mono')}"> Monochrome</label>
+          <label title="${tip('oneSided')}"><input type="checkbox" id="defOneSided" checked title="${tip('oneSided')}"> 1-sided</label>
+        </fieldset>
+        <fieldset class="defaults-sub platform-windows-only">
+          <legend>Advanced</legend>
+          <label title="${tip('apf')}"><input type="checkbox" id="defApf" title="${tip('apf')}"> Enable APF</label>
+        </fieldset>
       </div>
-      <fieldset class="defaults-sub">
-        <legend>Port</legend>
-        <label title="${tip('subnet')}">Subnet <input type="text" id="defSubnet" placeholder="10.1.1." title="${tip('subnet')}"></label>
-        <label class="platform-windows-only" title="${tip('portPrefixEnabled')}"><input type="checkbox" id="portPrefixEnabled" title="${tip('portPrefixEnabled')}"> Port name prefix</label>
-        <input type="text" id="portPrefixText" size="6" placeholder="IP_" class="platform-windows-only" title="${tip('portPrefixText')}">
-        <label class="platform-windows-only" title="${tip('useExistingPort')}"><input type="checkbox" id="defUseExistingPort" title="${tip('useExistingPort')}"> Use existing port</label>
-        <label class="platform-windows-only" title="${tip('snmp')}"><input type="checkbox" id="defSnmp" title="${tip('snmp')}"> SNMP</label>
-        <input type="text" id="defSnmpCommunity" size="8" placeholder="public" class="platform-windows-only" title="${tip('snmpCommunity')}">
-      </fieldset>
-      <fieldset class="defaults-sub">
-        <legend>Print Defaults</legend>
-        <label title="${tip('mono')}"><input type="checkbox" id="defMono" checked title="${tip('mono')}"> Monochrome</label>
-        <label title="${tip('oneSided')}"><input type="checkbox" id="defOneSided" checked title="${tip('oneSided')}"> 1-sided</label>
-      </fieldset>
-      <fieldset class="defaults-sub platform-windows-only">
-        <legend>Advanced</legend>
-        <label title="${tip('apf')}"><input type="checkbox" id="defApf" title="${tip('apf')}"> Enable APF</label>
-      </fieldset>
     </fieldset>
   </div>
 
@@ -416,12 +432,13 @@ document.querySelector('#app').innerHTML = `
           <th title="${tip('selectAllHeader')}"><input type="checkbox" id="selectAllHeader" title="${tip('selectAllHeader')}"></th>
           <th title="${tip('name')}">Name</th>
           <th title="${tip('ip')}">IP</th>
+          <th title="${tip('lpdQueue')}">LPD-Q</th>
           <th title="${tip('manufacturer')}">Manufacturer</th>
           <th title="${tip('model')}">Model</th>
           <th title="${tip('driver')}">Driver</th>
           <th class="platform-windows-only" title="${tip('snmpGrid')}">SNMP</th>
           <th title="${tip('mono')}">Mono</th>
-          <th title="${tip('oneSided')}">1-sided</th>
+          <th title="${tip('oneSided')}">1-side</th>
           <th class="platform-windows-only" title="${tip('useExistingPort')}">UEP</th>
           <th class="platform-windows-only" title="Capture or browse to this row's DEVMODE (print defaults) and Device Settings, applied last during Deploy."></th>
           <th title="Double-click to remove this one row, without needing to check it first."></th>
@@ -903,6 +920,7 @@ function rowHtml(r) {
       <td class="checkbox-cell"><input type="checkbox" class="row-select" ${r.select ? 'checked' : ''} title="${tip('select')}"></td>
       <td><input type="text" class="row-name${isValidName(r.name) ? '' : ' input-needs-value'}" value="${attr(r.name)}" title="${tip('name')}"></td>
       <td><input type="text" class="row-ip${isValidPortValue(r.ip) ? '' : ' input-needs-value'}" value="${attr(r.ip)}" placeholder="or NUL" title="${tip('ip')}"></td>
+      <td><input type="text" class="row-lpdqueue" value="${attr(r.lpdQueueName)}" placeholder="optional" title="${tip('lpdQueue')}"></td>
       <td>${mfgSelectHtml(r)}</td>
       <td><div class="combo"><input type="text" class="row-model" value="${attr(r.model)}" title="${tip('model')}"><div class="combo-list" hidden></div></div></td>
       <td><div class="combo"><input type="text" class="row-driver${r.driver ? '' : ' input-needs-value'}" value="${attr(r.driver)}" title="${tip('driver')}"><div class="combo-list" hidden></div></div></td>
@@ -994,6 +1012,10 @@ function wireRowEvents() {
                 target.setSelectionRange(end, end);
             }, 0);
         });
+        // No input-needs-value handling here - unlike Name/IP/Driver, LPD-Q
+        // is genuinely optional on every manufacturer PDT knows of (see
+        // tip('lpdQueue')), so it never gets the yellow needs-value styling.
+        tr.querySelector('.row-lpdqueue').addEventListener('input', (e) => { row.lpdQueueName = e.target.value; });
         tr.querySelector('.row-mono').addEventListener('change', (e) => { row.mono = e.target.checked; });
         tr.querySelector('.row-onesided').addEventListener('change', (e) => { row.oneSided = e.target.checked; });
 
@@ -1045,6 +1067,15 @@ function wireRowEvents() {
             row.manufacturer = e.target.value;
             row.driver = '';
             row.model = '';
+            // Always tracks the newly-picked manufacturer's own default
+            // (confirmed live: leaving a stale "raw" behind after switching
+            // HP -> Ricoh read as a bug, not a preserved override) - unlike
+            // Driver/Model just above, there's no meaningful "this row's own
+            // LPD-Q" independent of which manufacturer is currently
+            // selected to preserve across a change. Still just a default:
+            // typing a custom value afterward isn't touched by anything
+            // except picking a (possibly the same) manufacturer again.
+            row.lpdQueueName = defaultLpdQueueFor(row.manufacturer);
             renderGrid();
         });
 
@@ -1182,9 +1213,11 @@ async function resetConfiguration() {
 function addPrinterRow(focusNewRow = false) {
     const subnet = el('defSubnet').value.trim();
     const ip = subnet ? (subnet.endsWith('.') ? subnet : subnet + '.') : '';
+    const mfg = el('defMfg').value;
     const row = newRow({
         ip,
-        manufacturer: el('defMfg').value,
+        lpdQueueName: defaultLpdQueueFor(mfg),
+        manufacturer: mfg,
         driver: el('defDriver').value,
         snmpCommunity: !isMac() && el('defSnmp').checked ? el('defSnmpCommunity').value : '',
         mono: el('defMono').checked,
@@ -2153,6 +2186,13 @@ function wireSettingsModal() {
     el('btnRefreshDrivers').addEventListener('click', async () => {
         const btn = el('btnRefreshDrivers');
         btn.disabled = true;
+        // A real driver folder scan can take 30-45+ seconds (extracting/
+        // inspecting archives - see loadCatalog on either platform), with
+        // nothing else visible changing until it finishes - confirmed live
+        // that the disabled button alone reads as "did the click even
+        // register?" rather than "working on it". This is the only signal
+        // until the OK/ERR line below replaces it.
+        logStatus('INFO', 'Refreshing driver catalog...');
         try {
             const status = await App.RefreshDriverCatalog();
             el('noDriversBanner').hidden = status.hasDrivers || !status.ok;

@@ -276,12 +276,37 @@ legend {
     border-bottom: 1px solid #33455c;
 }
 
+/* Not itself display:flex (see .defaults-body just below for why) - the
+   generic `fieldset` rule's own flex/gap/padding are all overridden back to
+   plain block-level defaults here, keeping only the outer box's own border/
+   background (.defaults-panel) and legend spacing. */
 .defaults-outer {
+    display: block;
+    padding: 0 12px 8px;
+}
+
+/* The actual vertical stack (Manufacturer/Driver row, then each Port/Print
+   Defaults/Advanced sub-fieldset) - deliberately a plain child <div>, not
+   flex/gap directly on .defaults-outer's own <fieldset>. Confirmed live: a
+   <fieldset> with display:flex + flex-direction:column, like this one used
+   to be, renders its <legend> as a normal flex item on WebKit (the macOS
+   Wails webview) - consuming its own row height *plus* one full flex `gap`
+   beneath it - while Chromium (Windows) correctly excludes the legend from
+   flex layout entirely, per the fieldset-legend rendering rules. Same CSS,
+   visibly more empty space above the Manufacturer row on macOS only ("A
+   minor Defaults-panel spacing issue... not yet reproduced" - reproduced by
+   screenshot and root-caused here). The Port/Print Defaults/Advanced
+   sub-fieldsets never showed this because they're row-direction flex (the
+   plain `fieldset` rule below), where an extra legend-as-flex-item only
+   costs horizontal space, not vertical. Moving flex/gap off the fieldset
+   entirely onto this wrapper - legend included or not - is no longer
+   ambiguous either way. */
+.defaults-body {
     display: flex;
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
-    padding: 4px 12px 8px;
+    padding-top: 4px;
 }
 
 .defaults-row {
@@ -289,14 +314,17 @@ legend {
     flex-wrap: wrap;
     align-items: center;
     gap: 10px 16px;
-    /* The Manufacturer/Model/Driver row has no border of its own (unlike
-       Port/Print Defaults/Advanced, each their own bordered fieldset right
-       below it), so the flex gap after it reads as noticeably more space
-       than the border-to-border gaps between the fieldsets themselves - a
-       bordered box's own legend visually "absorbs" part of the gap above it
-       in a way a bare row's trailing whitespace doesn't. Pulled in by eye
-       against a screenshot, not computed from any exact box-model number. */
-    margin-bottom: -18px;
+    /* No margin-bottom hack here (a previous eyeballed -18px, meant to
+       compensate for this row having no border of its own unlike the
+       Port/Print Defaults/Advanced fieldsets right below it, used to live
+       here) - confirmed live that it doesn't survive .defaults-body's own
+       fix just above: pulling a fixed pixel amount closer to whatever
+       follows overlapped Port's own box the moment the WebKit legend-height
+       bug it was unknowingly tuned against went away. Uses the same plain
+       .defaults-body gap (8px) as every other boundary in the panel instead
+       - a little more breathing room after a borderless row than a purely
+       eyeballed "match the bordered gaps exactly" would give, but a real,
+       positive number that can't turn into an overlap on either engine. */
 }
 
 .defaults-row .driver-label {
@@ -401,6 +429,13 @@ table.grid tbody tr.row-succeeded {
 table.grid input[type="text"] {
     width: 100%;
     min-width: 90px;
+}
+
+/* Values here ("raw", "lp", or blank) are always short - a narrower min-width
+   than every other grid text column keeps this from eating space the
+   Name/Driver columns actually need. */
+table.grid input.row-lpdqueue {
+    min-width: 56px;
 }
 
 table.grid td.checkbox-cell {

@@ -16,9 +16,13 @@ import (
 // PDT unmodified - a stray "BindNulPort" key in an old file is simply ignored
 // by encoding/json, no migration code needed.
 type SavedRow struct {
-	Select                   bool   `json:"Select"`
-	Name                     string `json:"Name"`
-	IP                       string `json:"IP"`
+	Select bool   `json:"Select"`
+	Name   string `json:"Name"`
+	IP     string `json:"IP"`
+	// LPDQueueName: see printer.PrinterRow's own doc comment - a new field
+	// with no Create-Printers.ps1 precedent to match, so its JSON key is
+	// just its own Go name like everything else added since.
+	LPDQueueName             string `json:"LPDQueueName"`
 	Manufacturer             string `json:"Manufacturer"`
 	Model                    string `json:"Model"`
 	Driver                   string `json:"Driver"`
@@ -36,7 +40,7 @@ type SavedRow struct {
 
 func (r SavedRow) ToPrinterRow() printer.PrinterRow {
 	return printer.PrinterRow{
-		Name: r.Name, IP: r.IP, Manufacturer: r.Manufacturer, Model: r.Model, Driver: r.Driver,
+		Name: r.Name, IP: r.IP, LPDQueueName: r.LPDQueueName, Manufacturer: r.Manufacturer, Model: r.Model, Driver: r.Driver,
 		SNMP: r.SNMP, SNMPCommunity: r.SNMPCommunity, Mono: r.Mono, OneSided: r.OneSided,
 		UseExistingPort: r.UseExistingPort, AdvancedPrintingFeatures: r.AdvancedPrintingFeatures,
 		DevModeFile: r.DevModeFile,
@@ -45,7 +49,7 @@ func (r SavedRow) ToPrinterRow() printer.PrinterRow {
 
 func RowFromPrinterRow(row printer.PrinterRow, selected bool) SavedRow {
 	return SavedRow{
-		Select: selected, Name: row.Name, IP: row.IP, Manufacturer: row.Manufacturer, Model: row.Model,
+		Select: selected, Name: row.Name, IP: row.IP, LPDQueueName: row.LPDQueueName, Manufacturer: row.Manufacturer, Model: row.Model,
 		Driver: row.Driver, SNMP: row.SNMP, SNMPCommunity: row.SNMPCommunity, Mono: row.Mono, OneSided: row.OneSided,
 		UseExistingPort: row.UseExistingPort, AdvancedPrintingFeatures: row.AdvancedPrintingFeatures,
 		DevModeFile: row.DevModeFile,

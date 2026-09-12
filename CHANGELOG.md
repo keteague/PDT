@@ -4,6 +4,179 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-12 - Log an entry when Refresh Drivers actually starts, not just when it finishes
+
+### Fixed
+- **Clicking the toolbar's Refresh button gave no feedback that anything had happened** - a real
+  driver folder scan can take 30-45+ seconds (extracting/inspecting archives), and the only
+  existing signal was the icon button going disabled, confirmed live to read as "did the click
+  even register?" rather than "working on it," for the entire span until the eventual OK/ERR log
+  line. Added a `logStatus('INFO', 'Refreshing driver catalog...')` right before the
+  `RefreshDriverCatalog` call (`frontend/src/main.js`), so the Log panel shows a start line
+  immediately instead of going quiet until the (identically-worded-either-way) finish line
+  eventually appears.
+
+## 2026-09-12 - Fix LPD-Q not tracking a later Manufacturer change; grid header shortened
+
+### Fixed
+- **LPD-Q's manufacturer default only applied once, live-tested and confirmed wrong**:
+  switching a grid row from Canon to HP correctly set LPD-Q to `raw`, but switching that same
+  row on to Xerox (or anything else) left the stale `raw` behind instead of updating to `lp` (or
+  blank) - the previous "only fill when blank" guard meant the default fired exactly once per
+  row and never again. `defaultLpdQueueFor` is now applied unconditionally every time a row's
+  Manufacturer changes (`frontend/src/main.js`), so LPD-Q always reflects whichever manufacturer
+  is currently selected. Still just a default, not enforced: typing a custom value afterward is
+  untouched by anything except picking a (possibly the same) manufacturer again.
+
+### Changed
+- Grid column header "1-sided" shortened to "1-side" to save space - grid-only; the Defaults
+  panel's own checkbox label and the CSV column name (`1-sided`, unchanged for compatibility with
+  already-saved CSV templates) are untouched.
+
+## 2026-09-12 - Add per-row LPD-Q override (Windows + macOS), closing the last known-issue item
+
+### Added
+- **New "LPD-Q" grid column, right after IP** (`frontend/src/main.js`) - a free-text, genuinely
+  optional per-row override for the queue-name segment of a macOS deploy's LPD device URI
+  (`lpd://<ip>/<LPDQueueName>` - `internal/printer/darwin/deploy_darwin.go`'s own `Deploy` always
+  used a bare `lpd://<ip>/`, no override, until now - the last item on the v0.4.0 known-issues
+  list). Never gets the yellow `input-needs-value` styling every other required grid field does -
+  most manufacturers' MFDs ignore the LPD queue name entirely and respond to any/no value.
+- **Auto-filled for the two manufacturers confirmed to actually need one** - HP ("raw") and Xerox
+  ("lp") - the moment a row's Manufacturer becomes either one (`defaultLpdQueueFor`, applied both
+  when "Add Printer" creates a row from the Defaults panel and when an existing row's own
+  Manufacturer dropdown changes). Only fills a currently-blank value - never overwrites a value
+  already typed by hand, whether that came from a prior default or a deliberate override.
+- **`printer.PrinterRow.LPDQueueName` (new field, both platforms) round-trips through Open/Save
+  Configuration (`config.SavedRow`) and CSV (`New CSV`/`Import CSV`) on Windows too, even though
+  Windows' own `Deploy` never reads it** (Standard TCP/IP ports have no LPD-queue concept at all)
+  - deliberate, ahead of using the same saved configuration to deploy the same printers from
+  either platform: a config saved on Windows already carries the right value the moment it's
+  opened on a Mac, with no per-row redo needed. An older CSV/config saved before this field
+  existed still loads fine with it simply blank (`ImportCSV`'s column lookup was already
+  by-name and tolerant of a missing one).
+- Device URI construction pulled out into a small pure `lpdDeviceURI(ip, queueName)` (trims stray
+  slashes/whitespace off a hand-typed value like `"/raw"` or `"raw/"`), so it's directly unit-
+  testable without needing to mock the rest of `Deploy`'s real CUPS calls.
+
+### Testing
+- `internal/printer/darwin/deploy_darwin_test.go`: `TestLpdDeviceURI` - blank/HP/Xerox defaults,
+  plus stray-slash/whitespace trimming.
+- `internal/config/json_test.go`/`csv_test.go`: `LPDQueueName` round-trips through both Open/Save
+  Configuration and CSV import, and an old CSV missing the column still imports with it blank.
+
+## 2026-09-12 - macOS: fix the Defaults-panel spacing bug (WebKit legend-in-flex quirk)
+
+### Fixed
+- **The "minor Defaults-panel spacing/padding issue above the Manufacturer row" noted (but not
+  reproduced) since v0.4.0** - reproduced via a real screenshot, and root-caused: `.defaults-outer`
+  (`frontend/src/app.css`) was a `<fieldset>` with `display: flex; flex-direction: column` applied
+  directly to it, with `<legend>` as one of its flex-context children alongside `.defaults-row` and
+  the Port/Print Defaults/Advanced sub-fieldsets. WebKit (the macOS Wails webview) renders that
+  `<legend>` as a genuine flex item in that situation - consuming its own row height *plus* one full
+  flex `gap` beneath it - while Chromium (Windows' WebView2) correctly excludes the legend from flex
+  layout entirely, per the fieldset/legend rendering spec. Identical CSS, visibly more empty space
+  above the Manufacturer row on macOS only. The Port/Print Defaults/Advanced sub-fieldsets never
+  showed this because they're row-direction flex (the bare `fieldset` rule's own default), where an
+  extra legend-as-flex-item only costs horizontal space, not vertical - only `.defaults-outer` used
+  column direction.
+- **Fix**: moved the flex/gap layout off the `<fieldset>` itself and onto a new plain `<div
+  class="defaults-body">` wrapping `.defaults-row` and the three sub-fieldsets (`frontend/src/
+  main.js`) - `.defaults-outer` is back to a plain block-level fieldset (native, unambiguous legend
+  rendering on any engine), and the original padding values (`4px 12px 8px`) are preserved exactly,
+  just relocated across the fieldset/wrapper split so the same visual rhythm applies once the
+  flex-legend ambiguity is gone.
+- **Second-order bug found immediately after, via a live screenshot**: `.defaults-row`'s own
+  `margin-bottom: -18px` (an earlier eyeballed hack pulling the row closer to the Port fieldset
+  below it, to compensate for the row having no border of its own) no longer just looked "slightly
+  tight" once the fix above removed the WebKit legend-height bug it had unknowingly been tuned
+  against - it now visibly overlapped the Port box's own legend/border. Removed entirely; the row
+  now uses the same plain 8px `.defaults-body` gap as every other boundary in the panel - a real,
+  positive number that can't turn into an overlap on either engine, at the cost of a hair more
+  (harmless) whitespace than the original hand-tuned value gave.
+
+## 2026-09-11 - macOS: fix Browse-dialog focus theft; scaffold the Drivers tree; tooltip fix
+
+Follow-up from live-testing the previous entry's `osascript` folder-picker fix on real hardware.
+
+### Fixed
+- **The folder-picker's own "choose folder" dialog was bringing Finder to the foreground instead
+  of PDT** (`pickfolder_darwin.go`) - confirmed live: the first click made Settings appear to
+  vanish entirely (PDT's own window just went behind Finder, since Settings is HTML inside that
+  same window). Root cause: `choose folder` run bare through `osascript`, with no `tell
+  application` wrapper, belongs to no particular app - macOS attributes its window to Finder and
+  activates it as a side effect. Fixed with the standard AppleScript idiom for this: capture
+  `path to frontmost application` before running `choose folder`, and explicitly reactivate it
+  afterward on both the success and Cancel paths (re-raising the original error/exit code on
+  Cancel so the existing `-128` detection in Go is unaffected).
+- **The toolbar's Drivers-folder icon's tooltip said "Open the Drivers folder in File
+  Explorer"** on every platform, including macOS, which has no File Explorer - it has Finder.
+  Reworded to "Open Drivers folder" (`frontend/src/main.js`), OS-agnostic rather than naming
+  either platform's file manager.
+
+### Added
+- **`ensureMacDriversScaffold` (`driversfolder.go`), wired into `app_darwin.go`'s
+  `platformStartup`** - the darwin analog of the Windows side's own `ensureDriversScaffold`,
+  closing the "no macOS Drivers-folder scaffold yet" gap noted since the v0.4.0 macOS port. Not a
+  straight port - macOS driver packages genuinely vary by OS release the way Windows' generally
+  don't, so `Drivers/macOS/<Manufacturer>/<macOS version>/...` nests the *opposite* way from
+  Windows' `Drivers/Windows/<version>/<Manufacturer>/...` (version under manufacturer, not
+  manufacturer under version). Unconditional/idempotent like the Windows version, but two
+  different things: (1) ensures every `driver.Manufacturers` entry has at least a bare
+  `Drivers/macOS/<Manufacturer>` folder to pick from, even before any macOS package exists
+  locally; (2) retroactively drops an `Archive/README.txt` into every macOS-version subfolder it
+  finds already there under each manufacturer - confirmed necessary against a real Drivers
+  folder (Ken's own): only 2 of Canon's 10 real version folders had an `Archive` folder at all,
+  and none of them had a `README.txt`, since nothing had been creating this automatically until
+  now. Deliberately does **not** create any version subfolder itself, unlike the Windows side's
+  own hardcoded `Windows/11` - there's no one macOS version this could hardcode that wouldn't go
+  stale the moment Apple ships the next one (macOS 26 "Tahoe" -> 27 "Golden Gate" needed exactly
+  that, by hand, the same day this was written - see below).
+
+### Testing
+- `driversfolder_test.go`: `TestEnsureMacDriversScaffold` - every manufacturer gets a bare
+  folder, every existing version folder gets `Archive/README.txt` backfilled, and a manufacturer
+  with no version folder at all stays empty rather than getting one invented.
+
+### Housekeeping
+- Added `27-GoldenGate/Archive` under Canon/HP/Kyocera/Ricoh/Sharp in the real Drivers folder
+  (`~/Library/Application Support/PDT/Drivers/macOS/`), alongside each manufacturer's existing
+  `26-Tahoe` - preparing for macOS 27 ("Golden Gate") ahead of any driver packages actually being
+  available for it yet.
+
+## 2026-09-11 - macOS: fix Settings > General's "..." Browse buttons never opening a dialog
+
+### Fixed
+- **Settings > General's three Browse (`...`) buttons - Save File/Drivers/Preinstall Base
+  Path - now actually open a folder picker on macOS.** Root-caused: every Wails-bound Go
+  method, `PickFolder` (`app.go`) included, runs on its own freshly spawned goroutine, never
+  the process's real main thread (confirmed in Wails' own vendored darwin frontend code -
+  each JS-to-Go call is dispatched via a bare `go func(){...}()`). AppKit's `NSOpenPanel` is
+  only documented-safe to drive from the main thread; calling its
+  `beginSheetModalForWindow:completionHandler:` off-thread is what silently swallowed every
+  click - the sheet never actually appeared, and Wails' own darwin `dialog.go` surfaced no
+  error either, since it just blocks forever reading the response channel the sheet's
+  never-fired completion handler would have sent on (matches the "Browse buttons don't open a
+  folder picker on macOS - not yet root-caused" line in the v0.4.0 known-issues list). Wails v2
+  is end-of-life - there's no newer release to pick up a fix from, and correctly patching its
+  own Objective-C would mean splitting "present the sheet" from "wait for the result" so the
+  main thread's run loop stays free to actually deliver that result; blocking the main thread
+  for the whole wait (the naive fix) would just trade one hang for a guaranteed one.
+- **`PickFolder`'s actual dialog now goes through a new per-platform `pickFolderDialog` hook**
+  (`pickfolder_windows.go` keeps calling Wails' own `runtime.OpenDirectoryDialog` exactly as
+  before; `pickfolder_darwin.go` shows the dialog via AppleScript's `choose folder` through
+  `osascript` instead) - `osascript` runs entirely in its own process, with its own main
+  thread and run loop, sidestepping the whole problem rather than needing to fix Wails' own
+  code. Confirmed live: the AppleScript dialog reliably appears where the old call never did.
+  `POSIX path of (choose folder ...)` always returns a directory path with a trailing `/`
+  (AppleScript's own convention) - `filepath.Clean`ed so Settings displays/stores the same
+  shape on either platform.
+
+### Testing
+- `pickfolder_darwin_test.go`: `appleScriptString`'s quoting/escaping (embedded `"` and `\`) -
+  the only pure-Go part of the new path that's meaningfully unit-testable without popping a
+  real dialog.
+
 ## 2026-09-10 - macOS: build-once model->PPD catalog for Canon (replaces per-deploy guessing)
 
 ### Added

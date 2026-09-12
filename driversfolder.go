@@ -64,6 +64,61 @@ func ensureDriversScaffold(root string) error {
 	return nil
 }
 
+// ensureMacDriversScaffold is the darwin analog of ensureDriversScaffold
+// above, called from app_darwin.go's platformStartup - but a genuinely
+// different shape, not a straight port, because macOS driver packages
+// really do vary by OS release the way Windows' generally don't (see
+// README's "Drivers folder layout": Drivers/macOS/<Manufacturer>/
+// <macOS version>/... nests version *under* manufacturer, the opposite of
+// Windows' Drivers/Windows/<version>/<Manufacturer>/...). Two things, both
+// unconditional/idempotent like the Windows version:
+//
+//  1. Makes sure every entry in driver.Manufacturers has at least a bare
+//     Drivers/macOS/<Manufacturer> folder - same "every manufacturer is
+//     offered regardless of whether it's populated locally" philosophy as
+//     the Windows side, so a brand-new macOS install can still pick any
+//     manufacturer before downloading anything.
+//  2. Retroactively drops an Archive/README.txt into every macOS-version
+//     subfolder it finds already there under each manufacturer - confirmed
+//     necessary against a real Drivers folder (Ken's own): only 2 of
+//     Canon's 10 real version folders (10.15-Catalina, 26-Tahoe) had an
+//     Archive folder at all, the rest didn't, because nothing had been
+//     creating this automatically until now.
+//
+// Deliberately does NOT create any version subfolder itself, unlike
+// ensureDriversScaffold's own hardcoded Windows/11 - there is no one macOS
+// version PDT could hardcode here that wouldn't need updating by hand the
+// moment Apple ships the next one (confirmed live: going from macOS 26
+// "Tahoe" to 27 "Golden Gate" needed exactly that, by hand, the same day
+// this function was written). Scaffolding only ever adds Archive to a
+// version folder that's already there, never invents one.
+func ensureMacDriversScaffold(macDriversRoot string) error {
+	for _, mfg := range driver.Manufacturers {
+		folder := strings.ReplaceAll(mfg, " ", "")
+		mfgDir := filepath.Join(macDriversRoot, folder)
+		if err := os.MkdirAll(mfgDir, 0o755); err != nil {
+			return fmt.Errorf("creating %s: %w", folder, err)
+		}
+		entries, err := os.ReadDir(mfgDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() || entry.Name() == "Archive" {
+				continue
+			}
+			archiveDir := filepath.Join(mfgDir, entry.Name(), "Archive")
+			if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+				return fmt.Errorf("creating %s/%s/Archive: %w", folder, entry.Name(), err)
+			}
+			if err := os.WriteFile(filepath.Join(archiveDir, "README.txt"), []byte(archiveReadmeContent), 0o644); err != nil {
+				return fmt.Errorf("writing %s/%s/Archive/README.txt: %w", folder, entry.Name(), err)
+			}
+		}
+	}
+	return nil
+}
+
 // OpenFolderResult is OpenDriversBasePathInExplorer's outcome - a DTO with
 // its own Error field rather than a bare Go error, per this file's siblings
 // (see app.go's own doc comment: a bare error value doesn't JSON-marshal its

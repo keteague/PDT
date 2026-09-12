@@ -8,15 +8,18 @@ import (
 	pdtdarwin "PDT/internal/printer/darwin"
 )
 
-// platformStartup: nothing needed here yet - unlike Windows, there's no
-// bundled extraction tool (.dmg/.pkg driver packages need no 7-Zip-style
-// unpacking), no self-update mechanism to clean up after (see this port's
-// own "explicitly out of scope" list - app self-update has no macOS analog
-// yet), and no macOS-shaped Drivers-folder scaffold built yet either (a
-// direct analog of driversfolder.go's ensureDriversScaffold, deferred until
-// there's real demand for auto-creating Drivers/macOS/<Manufacturer>/... on
-// first launch).
-func (a *App) platformStartup() {}
+// platformStartup: unlike Windows, there's no bundled extraction tool
+// (.dmg/.pkg driver packages need no 7-Zip-style unpacking) and no
+// self-update mechanism to clean up after (see this port's own "explicitly
+// out of scope" list - app self-update has no macOS analog yet). It does
+// now scaffold the macOS-shaped Drivers tree (driversfolder.go's
+// ensureMacDriversScaffold - a direct, if differently-shaped, analog of the
+// Windows side's own ensureDriversScaffold), best-effort: a scaffold failure
+// (e.g. a read-only Drivers folder) shouldn't block startup any more than
+// the Windows side's own best-effort ensureDriversScaffold call does.
+func (a *App) platformStartup() {
+	_ = ensureMacDriversScaffold(filepath.Join(driversRoot(), "macOS"))
+}
 
 // loadCatalog scans driversRoot for macOS driver packages (installer-
 // package-shaped - driver.MacCatalog, see internal/driver/maccatalog.go),

@@ -57,6 +57,35 @@ func TestImportCSV_QuotesCommaOnlyWhenNeeded(t *testing.T) {
 	}
 }
 
+// TestImportCSV_LPDQueueName covers both directions: a CSV that has the
+// column round-trips it, and an older CSV saved before this column existed
+// (like TestImportCSV_QuotesCommaOnlyWhenNeeded's own fixture above) still
+// imports fine with it simply blank - ImportCSV's column lookup is by name
+// and already tolerant of a missing one (see its own get() helper).
+func TestImportCSV_LPDQueueName(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Printers.csv")
+	content := "Name,IP,LPDQueueName,Manufacturer,Model,Driver,SNMP,Mono,1-sided,UseExistingPort,AdvancedPrintingFeatures\n" +
+		"Front Desk,10.1.1.50,raw,HP,,HP Universal Printing PCL 6,true,false,true,false,false\n" +
+		"Lobby,10.1.1.51,,Canon,,Canon Generic Plus UFR II,false,false,true,false,false\n"
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	rows, err := ImportCSV(path)
+	if err != nil {
+		t.Fatalf("ImportCSV: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d: %v", len(rows), rows)
+	}
+	if rows[0].LPDQueueName != "raw" {
+		t.Errorf("rows[0].LPDQueueName = %q, want %q", rows[0].LPDQueueName, "raw")
+	}
+	if rows[1].LPDQueueName != "" {
+		t.Errorf("rows[1].LPDQueueName = %q, want blank", rows[1].LPDQueueName)
+	}
+}
+
 func TestCsvWriter_QuotesOnlyWhenNeeded(t *testing.T) {
 	// Confirms the exact building block WriteTemplate/ImportCSV are built on
 	// (encoding/csv.Writer) does the requested quoting on its own: a comma

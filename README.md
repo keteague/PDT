@@ -41,10 +41,13 @@ UAC-prompts every time, per its own manifest.
   LPD print queue, verified against real vendor packages and this machine's own real queues. `package
   main` now compiles and runs as a real macOS `.app`, with a reduced frontend UI for the Windows-only
   concepts (Spooler, SNMP/port config, APF, DEVMODE capture, app self-update) that have no CUPS/macOS
-  equivalent yet. Not yet installer-packaged, and a handful of loose ends remain (Settings > General's
-  folder-picker buttons and Windows-style path display on macOS, no macOS Drivers-folder scaffold, and
-  the open question of whether a real signed `.app` avoids the ad-hoc-signing AMFI rejection a bare
-  test binary hit) - see "macOS support" below and the Changelog's v0.4.0 entry for the current list.
+  equivalent yet. Not yet installer-packaged. What's still genuinely open: the Canon model index
+  (`internal/driver/macmodel.go`) doesn't yet match every real-world Canon download - a technician's
+  own real UFR II package showed only one raw, unparsed label instead of the friendly model list
+  (not yet root-caused against that specific file); the open question of whether a real signed `.app`
+  avoids the ad-hoc-signing AMFI rejection a bare test binary hit; and each cached model/PPD entry
+  isn't yet tagged with which `.dmg`/`.pkg` it came from, so a rebuild can't skip re-inspecting
+  archives it's already indexed - see "macOS support" below and the Changelog for the current list.
 - **Not started**: Linux support.
 
 ## Windows bindings (`internal/printer/windows`)
@@ -97,9 +100,10 @@ nothing analogous to create ahead of the queue itself.
 | `internal/driver/macmodel.go` | `BuildMacModelIndex` builds, once per catalog build/refresh, a `MacModelIndex` (`manufacturer -> friendly model -> []MacPPDVariant`) for every `macFamilyPreference` manufacturer - inspecting only each family's own single newest package (never every version-folder's own copy), so the one-time cost stays "one `pkgutil --expand-full`/mount per family", not per package. `MacVariantForDeploy` then resolves a row's own `(Model, Driver)` straight to a `MacPPDVariant` - which package to install and which exact PPD filename it registers, or (for a family that ships loose PPDs with no installer at all - confirmed live against Canon's own "PPD" bucket) a permanently-cached local copy to hand `lpadmin` directly - with no per-deploy package re-inspection at all. |
 | `internal/printer/darwin/elevate_darwin.go` | Every privileged command (`installer`, `lpadmin`) runs through `osascript`'s `do shell script ... with administrator privileges` - the closest available equivalent to Windows' manifest-driven auto-UAC-elevation without a paid code-signing certificate. **Confirmed live that a bare, ad-hoc-signed CLI binary gets killed by AMFI** (`AppleMobileFileIntegrityError -423`) the moment the privileged command actually starts, even after the password prompt is accepted - whether a real signed `.app` bundle avoids this too is still an open question (see the file's own doc comment for the full story and what to try next). |
 | `internal/printer/darwin/install_darwin.go`, `ppdinventory_darwin.go` | Installs a resolved package via `installer -pkg ... -target /`, and diffs `/Library/Printers/PPDs/Contents/Resources` before/after to discover which PPD(s) it actually registered - there's no Windows-registry-like "installed driver version" to read directly on macOS, so a before/after PPD-directory diff is the closest real signal (confirmed live against a real Kyocera install: hundreds of new PPDs appeared, including an exact match for a real deployed printer's own model). |
-| `internal/printer/darwin/queue_darwin.go` | Creates/reuses a CUPS queue via `lpadmin`/`lpstat` - `lpd://<ip>/` with no queue name, confirmed against this machine's own already-deployed real queues (`Jenks_Kyocera`, `Jackson_Streets`) to be exactly the working convention already in use in this environment. Reuses an existing queue already targeting the same device URI rather than ever creating a duplicate, the same rule `portlookup_windows.go` applies to Standard TCP/IP ports. |
+| `internal/printer/darwin/queue_darwin.go` | Creates/reuses a CUPS queue via `lpadmin`/`lpstat` - device URI built by `deploy_darwin.go`'s own `lpdDeviceURI` (see below), confirmed against this machine's own already-deployed real queues (`Jenks_Kyocera`, `Jackson_Streets`) that a bare `lpd://<ip>/` with no queue name is the working convention for most manufacturers. Reuses an existing queue already targeting the same device URI rather than ever creating a duplicate, the same rule `portlookup_windows.go` applies to Standard TCP/IP ports. |
 | `internal/printer/darwin/printdefaults_darwin.go` | Best-effort duplex/color defaults, by reading each queue's actual PPD-declared option keywords/choices (`lpoptions -l`) rather than hardcoding one vendor's naming - confirmed against a real installed Kyocera PPD (`Duplex`: `None`/`DuplexTumble`/`DuplexNoTumble`; `ColorModel`: `CMYK`/`Gray`) that PPD option naming is inconsistent enough across vendors that this has to stay dynamic, the same lesson `devmode_windows.go` already learned for DEVMODE on Windows. |
-| `internal/printer/darwin/deploy_darwin.go` | The orchestrator (`Deployer.Deploy`) - resolve driver -> ensure it's installed -> resolve/create queue -> best-effort print defaults. No NUL:-port workaround (nothing here is ever created against a placeholder port; CUPS queue creation doesn't have the multi-minute-against-a-live-port problem that motivated it on Windows) and no APF/"print spooled documents first" (both Windows spooler-specific concepts with no CUPS equivalent). |
+| `internal/printer/darwin/deploy_darwin.go` | The orchestrator (`Deployer.Deploy`) - resolve driver -> ensure it's installed -> resolve/create queue -> best-effort print defaults. No NUL:-port workaround (nothing here is ever created against a placeholder port; CUPS queue creation doesn't have the multi-minute-against-a-live-port problem that motivated it on Windows) and no APF/"print spooled documents first" (both Windows spooler-specific concepts with no CUPS equivalent). `lpdDeviceURI` builds the device URI from the row's own optional `LPDQueueName` (grid column "LPD-Q", right after IP, on both platforms) - most manufacturers ignore the LPD queue-name segment entirely, but HP (`raw`) and Xerox (`lp`) are two confirmed exceptions, auto-filled by the frontend whenever a row's Manufacturer is set to either (`defaultLpdQueueFor` in `frontend/src/main.js`) and still freely overridable per row. |
+| `pickfolder_darwin.go` (repo root) | Settings > General's Browse ("...") buttons show a native folder picker via AppleScript's `choose folder` (through `osascript`) instead of Wails' own `runtime.OpenDirectoryDialog` - confirmed live that every Wails-bound method (this one included) runs on its own freshly-spawned goroutine, never the process's real main thread, and AppKit's `NSOpenPanel` is only safe to drive from the main thread; calling it off-thread silently swallowed every click, with the sheet never appearing and no error surfaced either. `osascript` sidesteps the whole problem by running in its own process with its own main thread/run loop. Also captures/restores whichever app was frontmost around the call - `choose folder` run bare like this belongs to no particular app, and macOS attributes its window to Finder, activating it as a side effect that otherwise visibly buries PDT's own window. |
 
 ### Model-driven PPD selection on macOS
 
@@ -487,6 +491,14 @@ source for manufacturers/models with nothing better - both are described in full
 above, including how `.dmg`/`.pkg` extraction actually ended up working out (mounting via `hdiutil`,
 no bundled tool needed - simpler than the Windows side's own 7-Zip/msiexec/expand.exe pipeline, since
 macOS packages need no pre-extraction at install time at all).
+
+**`ensureMacDriversScaffold` (`driversfolder.go`), the darwin analog of `ensureDriversScaffold`
+above**, runs at startup too, but isn't a straight port - it only ever ensures a bare
+`Drivers/macOS/<Manufacturer>` folder exists for every entry in `driver.Manufacturers` (there's no
+one macOS version it could hardcode the way `Windows/11` is hardcoded above, since macOS driver
+packages genuinely do vary by release) and retroactively backfills `Archive/README.txt` into
+whatever version folders already exist under each manufacturer - it never invents a version folder
+itself.
 
 ## Deploy sequence (`internal/printer/windows/deploy_windows.go`)
 

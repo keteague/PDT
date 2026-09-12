@@ -150,15 +150,14 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 }
 
 // PickFolder prompts for a directory, starting from currentPath, for the
-// Settings panel's "Save File Base Path" browse button.
+// Settings panel's Browse ("...") buttons. The actual dialog is shown by
+// platform-specific pickFolderDialog (pickfolder_windows.go/
+// pickfolder_darwin.go) - macOS can't use Wails' own runtime.OpenDirectoryDialog
+// here, see pickfolder_darwin.go's own doc comment.
 func (a *App) PickFolder(currentPath string) (PathResult, error) {
-	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:                "Select Save File Base Path",
-		DefaultDirectory:     resolveExeRelative(currentPath),
-		CanCreateDirectories: true,
-	})
-	if err != nil || path == "" {
-		return PathResult{Canceled: path == ""}, err
+	path, canceled, err := a.pickFolderDialog("Select Save File Base Path", resolveExeRelative(currentPath))
+	if err != nil || canceled {
+		return PathResult{Canceled: canceled}, err
 	}
 	return PathResult{Path: path}, nil
 }

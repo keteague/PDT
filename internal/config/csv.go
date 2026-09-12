@@ -14,7 +14,7 @@ import (
 // every imported row just defaults to selected) and no BindNulPort/NUL column
 // (removed entirely; see printer.NormalizeIP and printer.RequiresNulPortWorkaround
 // for what replaced it).
-var CsvHeader = []string{"Name", "IP", "Manufacturer", "Model", "Driver",
+var CsvHeader = []string{"Name", "IP", "LPDQueueName", "Manufacturer", "Model", "Driver",
 	"SNMP", "Mono", "1-sided", "UseExistingPort", "AdvancedPrintingFeatures"}
 
 // WriteTemplate creates path and writes just CsvHeader as its only row - the
@@ -81,6 +81,7 @@ func ImportCSV(path string) ([]printer.PrinterRow, error) {
 		rows = append(rows, printer.PrinterRow{
 			Name:                     strings.TrimSpace(get(rec, "Name")),
 			IP:                       strings.TrimSpace(get(rec, "IP")),
+			LPDQueueName:             strings.TrimSpace(get(rec, "LPDQueueName")),
 			Manufacturer:             strings.TrimSpace(get(rec, "Manufacturer")),
 			Model:                    strings.TrimSpace(get(rec, "Model")),
 			Driver:                   strings.TrimSpace(get(rec, "Driver")),

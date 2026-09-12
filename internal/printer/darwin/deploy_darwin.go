@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"PDT/internal/driver"
 	"PDT/internal/printer"
@@ -69,7 +70,7 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 		return fatal(fmt.Errorf("resolving driver: %w", err))
 	}
 
-	deviceURI := "lpd://" + ip + "/"
+	deviceURI := lpdDeviceURI(ip, row.LPDQueueName)
 
 	// Reuse whatever queue (under any name) already targets this exact
 	// device, the same "reuse rather than ever create a duplicate" rule
@@ -114,6 +115,17 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 
 	log.OK("Deployment finished for %q.", row.Name)
 	return printer.DeployResult{RowName: row.Name, Log: log.Lines(), Err: nil}
+}
+
+// lpdDeviceURI builds the LPD device URI Deploy hands to EnsureQueue.
+// queueName is row.LPDQueueName - blank for every manufacturer PDT knows of
+// except HP ("raw") and Xerox ("lp"), see PrinterRow's own doc comment for
+// why those two specifically, and frontend/src/main.js's defaultLpdQueueFor
+// for where that default actually gets set (still a per-row override, never
+// enforced here). Trimmed of stray slashes/whitespace so a queue name typed
+// as "/raw" or "raw/" doesn't produce a doubled or trailing slash in the URI.
+func lpdDeviceURI(ip, queueName string) string {
+	return "lpd://" + ip + "/" + strings.Trim(strings.TrimSpace(queueName), "/")
 }
 
 // resolveDriver ports ensureDriverCurrent's role: resolve row's manufacturer

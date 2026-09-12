@@ -4,6 +4,7 @@ export namespace config {
 	    Select: boolean;
 	    Name: string;
 	    IP: string;
+	    LPDQueueName: string;
 	    Manufacturer: string;
 	    Model: string;
 	    Driver: string;
@@ -24,6 +25,7 @@ export namespace config {
 	        this.Select = source["Select"];
 	        this.Name = source["Name"];
 	        this.IP = source["IP"];
+	        this.LPDQueueName = source["LPDQueueName"];
 	        this.Manufacturer = source["Manufacturer"];
 	        this.Model = source["Model"];
 	        this.Driver = source["Driver"];
@@ -351,6 +353,7 @@ export namespace printer {
 	export class PrinterRow {
 	    Name: string;
 	    IP: string;
+	    LPDQueueName: string;
 	    Manufacturer: string;
 	    Model: string;
 	    Driver: string;
@@ -370,6 +373,7 @@ export namespace printer {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.Name = source["Name"];
 	        this.IP = source["IP"];
+	        this.LPDQueueName = source["LPDQueueName"];
 	        this.Manufacturer = source["Manufacturer"];
 	        this.Model = source["Model"];
 	        this.Driver = source["Driver"];

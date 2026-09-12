@@ -1,9 +1,12 @@
 package driver
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // macLanguageDisplayNames maps a macFamilyPreference token to how it reads
@@ -88,51 +91,85 @@ func stripLanguageSuffix(nickName string, tokens []string) (model, matchedToken 
 	return nickName, ""
 }
 
-// indexFamilyPackage inspects family's own newest package (path) once,
-// returning every PPD it would register, keyed by friendly model name. Tries
-// a real installer package first (LocatePkg + packagePPDEntries - the same
-// read-only pkgutil --expand-full inspection PackagePPDNickNames already
-// does); when path has no .pkg inside at all (LocatePkg's own not-found
-// error), falls back to LocateLoosePPDs for the no-installer family shape,
-// permanently caching each matched PPD under cacheDir (CachePPDFile) since
-// the mounted volume it's read from won't still be mounted at deploy time.
-// cacheDir == "" skips the loose-PPD fallback entirely (nowhere to persist a
-// copy) rather than erroring - the caller just gets fewer variants indexed.
-func indexFamilyPackage(path, family string, tokens []string, cacheDir string) map[string][]MacPPDVariant {
-	out := map[string][]MacPPDVariant{}
+// isJapanMarketOnly reports whether nickName names a Japan-market-only SKU -
+// confirmed against a real Canon catalog build (641 models) that 166 of
+// them (26%) end in " JP", and that this isn't just a cosmetic label:
+// Canon's own raw NickName puts JP *after* the language token
+// ("...iR-ADV C5840/5850 PS JP", not "...PS" then a separate "...JP"
+// stripped later), so stripLanguageSuffix's own trailing-token match never
+// fires for one of these at all - a JP variant never unifies with its
+// non-JP siblings the way stripLanguageSuffix's whole design otherwise
+// guarantees. Checked against the raw NickName, before stripLanguageSuffix
+// runs, for exactly that reason: "JP" is reliably the very last token
+// regardless of whether a language token happens to precede it, so this
+// catches every shape Canon's real data actually has. English-market
+// deployments have no use for these; filtered out entirely (never indexed
+// at all, not just hidden from the UI) rather than carried as catalog
+// clutter nothing in this codebase ever resolves a deploy against.
+func isJapanMarketOnly(nickName string) bool {
+	return strings.HasSuffix(nickName, " JP")
+}
 
-	pkgPath, pkgCleanup, pkgErr := LocatePkg(path)
+// indexFamilyPackage inspects family's own newest package (pkg) once,
+// returning every PPD it would register (keyed by friendly model name)
+// alongside the full provenance chain that produced them - see
+// MacFamilyProvenance's own doc comment. Tries a real installer package
+// first (LocatePkgWithChain + packagePPDEntries); when pkg has no .pkg
+// inside at all (LocatePkg's own not-found error), falls back to
+// LocateLoosePPDs for the no-installer family shape, permanently caching
+// each matched PPD under cacheDir (CachePPDFile) since the mounted volume
+// it's read from won't still be mounted at deploy time. cacheDir == ""
+// skips the loose-PPD fallback entirely (nowhere to persist a copy) rather
+// than erroring - the caller just gets fewer variants indexed.
+func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir string) (map[string][]MacPPDVariant, MacFamilyProvenance) {
+	out := map[string][]MacPPDVariant{}
+	outerRef := MacPackageRef{Path: pkg.Path, ModTime: pkg.ModTime, Size: pkg.Size}
+
+	pkgPath, chain, pkgCleanup, pkgErr := LocatePkgWithChain(pkg.Path)
 	if pkgErr == nil {
 		defer pkgCleanup()
-		entries, err := packagePPDEntries(pkgPath)
+		entries, subs, err := packagePPDEntries(pkgPath)
 		if err != nil {
-			return out
+			return out, MacFamilyProvenance{}
 		}
 		for _, e := range entries {
+			if isJapanMarketOnly(e.NickName) {
+				continue
+			}
 			model, _ := stripLanguageSuffix(e.NickName, tokens)
 			out[model] = append(out[model], MacPPDVariant{
 				Language:    family,
 				Label:       model + " (" + languageDisplayName(family) + ")",
 				NickName:    e.NickName,
 				Filename:    filepath.Base(e.Path),
-				PackagePath: path,
+				PackagePath: pkg.Path,
 			})
 		}
-		return out
+		if len(out) == 0 {
+			return out, MacFamilyProvenance{}
+		}
+		refs := []MacPackageRef{outerRef}
+		for _, p := range chain[1:] { // chain[0] duplicates pkg.Path/outerRef
+			refs = append(refs, MacPackageRef{Path: p})
+		}
+		for _, s := range subs {
+			refs = append(refs, MacPackageRef{Path: s.Name, Version: s.Version})
+		}
+		return out, MacFamilyProvenance{Chain: refs, IndexedAt: time.Now()}
 	}
 	pkgCleanup()
 
 	if cacheDir == "" {
-		return out
+		return out, MacFamilyProvenance{}
 	}
-	ppdPaths, cleanup, err := LocateLoosePPDs(path)
+	ppdPaths, cleanup, err := LocateLoosePPDs(pkg.Path)
 	defer cleanup()
 	if err != nil {
-		return out
+		return out, MacFamilyProvenance{}
 	}
 	for _, p := range ppdPaths {
 		nick, ok := ReadPPDNickName(p)
-		if !ok {
+		if !ok || isJapanMarketOnly(nick) {
 			continue
 		}
 		model, _ := stripLanguageSuffix(nick, tokens)
@@ -149,43 +186,209 @@ func indexFamilyPackage(path, family string, tokens []string, cacheDir string) m
 			LooseCachedPPDPath: cached,
 		})
 	}
-	return out
+	if len(out) == 0 {
+		return out, MacFamilyProvenance{}
+	}
+	return out, MacFamilyProvenance{Chain: []MacPackageRef{outerRef}, IndexedAt: time.Now()}
+}
+
+// toMacPPDVariant converts a MacCatalogVariant (catalog.json's own
+// persisted shape - see MacManufacturerCatalog) back to the in-memory
+// MacPPDVariant BuildMacModelIndex returns, for a family a cached catalog
+// entry is being reused for (IsCurrent matched, no re-inspection needed).
+// Label is recomputed here rather than persisted - see MacCatalogVariant's
+// own doc comment for why.
+func toMacPPDVariant(model string, v MacCatalogVariant) MacPPDVariant {
+	return MacPPDVariant{
+		Language:           v.Language,
+		Label:              model + " (" + languageDisplayName(v.Language) + ")",
+		NickName:           v.NickName,
+		Filename:           v.Filename,
+		PackagePath:        v.PackagePath,
+		LooseCachedPPDPath: v.LooseCachedPPDPath,
+	}
+}
+
+// cachedVariantFilesExist reports whether every LooseCachedPPDPath in
+// variants still exists on disk - confirmed necessary for correctness, not
+// just belt-and-suspenders: catalog.json travels with a portable Drivers
+// folder (see MacManufacturerCatalog's own doc comment), but the PPD cache
+// it references does not (installedAppDataDir - per-machine, deliberately,
+// since a flash drive is normally write-protected in the field - see
+// driversfolder.go's own ensureDriversScaffold doc comment). A fresh
+// machine reading someone else's already-built catalog.json needs this
+// check to notice its own local cache doesn't have the file yet and
+// re-inspect (cheap now - see packagePPDEntries) rather than reuse a
+// LooseCachedPPDPath that doesn't resolve to anything on this machine.
+// Irrelevant (always true) for an installer-backed family, which has no
+// LooseCachedPPDPath entries at all.
+func cachedVariantFilesExist(variants map[string][]MacCatalogVariant) bool {
+	for _, vs := range variants {
+		for _, v := range vs {
+			if v.LooseCachedPPDPath == "" {
+				continue
+			}
+			if _, err := os.Stat(v.LooseCachedPPDPath); err != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // BuildMacModelIndex builds the model->variant index for every manufacturer
 // macFamilyPreference lists, inspecting only each family's own newest
-// package (the same one ResolveMacFamily would pick for that family) - never
-// every version-folder's own copy - keeping the one-time cost bounded to
-// "one pkgutil --expand-full (or one dmg mount) per family", not per
-// package. cacheDir is where a loose (no-installer) family's matched PPDs
-// get permanently copied (see MacPPDVariant's own doc comment). Best-effort
-// throughout: a family whose package fails to expand/mount is silently
-// skipped rather than failing the whole build, the same "index what's
-// readable, degrade for the rest" spirit BuildMacCatalog itself already has
-// for a corrupt/unreadable file.
-func BuildMacModelIndex(catalog MacCatalog, cacheDir string) MacModelIndex {
+// package (the same one ResolveMacFamily would pick for that family) - and
+// only when it's actually new or changed since the last build (see
+// MacManufacturerCatalog.IsCurrent) - never every version-folder's own
+// copy, keeping the one-time cost bounded to "one pkgutil --expand (or one
+// dmg mount) per family that's actually new", not per package, and not
+// even paid again on a later launch once a package has already been
+// indexed once.
+//
+// macRoot is the Drivers/macOS directory - each manufacturer with real
+// per-model data gets its own catalog file there (inside that
+// manufacturer's own subfolder - MacCatalogFileName), so it travels with a
+// portable Drivers folder and can be deleted per-manufacturer to force a
+// full re-index of just that one. persist controls whether an updated
+// catalog actually gets written back to macRoot at all - false when this
+// exact running copy is on a removable drive itself (see
+// app_darwin.go's loadCatalog and flashdrive.IsRemovableDrive): a
+// technician's laptop is where catalog.json gets created/updated, a flash
+// drive plugged into a different machine only ever reads whatever's
+// already there. ppdCacheDir is where a loose (no-installer) family's
+// matched PPDs get permanently copied (see MacPPDVariant's own doc
+// comment) - always the per-machine installedAppDataDir, regardless of
+// persist, since deploy needs a real file to exist on whichever machine is
+// actually running right now.
+//
+// Best-effort throughout: a family whose package fails to expand/mount is
+// silently skipped rather than failing the whole build, the same "index
+// what's readable, degrade for the rest" spirit BuildMacCatalog itself
+// already has for a corrupt/unreadable file.
+func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist bool) (MacModelIndex, []string) {
 	index := MacModelIndex{}
+	var changes []string
 	for mfg, tokens := range macFamilyPreference {
 		packages := catalog.Packages[mfg]
+		mfgFolder := strings.ReplaceAll(mfg, " ", "")
+		catalogPath := filepath.Join(macRoot, mfgFolder, MacCatalogFileName(mfg))
+		cat := LoadMacManufacturerCatalog(catalogPath)
+		dirty := false
+
 		byModel := map[string][]MacPPDVariant{}
 		for _, family := range tokens {
 			pkg, ok := newestInFamily(packages, tokens, family)
 			if !ok {
 				continue
 			}
+
+			if cat.IsCurrent(family, pkg) {
+				cached := cat.ModelsForFamily(family)
+				if cachedVariantFilesExist(cached) {
+					for model, variants := range cached {
+						for _, v := range variants {
+							byModel[model] = append(byModel[model], toMacPPDVariant(model, v))
+						}
+					}
+					continue
+				}
+			}
+
 			famCacheDir := ""
-			if cacheDir != "" {
-				famCacheDir = filepath.Join(cacheDir, mfg, family)
+			if ppdCacheDir != "" {
+				famCacheDir = filepath.Join(ppdCacheDir, mfg, family)
 			}
-			for model, variants := range indexFamilyPackage(pkg.Path, family, tokens, famCacheDir) {
-				byModel[model] = append(byModel[model], variants...)
+			variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir)
+			if len(variants) == 0 {
+				continue
 			}
+			for model, vs := range variants {
+				byModel[model] = append(byModel[model], vs...)
+			}
+
+			current := map[string][]MacCatalogVariant{}
+			for model, vs := range variants {
+				for _, v := range vs {
+					current[model] = append(current[model], MacCatalogVariant{
+						Language: v.Language, NickName: v.NickName, Filename: v.Filename,
+						PackagePath: v.PackagePath, LooseCachedPPDPath: v.LooseCachedPPDPath,
+					})
+				}
+			}
+			// Diffed against whatever was there before this family gets
+			// overwritten below - only when there was a previous build to
+			// compare against at all (a fresh/first-ever index has nothing
+			// meaningful to diff; everything would show as "added", which
+			// isn't a real change). See DiffModels' own doc comment for why
+			// this only reports *what* changed, not whether that's good or
+			// bad - that's a human call.
+			if _, hadPrevious := cat.Provenance[family]; hadPrevious {
+				if added, removed := DiffModels(cat, family, current); len(added) > 0 || len(removed) > 0 {
+					changes = append(changes, mfg+" "+languageDisplayName(family)+": "+formatModelDiff(added, removed))
+				}
+			}
+			// Drop this family's previous entries before merging in the
+			// fresh ones - a superseded model (no longer in the new
+			// package at all) shouldn't linger in the catalog forever.
+			for model, vs := range cat.Models {
+				kept := vs[:0]
+				for _, v := range vs {
+					if v.Language != family {
+						kept = append(kept, v)
+					}
+				}
+				if len(kept) == 0 {
+					delete(cat.Models, model)
+				} else {
+					cat.Models[model] = kept
+				}
+			}
+			if cat.Models == nil {
+				cat.Models = map[string][]MacCatalogVariant{}
+			}
+			for model, vs := range current {
+				cat.Models[model] = append(cat.Models[model], vs...)
+			}
+			cat.Provenance[family] = prov
+			dirty = true
 		}
+
 		if len(byModel) > 0 {
 			index[mfg] = byModel
 		}
+		if dirty && persist {
+			_ = SaveMacManufacturerCatalog(catalogPath, cat)
+		}
 	}
-	return index
+	return index, changes
+}
+
+// formatModelDiff renders added/removed model-name lists as one short,
+// human-readable summary - "+3 model(s): A, B, C" style, truncated past a
+// handful of names so one big driver-family replacement doesn't produce an
+// unreadable wall of text in the log.
+func formatModelDiff(added, removed []string) string {
+	sort.Strings(added)
+	sort.Strings(removed)
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "+"+strconv.Itoa(len(added))+" new: "+truncatedNameList(added))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, "-"+strconv.Itoa(len(removed))+" no longer present: "+truncatedNameList(removed))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// truncatedNameList joins names with ", ", capped at 5 - the rest
+// summarized as "+N more" rather than printed - see formatModelDiff.
+func truncatedNameList(names []string) string {
+	const max = 5
+	if len(names) <= max {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:max], ", ") + " (+" + strconv.Itoa(len(names)-max) + " more)"
 }
 
 // lookupMacModel resolves model (as typed/committed, possibly differing in

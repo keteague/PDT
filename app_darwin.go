@@ -1,9 +1,11 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 
 	"PDT/internal/driver"
+	"PDT/internal/flashdrive"
 	"PDT/internal/printer"
 	pdtdarwin "PDT/internal/printer/darwin"
 )
@@ -25,26 +27,53 @@ func (a *App) platformStartup() {
 // package-shaped - driver.MacCatalog, see internal/driver/maccatalog.go),
 // then builds the model index on top of it (driver.BuildMacModelIndex -
 // Canon's own UFR II/PostScript/Generic PPD split today, see
-// internal/driver/macmodel.go), and assigns both under catalogMu. Called
-// from startup() and RefreshDriverCatalog (drivercatalog_darwin.go). The
-// model index's own cache directory (for a no-installer family's PPDs - see
-// MacPPDVariant's own doc comment) lives under installedAppDataDir() even
-// for a portable/flash-drive copy, same reasoning driversRoot()/configsRoot()
-// don't apply to it: it's a derived, rebuildable artifact, not something a
-// technician's own flash-drive Drivers folder should carry around.
+// internal/driver/macmodel.go), and assigns both (plus any model-change
+// summary) under catalogMu. Called from startup() and RefreshDriverCatalog
+// (drivercatalog_darwin.go).
+//
+// BuildMacModelIndex gets two different directories for two different
+// reasons:
+//   - macRoot (driversRoot/macOS) is where each manufacturer's own
+//     catalog.json lives (MacCatalogFileName) - inside the Drivers folder
+//     itself, deliberately, so it travels with a portable/flash-drive copy
+//     (see MacManufacturerCatalog's own doc comment).
+//   - ppdCacheDir (a no-installer family's cached PPD bytes - see
+//     MacPPDVariant's own doc comment) stays under installedAppDataDir()
+//     even for a portable copy, same reasoning driversRoot()/configsRoot()
+//     don't apply to it: a flash drive is normally write-protected in the
+//     field (driversfolder.go's own ensureMacDriversScaffold doc comment),
+//     and it's cheap enough to rebuild locally now (packagePPDEntries' own
+//     doc comment) that there's no real benefit to it traveling too -
+//     cachedVariantFilesExist already covers the "someone else's
+//     catalog.json references a file this machine doesn't have yet" case.
+//
+// persist (whether a changed catalog actually gets written back to
+// macRoot) is false whenever this exact running copy is on a removable
+// drive - a technician's own laptop is where catalog.json gets built/
+// updated; a flash drive plugged into a different machine only ever reads
+// whatever's already there, the same "USB is slow/write-protected, don't
+// redo or rewrite expensive work every launch" reasoning
+// BuildCatalogNoExtract already applies on the Windows side
+// (app_windows.go's own loadCatalog).
 func (a *App) loadCatalog(driversRoot string) error {
 	catalog, err := driver.BuildMacCatalog(driversRoot)
 	if err != nil {
 		return err
 	}
-	cacheDir := ""
+	ppdCacheDir := ""
 	if dir := installedAppDataDir(); dir != "" {
-		cacheDir = filepath.Join(dir, "PPDCache")
+		ppdCacheDir = filepath.Join(dir, "PPDCache")
 	}
-	modelIndex := driver.BuildMacModelIndex(catalog, cacheDir)
+	macRoot := filepath.Join(driversRoot, "macOS")
+	persist := true
+	if exe, err := os.Executable(); err == nil {
+		persist = !flashdrive.IsRemovableDrive(exe)
+	}
+	modelIndex, changes := driver.BuildMacModelIndex(catalog, macRoot, ppdCacheDir, persist)
 	a.catalogMu.Lock()
 	a.macCatalog = catalog
 	a.macModelIndex = modelIndex
+	a.macModelChanges = changes
 	a.catalogMu.Unlock()
 	return nil
 }

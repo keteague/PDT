@@ -58,8 +58,16 @@ type App struct {
 	modelIndex    map[string]map[string][]string
 	macCatalog    driver.MacCatalog
 	macModelIndex driver.MacModelIndex
-	catalogErr    error
-	settings      Settings
+	// macModelChanges: human-readable "what changed" lines from the most
+	// recent macOS catalog build that actually found a newer package
+	// replacing a previously-indexed one (driver.BuildMacModelIndex's own
+	// second return value) - CatalogStatus's own ModelChanges field surfaces
+	// these to the frontend Log panel. Always empty on Windows and on a
+	// fresh/first-ever build (nothing to diff against yet - see
+	// BuildMacModelIndex's own doc comment).
+	macModelChanges []string
+	catalogErr      error
+	settings        Settings
 
 	// deployCancel is set for the duration of a running Deploy call (nil
 	// otherwise) - guarded by deployMu since StopDeploy can be called from a
@@ -281,6 +289,8 @@ type CatalogStatus struct {
 	OK         bool   `json:"ok"`
 	Error      string `json:"error"`
 	HasDrivers bool   `json:"hasDrivers"`
+	// ModelChanges: see App.macModelChanges - always empty on Windows.
+	ModelChanges []string `json:"modelChanges"`
 }
 
 // GetCatalogStatus, RefreshDriverCatalog: see drivercatalog_windows.go/

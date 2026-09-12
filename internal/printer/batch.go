@@ -19,6 +19,10 @@ func DeployAll(ctx context.Context, deployer Deployer, reqs []DeployRequest, con
 // rather than wait for a run of many rows (some taking minutes each) to
 // finish before showing anything.
 func DeployAllWithProgress(ctx context.Context, deployer Deployer, reqs []DeployRequest, confirm Confirm, onResult func(DeployResult)) []DeployResult {
+	if bp, ok := deployer.(BatchPreparer); ok {
+		bp.PrepareBatch(ctx, reqs, confirm)
+	}
+
 	results := make([]DeployResult, 0, len(reqs))
 	for _, req := range reqs {
 		if ctx.Err() != nil {

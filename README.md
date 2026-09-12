@@ -42,10 +42,8 @@ UAC-prompts every time, per its own manifest.
   main` now compiles and runs as a real macOS `.app`, with a reduced frontend UI for the Windows-only
   concepts (Spooler, SNMP/port config, APF, DEVMODE capture, app self-update) that have no CUPS/macOS
   equivalent yet. Not yet installer-packaged. What's still genuinely open: the open question of
-  whether a real signed `.app` avoids the ad-hoc-signing AMFI rejection a bare test binary hit; and
-  each cached model/PPD entry isn't yet tagged with which `.dmg`/`.pkg` it came from, so a rebuild
-  can't skip re-inspecting archives it's already indexed - see "macOS support" below and the
-  Changelog for the current list.
+  whether a real signed `.app` avoids the ad-hoc-signing AMFI rejection a bare test binary hit -
+  see "macOS support" below and the Changelog for the current list.
 - **Not started**: Linux support.
 
 ## Windows bindings (`internal/printer/windows`)
@@ -95,12 +93,16 @@ nothing analogous to create ahead of the queue itself.
 | `internal/driver/macresolve.go` | `ResolveMac` picks the newest package for a manufacturer **by file modification time**, not by any version parsed out of the package - confirmed against a real Kyocera distribution-style package that there's no reliable per-package version field on macOS at all (every component's own declared "version" was boilerplate `1.0`/`0`); the file's own mtime is the only honest signal available. `ResolveOpenPrintingPPD`/`OpenPrintingCandidates` fuzzy-match a technician-typed driver/model string against the OpenPrinting fallback bucket's own filenames (normalized from `Ricoh_MP_C3003.ppd`-style underscores to spaces first - confirmed necessary, `FuzzyMatchScore`'s subsequence matching is strict about order and does not treat `_` and ` ` as interchangeable). |
 | `internal/driver/macppd.go` | `ReadPPDNickName` reads a PPD's own `*NickName` (falling back to `*ModelName`), transparently gzip-decompressing `.ppd.gz` - confirmed live necessary against real Canon PPDs, whose filenames (`CNPZUIRAC5840ZU.ppd.gz`) are cryptic vendor codes sharing no matchable substring, or even in-order character sequence, with how a technician would actually type the model (`iR-ADV C5840`); `FuzzyMatchScore` against the raw filename is a hard `-1`. `PackagePPDNickNames`/`PackageBestModelScore` do the same read-only `pkgutil --expand-full` inspection `PackageLabel` already does, but collect every PPD's `*NickName` and score them against a model string - lets a package be checked for whether it even supports a given model *before* installing it. |
 | `internal/driver/macfamily.go` | `ResolveMacFamily` wraps `ResolveMac` for a manufacturer that ships more than one genuinely distinct driver as separate packages, not just version variants of one driver (`macFamilyPreference`: today just `"Canon": {"UFRII", "PS", "PPD"}`, Ken's own stated preference order) - tries each family newest-first, pre-checking its PPD payload against Model via `PackageBestModelScore` before committing to it, falling through to the next-preferred family on no match. Degrades silently to plain `ResolveMac` for any manufacturer with no family table. Today only the guess-based fallback path still calls this directly - see `macmodel.go`'s own row below for the build-once catalog that normally answers this ahead of time. |
-| `internal/driver/macmodel.go` | `BuildMacModelIndex` builds, once per catalog build/refresh, a `MacModelIndex` (`manufacturer -> friendly model -> []MacPPDVariant`) for every `macFamilyPreference` manufacturer - inspecting only each family's own single newest package (never every version-folder's own copy), so the one-time cost stays "one `pkgutil --expand-full`/mount per family", not per package. `MacVariantForDeploy` then resolves a row's own `(Model, Driver)` straight to a `MacPPDVariant` - which package to install and which exact PPD filename it registers, or (for a family that ships loose PPDs with no installer at all - confirmed live against Canon's own "PPD" bucket) a permanently-cached local copy to hand `lpadmin` directly - with no per-deploy package re-inspection at all. |
+| `internal/driver/macmodel.go` | `BuildMacModelIndex` builds, once per catalog build/refresh, a `MacModelIndex` (`manufacturer -> friendly model -> []MacPPDVariant`) for every `macFamilyPreference` manufacturer - inspecting only each family's own single newest package (never every version-folder's own copy) *and only when it's actually new or changed* (see `maccatalogdb.go` below - most launches skip inspection entirely now). `MacVariantForDeploy` then resolves a row's own `(Model, Driver)` straight to a `MacPPDVariant` - which package to install and which exact PPD filename it registers, or (for a family that ships loose PPDs with no installer at all - confirmed live against Canon's own "PPD" bucket) a permanently-cached local copy to hand `lpadmin` directly - with no per-deploy package re-inspection at all. |
+| `internal/driver/maccatalogdb.go` | `MacManufacturerCatalog` - the persistent, per-manufacturer JSON record `BuildMacModelIndex` reads/writes (`Drivers/macOS/<Manufacturer>/catalog.<manufacturer>.json`) so a package it's already indexed never gets mounted/expanded again on a later launch. `IsCurrent` is the cheap (no mounting) staleness check - path/modtime/size against `BuildMacCatalog`'s own free directory-scan info; `DiffModels` is the "what changed" comparison surfaced to the frontend Log panel via `CatalogStatus.ModelChanges` when a package *has* changed. See "Model-driven PPD selection on macOS" above for the full story, including why the PPD cache itself (deploy-time bytes for a no-installer family) deliberately stays per-machine instead of living here too. |
+| `internal/driver/macppd.go` | `packagePPDEntries` is the actual package inspection `indexFamilyPackage`/`PackagePPDNickNames` both use - `pkgutil --expand` (structure only) plus selective `cpio` extraction of just `*.ppd`/`*.ppd.gz` from each sub-package's own gzip-compressed `Payload`, not the original `pkgutil --expand-full` + full-tree walk (confirmed live: ~20x less I/O for the same result - see "Fast, selective PPD extraction" above). |
 | `internal/printer/darwin/elevate_darwin.go` | Every privileged command (`installer`, `lpadmin`) runs through `osascript`'s `do shell script ... with administrator privileges` - the closest available equivalent to Windows' manifest-driven auto-UAC-elevation without a paid code-signing certificate. **Confirmed live that a bare, ad-hoc-signed CLI binary gets killed by AMFI** (`AppleMobileFileIntegrityError -423`) the moment the privileged command actually starts, even after the password prompt is accepted - whether a real signed `.app` bundle avoids this too is still an open question (see the file's own doc comment for the full story and what to try next). |
-| `internal/printer/darwin/install_darwin.go`, `ppdinventory_darwin.go` | Installs a resolved package via `installer -pkg ... -target /`, and diffs `/Library/Printers/PPDs/Contents/Resources` before/after to discover which PPD(s) it actually registered - there's no Windows-registry-like "installed driver version" to read directly on macOS, so a before/after PPD-directory diff is the closest real signal (confirmed live against a real Kyocera install: hundreds of new PPDs appeared, including an exact match for a real deployed printer's own model). |
+| `internal/printer/darwin/install_darwin.go`, `ppdinventory_darwin.go` | Installs a resolved package via `installer -pkg ... -target /`, and diffs `/Library/Printers/PPDs/Contents/Resources` before/after to discover which PPD(s) it actually registered - there's no Windows-registry-like "installed driver version" to read directly on macOS, so a before/after PPD-directory diff is the closest real signal (confirmed live against a real Kyocera install: hundreds of new PPDs appeared, including an exact match for a real deployed printer's own model). This is the **fallback** path now - see `canoninstall_darwin.go` below for the selective path a catalog-driven Canon UFR II row takes instead. |
+| `internal/driver/maccanonselective.go`, `internal/printer/darwin/canoninstall_darwin.go` | The selective Canon UFR II install (see "Real deploy bugs found via live testing" below for the full story of why this exists) - installs the Core sub-package for real, then `cpio`-extracts just the *one* target model's own PPD + matching per-model "Recipe" bundle straight out of Device's own Payload, skipping the other ~548 pairs and Icons/Profiles/cnaccm entirely. `CanonCoreDevicePackages` locates the two sub-packages by name suffix; `ExtractCanonDeviceFiles` does the selective extraction (three cpio patterns - the PPD, the Recipe bundle, and a sibling `Recipe/<model>.rcp` symlink into it, found by diffing a real BOM). `installCanonSelective` re-packs the expanded Core sub-package via `pkgutil --flatten` before installing it (`installer -pkg` rejects an expanded component directory outright, confirmed live even without any privilege at all) and copies the staged files into place with `cp -RX` (`-X`: skip extended attributes - plain `cp -R` fails against `/Library` itself even as root). Falls back to the plain full-package install above whenever a package doesn't match this exact shape. |
+| `internal/printer/darwin/canonbatch_darwin.go` | `Deployer.PrepareBatch` (implements the shared `printer.BatchPreparer` optional interface) - collapses every batchable row's own install+queue-create+defaults into **one** elevated call for the whole deploy run, since `do shell script ... with administrator privileges` never reuses a recent grant (confirmed live, repeatedly - every call shows its own fresh prompt). Scoped to catalog-driven Canon UFR II rows with no existing queue to reuse; everything else falls back to the old per-row path, own prompts included. Per-row success/failure comes back through a plain results file (`printf '%d:%d\n' <rowIndex> $? >> file`, one line per row's own `( ... )` subshell) rather than parsing the combined call's own stdout - `do shell script` mangles `\n` to `\r` and buffers everything until the whole script exits, both confirmed live, both sidestepped by reading a file off disk afterward instead. |
 | `internal/printer/darwin/queue_darwin.go` | Creates/reuses a CUPS queue via `lpadmin`/`lpstat` - device URI built by `deploy_darwin.go`'s own `lpdDeviceURI` (see below), confirmed against this machine's own already-deployed real queues (`Jenks_Kyocera`, `Jackson_Streets`) that a bare `lpd://<ip>/` with no queue name is the working convention for most manufacturers. Reuses an existing queue already targeting the same device URI rather than ever creating a duplicate, the same rule `portlookup_windows.go` applies to Standard TCP/IP ports. |
-| `internal/printer/darwin/printdefaults_darwin.go` | Best-effort duplex/color defaults, by reading each queue's actual PPD-declared option keywords/choices (`lpoptions -l`) rather than hardcoding one vendor's naming - confirmed against a real installed Kyocera PPD (`Duplex`: `None`/`DuplexTumble`/`DuplexNoTumble`; `ColorModel`: `CMYK`/`Gray`) that PPD option naming is inconsistent enough across vendors that this has to stay dynamic, the same lesson `devmode_windows.go` already learned for DEVMODE on Windows. |
-| `internal/printer/darwin/deploy_darwin.go` | The orchestrator (`Deployer.Deploy`) - resolve driver -> ensure it's installed -> resolve/create queue -> best-effort print defaults. No NUL:-port workaround (nothing here is ever created against a placeholder port; CUPS queue creation doesn't have the multi-minute-against-a-live-port problem that motivated it on Windows) and no APF/"print spooled documents first" (both Windows spooler-specific concepts with no CUPS equivalent). `lpdDeviceURI` builds the device URI from the row's own optional `LPDQueueName` (grid column "LPD-Q", right after IP, on both platforms) - most manufacturers ignore the LPD queue-name segment entirely, but HP (`raw`) and Xerox (`lp`) are two confirmed exceptions, auto-filled by the frontend whenever a row's Manufacturer is set to either (`defaultLpdQueueFor` in `frontend/src/main.js`) and still freely overridable per row. |
+| `internal/printer/darwin/printdefaults_darwin.go` | Best-effort duplex/color defaults, by reading a PPD's own declared option keywords/choices - either a live queue's `lpoptions -l` (`SetPrintDefaults`, for a reused queue) or the PPD file directly off disk (`PrintDefaultsForNewQueue`/`readPPDFileOptions`, for a brand-new queue, so the `-o` args can ride along on the same `lpadmin` call that creates it). `findOption` matches by an **exact** (case-insensitive) allowlist of known keywords - `Duplex`/`ColorModel` (standard) and `CNDuplex`/`CNColorMode` (Canon) - never a suffix or substring match: confirmed live that a real Canon PPD declares both `CNColorMode` (the real switch) and the unrelated `CNProcessColorMode` (a boolean toggle), both ending in "ColorMode", so an earlier suffix-based version picked whichever came first in that model's own option order and silently left color mode untouched. |
+| `internal/printer/darwin/deploy_darwin.go` | The orchestrator (`Deployer.Deploy`) - resolve driver -> ensure it's installed -> resolve/create queue -> best-effort print defaults, or (when `PrepareBatch` already handled this row) just format the result it already computed. No NUL:-port workaround (nothing here is ever created against a placeholder port; CUPS queue creation doesn't have the multi-minute-against-a-live-port problem that motivated it on Windows) and no APF/"print spooled documents first" (both Windows spooler-specific concepts with no CUPS equivalent). `lpdDeviceURI` builds the device URI from the row's own optional `LPDQueueName` (grid column "LPD-Q", right after IP, on both platforms) - most manufacturers ignore the LPD queue-name segment entirely, but HP (`raw`) and Xerox (`lp`) are two confirmed exceptions, auto-filled by the frontend whenever a row's Manufacturer is set to either (`defaultLpdQueueFor` in `frontend/src/main.js`) and still freely overridable per row. |
 | `pickfolder_darwin.go` (repo root) | Settings > General's Browse ("...") buttons show a native folder picker via AppleScript's `choose folder` (through `osascript`) instead of Wails' own `runtime.OpenDirectoryDialog` - confirmed live that every Wails-bound method (this one included) runs on its own freshly-spawned goroutine, never the process's real main thread, and AppKit's `NSOpenPanel` is only safe to drive from the main thread; calling it off-thread silently swallowed every click, with the sheet never appearing and no error surfaced either. `osascript` sidesteps the whole problem by running in its own process with its own main thread/run loop. Also captures/restores whichever app was frontmost around the call - `choose folder` run bare like this belongs to no particular app, and macOS attributes its window to Finder, activating it as a side effect that otherwise visibly buries PDT's own window. |
 
 ### Model-driven PPD selection on macOS
@@ -154,6 +156,49 @@ all** - a real change from how this worked before: `ResolveMacFamily`/`choosePPD
 `pkgutil --expand-full` fresh on every single deploy just to guess. That guess-based pair still exists
 and still runs (see below), but only as the fallback for a manufacturer/model the catalog doesn't have
 an entry for.
+
+**Not re-inspected per *launch* either, once a package has been indexed once.** Mounting and
+inspecting a real vendor package is itself expensive - confirmed live that `pkgutil --expand-full`
+alone cost 6.4s and 255MB written per package (fixed - see "Fast, selective PPD extraction" below)
+- and every family gets re-mounted on every single launch/Refresh otherwise. `driver.
+MacManufacturerCatalog` (`internal/driver/maccatalogdb.go`) is a persistent, human-readable JSON
+record - one file per manufacturer, `Drivers/macOS/<Manufacturer>/catalog.<manufacturer,
+lowercased>.json` (e.g. `Drivers/macOS/Canon/catalog.canon.json`, not one combined file, so
+rebuilding or deleting one manufacturer's own catalog never touches any other's) - of every
+model/PPD indexed so far, plus exactly which package (and its own parent chain - outer `.dmg` ->
+nested `.dmg` -> installer `.pkg` -> sub-package, each with path/modtime/size/version where one
+exists) produced it. `BuildMacModelIndex` skips re-inspecting a family entirely once its recorded
+package identity (path/modtime/size - free from `BuildMacCatalog`'s own directory scan already,
+no mounting needed) still matches - confirmed live: a second build against the same real Canon
+packages dropped from 17.7s to 0.147s (~120x), with byte-identical results, and the real app's own
+launch time dropped from 35-45s to ~2s the same way. Lives inside the Drivers folder itself
+(`Drivers/macOS/`, not `installedAppDataDir()`), deliberately, so it travels with a portable/flash-
+drive copy between machines; a no-installer family's actual cached PPD bytes stay per-machine
+(`~/Library/Application Support/PDT/PPDCache/` - a flash drive is normally write-protected in the
+field, and re-inspection is cheap enough now that there's no real benefit to those bytes
+traveling too) - `cachedVariantFilesExist` notices when a fresh machine's own cache doesn't have
+what a borrowed catalog.json references yet and re-inspects rather than trusting a path that
+doesn't resolve locally. Never written back to at all when this exact running copy is itself on a
+removable drive (`app_darwin.go`'s `loadCatalog`, `flashdrive.IsRemovableDrive` - the same
+reasoning the Windows side's own `BuildCatalogNoExtract` already applies) - a technician's laptop
+is where catalog.json gets built/updated, on local NVMe; a flash drive plugged into a different
+machine only ever reads whatever's already there. When a family's package *has* changed,
+`driver.DiffModels` compares its freshly-indexed model names against what was recorded before, and
+`CatalogStatus.ModelChanges` carries a human-readable summary back to the frontend Log panel after
+a Refresh - "what changed between this package and the last one", not PDT trying to judge
+staleness or regressions itself.
+
+**Fast, selective PPD extraction** (`internal/driver/macppd.go`'s `packagePPDEntries`) is what a
+*first-ever* (or genuinely changed) inspection now costs, replacing the original `pkgutil
+--expand-full` + full-tree walk. `--expand-full` fully decompresses a package's *entire* payload -
+driver binaries, a dozen languages of README/license text, icons, everything - just to find
+`*.ppd(.gz)` files. Confirmed live against a real Canon UFR II package: 6.4s and 255MB written, for
+a package whose actual PPDs total 25MB. `pkgutil --expand` (structure only, ~0.1s) leaves each
+sub-package's own `Payload` as what it actually is on disk - plain gzip-compressed cpio data
+(confirmed via `file`, no dependency on a more exotic format like `pbzx`) - which the system
+`cpio` tool extracts selectively: `gunzip -c Payload | cpio -idm "*.ppd" "*.ppd.gz"` pulls out just
+the matching entries in 0.2-0.4s. A ~20x cut on the actual bottleneck, using tools already in this
+codebase's own style (already shells out to `hdiutil`/`pkgutil`/`installer`).
 
 **How a model unifies across languages**: confirmed against all three of Canon's real macOS downloads
 for the same physical printer (an iR-ADV C5840/5850) that each family's own PPD `*NickName` differs only
@@ -214,6 +259,121 @@ detail worth knowing about, not a bug.
   always resolves to a real, known PPD once Model matches an index entry. A real prompt would need more
   than `printer.Confirm`'s yes/no shape (a candidate-list picker), which is a real, separable piece of
   future work if the `[WARN]`-and-guess behavior turns out not to be good enough in practice.
+
+**Japan-market variants are filtered out of the index.** Confirmed against real Canon PPD `*NickName`
+data that a Japan-only variant's nickname ends in a literal `" JP"` token, after the language token
+`stripLanguageSuffix` already strips (e.g. `"...PS JP"`) - `isJapanMarketOnly` (`macmodel.go`) checks
+the raw NickName for that suffix before any other processing, at both PPD-entry loops inside
+`indexFamilyPackage` (installer-backed and loose-PPD-bucket paths), so a JP-only variant never reaches
+`App.Models`/`App.DriverCandidates` at all. Only takes effect on a package that's actually (re)inspected -
+a `catalog.<manufacturer>.json` already indexed before this filter existed keeps whatever it already
+recorded until that package changes or the catalog file is deleted/rebuilt.
+
+### Real deploy bugs found via live testing (v0.6.1)
+
+Deploying real Canon UFR II rows live against this machine surfaced two bugs the design above didn't
+anticipate - both are about what happens *after* a package/PPD has already been correctly resolved, not
+about resolution itself:
+
+- **CUPS queue names reject whitespace.** `lpadmin -p` fails outright (`Printer name can only contain
+  printable characters`) for a queue name containing a space - confirmed live against a row literally
+  named `"Copy Room"`. `man lpadmin` documents the real restriction: no SPACE, TAB, `/`, or `#`.
+  `deploy_darwin.go`'s `sanitizeCUPSQueueName` maps each of those to `_` for the actual `-p` argument
+  only (`strings.Map`) - the row's own `Description` (and everything else about the row) keeps the
+  original, unsanitized name; a `[WARN]` logs when the two actually differ.
+- **A package used to get reinstalled from scratch for every row that needed it**, even multiple rows
+  in the same deploy run needing the identical package - `install_darwin.go`'s `EnsureDriverInstalled`
+  has no existing-install check of its own, it always shells out to `installer -pkg` unconditionally.
+  Confirmed live against a real Canon UFR II package that one install costs **4m38s**, so 3 identical
+  test rows cost ~14 minutes of pure redundant work - and since each install routinely outlasts macOS's
+  own few-minutes Authorization Services cache, this was also why deploying a handful of same-manufacturer
+  rows kept prompting for the admin password over and over instead of once. `Deployer.installedThisRun`
+  (keyed by the resolved package's own path) plus `ensureInstalledOnce` - the new call site both
+  `resolveDriver`'s guess-based fallback and `installVariant` use instead of calling
+  `EnsureDriverInstalled` directly - makes a real install happen at most once per deploy run regardless
+  of how many rows need that same package, logging an `[INFO]` skip line on every row after the first.
+
+Two smaller, frontend-only fixes landed alongside these:
+
+- **The grid's Driver field used to flash a raw, unparsed package label** (`"UFRII_v10.19.25_mac"`) for
+  a `macModelDriven` manufacturer while a technician was still typing into the Model field, before
+  settling once a real Model was actually selected - `setupCombobox`'s Driver auto-fill logic was wired
+  to fire on every keystroke (`onChange`), which fed partial/non-matching text through
+  `DriverCandidates`' own guess-based fallback. Moved to a new `onCommit` parameter (fired only when a
+  value is actually committed - Enter or a dropdown pick, not every keystroke) that `setupCombobox` now
+  accepts alongside `onChange`.
+- **The Defaults panel's Subnet field had no input validation at all.** `isValidSubnetPrefix`
+  (`frontend/src/main.js`) accepts blank (stays white, not flagged) or exactly 3 dot-delimited octets
+  (each `0`-`255`, no leading zeros, an optional trailing dot) and flags anything else with the same
+  yellow `input-needs-value` styling used elsewhere in the grid - wired on the field's own `input` event,
+  same on both platforms.
+
+### Selective Canon UFR II install and one-prompt batching (v0.6.5-v0.6.9)
+
+A real Canon UFR II install (the full `installer -pkg <Distribution>.pkg -target /`) took a
+confirmed-live **5m02s** and, worse, prompted for the admin password once per row even when
+several rows shared the identical package. Two changes fixed this, in order:
+
+**1. Install only what's load-bearing for the one model being deployed.** Inspecting a real UFR II
+package (`pkgutil --expand`, read-only, no install) found a `Distribution` wrapping 5 sub-packages
+totaling **22,900 files / ~224MB**: `Core` (the real driver framework/backend/PDE filter binaries -
+9,548 files, genuinely needed), `Device` (7,146 files: **one PPD + one per-model "Recipe" bundle
+for each of 549 models the family supports** - only one pair ever needed per row), and
+`Icons`/`Profiles`/`cnaccm` (cosmetic icons, ICC color profiles, the Canon Accounting Manager
+Client utility - 6,206 files total, none required for functional duplex/color/network/finishing-
+feature printing, all of which live directly in the PPD's own `*OpenUI` options: confirmed live
+that a real Canon PPD declares `*CNFinisher`/`*CNPuncher`/`*CNFolder`/`*CNSaddleStitch`/
+`*CNVfolding`/`*CNCopyTray` directly). `canoninstall_darwin.go`'s `installCanonSelective` now
+installs Core for real and `cpio`-extracts just the one target PPD + matching Recipe bundle out of
+Device's own Payload (`driver.ExtractCanonDeviceFiles` - three patterns: the PPD, the whole bundle
+tree, and a sibling `Recipe/<model>.rcp` symlink into it, found by diffing a real BOM, not
+guessed), skipping Device's installer run and Icons/Profiles/cnaccm entirely. Two real bugs
+surfaced getting this working, both confirmed live before being fixed: `installer -pkg` rejects a
+`pkgutil --expand`-produced sub-package directory outright (reproduced the identical error with no
+privilege at all, proving it's a format issue, not permissions) - fixed by re-flattening it with
+`pkgutil --flatten` first; and a plain `cp -R src/. /Library/` fails even as root ("unable to copy
+extended attributes to /Library/.: Operation not permitted", since `cp -R` also tries to copy the
+*source directory's own* attributes onto the destination directory entry itself) - fixed with `-X`
+(don't copy extended attributes; none of these freshly-extracted files carry any worth preserving
+anyway).
+
+**2. Batch every row's privileged work into one elevated call per deploy run.** Even after (1),
+each row still cost up to 2 separate native password prompts (one for its own install, one for its
+own queue-create) - confirmed live, repeatedly, that `do shell script ... with administrator
+privileges` never reuses a recent grant, no matter how little time passed between two separate
+calls. `printer.BatchPreparer` is an optional `Deployer` interface extension
+(`PrepareBatch(ctx, reqs, confirm)`, checked via a type assertion in `DeployAllWithProgress` -
+Windows' own Deployer doesn't implement it, a no-op there) that macOS's own
+`canonbatch_darwin.go` uses to do a first, entirely unprivileged pass over every row - resolving
+each one's package, extracting its staged files, computing its queue name/device URI/print-
+defaults args - then combining every *batchable* row's own commands into one script and running
+it through **one** elevated call for the whole run, still deduplicating each unique package's own
+Core install. Deliberately narrow scope: only a row that resolves to a catalog-driven Canon UFR II
+package with no existing queue to reuse gets batched; everything else (a different manufacturer,
+the guess-based fallback, a loose-PPD family, or an existing queue) falls back to the old per-row
+path, own separate prompts included - the one path proven correct end to end across several
+live-tested rounds, covering every row actually tested so far. Per-row success/failure comes back
+through a plain results file, not by parsing the combined call's own stdout - confirmed live
+(twice) that `do shell script` silently mangles every `\n` in captured output to `\r`, and buffers
+a command's entire output until it fully exits regardless of how many pipe stages run inside the
+script, both real problems for structured multi-row output that reading a file off disk afterward
+sidesteps entirely. **Confirmed live: 1 auth prompt for a 2-row same-package Canon deploy**, both
+rows created successfully, print defaults correct - the accepted trade-off (every batched row's
+result becomes known only once the one combined call returns, not streamed in per-row as it
+otherwise would be) showed up in the log as a real but expected pause before either row's own
+result appeared, not a bug.
+
+An earlier attempt at a *different* improvement - real-time phase-by-phase install progress/timing
+via `installer -verboseR` piped through the same elevated call - was built, broke three separate
+ways across three live tests, and was ultimately abandoned as an architectural dead end: confirmed
+live (via fast, harmless synthetic tests rather than more real 5-minute installs) that `do shell
+script`'s own privileged-execution mechanism buffers a command's *entire* output until it fully
+exits no matter how many pipe stages run inside the script - there is no way to get genuine
+real-time progress or timing out of it at all. Real-time progress during a privileged operation
+would need a fundamentally different mechanism (e.g. an elevated script writing to a file an
+unprivileged goroutine tails independently, entirely bypassing `do shell script`'s return value) -
+not attempted, since the actual speed fix in (1) above didn't end up needing precise timing data to
+justify itself.
 
 ### `cmd/pdtdebugmac`
 
@@ -641,6 +801,16 @@ arriving - only the specific row a progress event is about gets its success/fail
 by a stable per-row `_id` rather than by array position or by name (which the tool has never required
 to be unique). A full re-render there would destroy focus and in-progress edits in any other row the
 user might be editing while a multi-minute deploy is still running elsewhere in the grid.
+
+**The log panel has its own right-click context menu** (Select All / Copy / Clear Log,
+`wireLogContextMenu()` in `main.js`) rather than the browser/webview's native one - positioned at the
+cursor via the `contextmenu` event, dismissed on an outside click or Escape, the same transient-popup
+shape the Spooler dropdown and Model/Driver combobox already use elsewhere in this file. Select
+All/Copy always act on the log's own full text (`state.logLines` joined the same way `renderLog`
+itself joins them), not whatever happened to be selected when the menu was opened - closer to what a
+technician pasting a log into a support ticket actually wants. Copy tries the async Clipboard API
+first, falling back to a hidden-textarea `execCommand('copy')` for a webview context where that API
+might be restricted.
 
 ### Settings (gear icon, top-right)
 

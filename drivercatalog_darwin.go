@@ -28,9 +28,10 @@ func (a *App) RefreshDriverCatalog() CatalogStatus {
 	}
 	a.catalogMu.Lock()
 	a.catalogErr = nil
+	changes := a.macModelChanges
 	a.catalogMu.Unlock()
 	catalog, _, _ := a.macCatalogSnapshot()
-	return CatalogStatus{OK: true, HasDrivers: len(driver.MacManufacturersWithPackages(catalog)) > 0}
+	return CatalogStatus{OK: true, HasDrivers: len(driver.MacManufacturersWithPackages(catalog)) > 0, ModelChanges: changes}
 }
 
 func (a *App) GetCatalogStatus() CatalogStatus {
@@ -40,7 +41,10 @@ func (a *App) GetCatalogStatus() CatalogStatus {
 	if catalogErr != nil {
 		return CatalogStatus{OK: false, Error: catalogErr.Error(), HasDrivers: hasDrivers}
 	}
-	return CatalogStatus{OK: true, HasDrivers: hasDrivers}
+	a.catalogMu.RLock()
+	changes := a.macModelChanges
+	a.catalogMu.RUnlock()
+	return CatalogStatus{OK: true, HasDrivers: hasDrivers, ModelChanges: changes}
 }
 
 // Models is the grid row's Model field combobox's data source on macOS - the

@@ -1,9 +1,13 @@
 package darwin
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"PDT/internal/driver"
+	"PDT/internal/printer"
 )
 
 // Fixture drawn from a real install: a single Kyocera driver install
@@ -15,6 +19,36 @@ var realKyoceraPPDs = []string{
 	"Kyocera TASKalfa MZ6001ci",
 	"Kyocera TASKalfa MZ6001i",
 	"Kyocera ECOSYS MA4500ifx",
+}
+
+// TestEnsureInstalledOnce_SkipsAlreadyCachedPackage guards against a real,
+// confirmed-live regression: installVariant/resolveDriver used to call
+// EnsureDriverInstalled unconditionally for every row, even when an earlier
+// row in the exact same deploy run had already installed the identical
+// package - 4m38s per install against a real Canon UFR II package, so 3
+// identical test rows cost ~14 minutes of pure redundant work (plus extra
+// password prompts, since each multi-minute install routinely outlasts
+// macOS's own few-minutes authorization cache). Pre-populating
+// installedThisRun and confirming the cached PPD list comes straight back -
+// without ever reaching EnsureDriverInstalled's own real
+// LocatePkg/installer/osascript chain - is what proves the short-circuit
+// actually short-circuits, not just that the map got written to.
+func TestEnsureInstalledOnce_SkipsAlreadyCachedPackage(t *testing.T) {
+	d := NewDeployer(driver.MacCatalog{}, nil)
+	const fakePath = "/nonexistent/Canon/UFRII_v10.19.25_mac.dmg"
+	want := []string{"/Library/Printers/PPDs/Contents/Resources/CNPZUIRAC5840ZU.ppd.gz"}
+	d.installedThisRun[fakePath] = want
+
+	log := &printer.Logger{}
+	got, err := d.ensureInstalledOnce(context.Background(), &driver.ResolvedMacPackage{Path: fakePath}, log)
+	if err != nil {
+		// A real (non-cached) attempt against a path that doesn't exist
+		// would fail - any error here means the cache was bypassed.
+		t.Fatalf("ensureInstalledOnce returned an error for an already-cached package (cache was bypassed): %v", err)
+	}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("ensureInstalledOnce = %v, want the cached %v", got, want)
+	}
 }
 
 func TestLpdDeviceURI(t *testing.T) {
@@ -36,6 +70,22 @@ func TestLpdDeviceURI(t *testing.T) {
 				t.Errorf("lpdDeviceURI(%q, %q) = %q, want %q", "10.1.1.50", tt.queueName, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSanitizeCUPSQueueName(t *testing.T) {
+	tests := []struct{ name, want string }{
+		{"Copy Room", "Copy_Room"},
+		{"Front-Desk", "Front-Desk"},
+		{"A/B Printer", "A_B_Printer"},
+		{"Room #3", "Room__3"},
+		{"NoSpaces", "NoSpaces"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := sanitizeCUPSQueueName(tt.name); got != tt.want {
+			t.Errorf("sanitizeCUPSQueueName(%q) = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }
 

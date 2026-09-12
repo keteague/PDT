@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"PDT/internal/driver"
 	"PDT/internal/printer"
@@ -126,8 +127,11 @@ func cmdModels(driversRoot string) error {
 	if err != nil {
 		return fmt.Errorf("BuildMacCatalog: %w", err)
 	}
-	cacheDir := filepath.Join(os.TempDir(), "pdtdebugmac-ppdcache")
-	index := driver.BuildMacModelIndex(cat, cacheDir)
+	ppdCacheDir := filepath.Join(os.TempDir(), "pdtdebugmac-ppdcache")
+	macRoot := filepath.Join(driversRoot, "macOS")
+	start := time.Now()
+	index, changes := driver.BuildMacModelIndex(cat, macRoot, ppdCacheDir, true)
+	fmt.Printf("BuildMacModelIndex took %s (each manufacturer's own catalog.<mfg>.json under %s - run again to see the cached/skip-reinspection path)\n\n", time.Since(start), macRoot)
 
 	if len(index) == 0 {
 		fmt.Println("BuildMacModelIndex returned nothing at all for any manufacturer.")
@@ -150,6 +154,14 @@ func cmdModels(driversRoot string) error {
 	fmt.Println("\n--- what App.Models/App.DriverCandidates would actually return for Canon (blank filter) ---")
 	fmt.Printf("MacModels: %v\n", driver.MacModels(index, "Canon", ""))
 	fmt.Printf("MacModelCandidates: %v\n", driver.MacModelCandidates(index, "Canon", "", ""))
+
+	fmt.Println("\n--- model changes vs. the previous catalog.json, if any ---")
+	if len(changes) == 0 {
+		fmt.Println("(none - first-ever build, or nothing changed since the last one)")
+	}
+	for _, c := range changes {
+		fmt.Println(c)
+	}
 	return nil
 }
 
@@ -176,7 +188,7 @@ func cmdDeployQueue(driversRoot, manufacturer, ip string) error {
 	if err != nil {
 		return fmt.Errorf("BuildMacCatalog: %w", err)
 	}
-	modelIndex := driver.BuildMacModelIndex(cat, filepath.Join(os.TempDir(), "pdtdebugmac-ppdcache"))
+	modelIndex, _ := driver.BuildMacModelIndex(cat, filepath.Join(driversRoot, "macOS"), filepath.Join(os.TempDir(), "pdtdebugmac-ppdcache"), true)
 
 	deployer := pdtdarwin.NewDeployer(cat, modelIndex)
 	req := printer.DeployRequest{

@@ -19,10 +19,80 @@ import (
 type Deployer struct {
 	Catalog    driver.MacCatalog
 	ModelIndex driver.MacModelIndex
+
+	// installedThisRun caches, per package path (installVariant's
+	// variant.PackagePath, or resolveDriver's own guess-based
+	// resolved.Path - the same map either way, since both can resolve to
+	// the identical package), the exact PPD list EnsureDriverInstalled's
+	// before/after diff found the *first* time this exact Deployer
+	// installed it - see ensureInstalledOnce, the shared chokepoint both
+	// call sites go through. A present-but-empty slice is itself a real,
+	// meaningful cached result (a package that genuinely registers no
+	// classic PPD - see EnsureDriverInstalled's own doc comment), so a
+	// second call for the same path must still short-circuit even then;
+	// only a missing map key means "never installed this run yet".
+	// DeployAllWithProgress runs every row through the same *Deployer
+	// sequentially (a plain for loop, never goroutines -
+	// internal/printer/batch.go), so this needs no locking.
+	installedThisRun map[string][]string
+
+	// canonCoreInstalledThisRun is installCanonSelective's own equivalent
+	// cache, keyed the same way (by packagePath) but bool-valued rather than
+	// a PPD list - the selective path never needs a post-install PPD diff at
+	// all (it already knows exactly which one PPD it placed), only whether
+	// the shared Core sub-package has already been installed for real this
+	// run. Two rows resolving to different models of the *same* Canon
+	// package - the exact real case this matters for - share one Core
+	// install but each still get their own PPD+Recipe placement (see
+	// installCanonSelective's own doc comment for why that part is never
+	// cached/skipped).
+	canonCoreInstalledThisRun map[string]bool
+
+	// canonBatchResults holds PrepareBatch's own pre-computed, already-
+	// executed outcome for every row it could handle (keyed by row.Name) -
+	// see canonbatch_darwin.go's own doc comment for the full "why" (getting
+	// down to one elevated prompt for a whole multi-row run instead of one
+	// per row). Deploy() checks this first; a row absent here just means
+	// PrepareBatch didn't handle it, not that anything failed.
+	canonBatchResults map[string]canonBatchResult
 }
 
 func NewDeployer(catalog driver.MacCatalog, modelIndex driver.MacModelIndex) *Deployer {
-	return &Deployer{Catalog: catalog, ModelIndex: modelIndex}
+	return &Deployer{
+		Catalog:                   catalog,
+		ModelIndex:                modelIndex,
+		installedThisRun:          map[string][]string{},
+		canonCoreInstalledThisRun: map[string]bool{},
+	}
+}
+
+// ensureInstalledOnce is EnsureDriverInstalled, but skipped entirely - reusing
+// the exact PPD list the real install found - for a package this exact
+// Deployer has already installed successfully earlier in the same run.
+// Confirmed live as a real, severe cost, not the "a few extra seconds" this
+// comment used to assume: installing a real Canon UFR II distribution
+// package took 4m38s end to end, and deploying 3 identical test rows in one
+// run re-ran it 3 times (~14 minutes of redundant work), each its own
+// separate `osascript ... with administrator privileges` call - and since
+// each single install alone eats most of macOS's own few-minutes
+// authorization cache window, back-to-back rows routinely each prompt for a
+// password again rather than reusing the one from moments earlier.
+// Reinstalling the same package really is idempotent from CUPS' own point
+// of view (unchanged from before - see resolveDriver's own doc comment), so
+// once is always enough - and the caller (resolveDriver's own guess-based
+// fallback) needs the *same* PPD list back either way, not just a bool,
+// since it picks which PPD to use from exactly that list (choosePPD).
+func (d *Deployer) ensureInstalledOnce(ctx context.Context, resolved *driver.ResolvedMacPackage, log *printer.Logger) ([]string, error) {
+	if ppds, ok := d.installedThisRun[resolved.Path]; ok {
+		log.Info("%q was already installed earlier in this deploy run - skipping a redundant reinstall.", resolved.Path)
+		return ppds, nil
+	}
+	newPPDs, err := EnsureDriverInstalled(ctx, resolved)
+	if err != nil {
+		return nil, err
+	}
+	d.installedThisRun[resolved.Path] = newPPDs
+	return newPPDs, nil
 }
 
 // Deploy ports deploy_windows.go's Deployer.Deploy to CUPS/LPD: resolve
@@ -57,6 +127,10 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 
 	log.Info("Starting deployment for %q", row.Name)
 
+	if result, ok := d.canonBatchResults[row.Name]; ok {
+		return d.deployFromBatchResult(row, result, log)
+	}
+
 	ip, isNul, err := printer.NormalizeIP(row.IP)
 	if err != nil {
 		return fatal(err)
@@ -84,8 +158,14 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 
 	if reusedExisting {
 		log.Info("Reusing existing CUPS queue %q already configured for %s.", queueName, ip)
+		for _, w := range SetPrintDefaults(ctx, queueName, row.OneSided, row.Mono) {
+			log.Warn("%s", w)
+		}
 	} else {
-		queueName = row.Name
+		queueName = sanitizeCUPSQueueName(row.Name)
+		if queueName != row.Name {
+			log.Warn("CUPS queue names can't contain spaces/tabs/\"/\"/\"#\" (unlike a Windows printer object name) - using %q for the actual queue name; %q is still this row's own display name and the queue's own -D description.", queueName, row.Name)
+		}
 		// No queue targets this device yet - but row.Name itself might
 		// already name a *different* queue (pointed at some other device).
 		// Mirrors deploy_windows.go's existing-printer diff: list what would
@@ -103,14 +183,25 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 				return printer.DeployResult{RowName: row.Name, Log: log.Lines(), Err: nil}
 			}
 		}
-		if err := EnsureQueue(ctx, queueName, deviceURI, ppdPath, QueueOptions{Description: row.Name, Shared: true}); err != nil {
+		// Computed *before* EnsureQueue, from ppdPath directly, rather than
+		// via the usual SetPrintDefaults-against-a-live-queue path - lets
+		// these ride along on the very same lpadmin call that creates the
+		// queue below, one elevated prompt instead of two back-to-back ones
+		// (see PrintDefaultsForNewQueue's own doc comment). Only possible
+		// when there's an actual local PPD file to read (ppdPath != "") -
+		// an -m everywhere/IPP-Everywhere queue falls back to the normal
+		// live-queue path straight after EnsureQueue succeeds.
+		extraArgs, defaultsWarnings := PrintDefaultsForNewQueue(row.Name, ppdPath, row.OneSided, row.Mono)
+		if err := EnsureQueue(ctx, queueName, deviceURI, ppdPath, QueueOptions{Description: row.Name, Shared: true, ExtraOptionArgs: extraArgs}); err != nil {
 			return fatal(err)
 		}
 		log.OK("Configured queue %q (%s).", queueName, deviceURI)
-	}
-
-	for _, w := range SetPrintDefaults(ctx, queueName, row.OneSided, row.Mono) {
-		log.Warn("%s", w)
+		if ppdPath == "" {
+			defaultsWarnings = SetPrintDefaults(ctx, queueName, row.OneSided, row.Mono)
+		}
+		for _, w := range defaultsWarnings {
+			log.Warn("%s", w)
+		}
 	}
 
 	log.OK("Deployment finished for %q.", row.Name)
@@ -126,6 +217,26 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 // as "/raw" or "raw/" doesn't produce a doubled or trailing slash in the URI.
 func lpdDeviceURI(ip, queueName string) string {
 	return "lpd://" + ip + "/" + strings.Trim(strings.TrimSpace(queueName), "/")
+}
+
+// sanitizeCUPSQueueName replaces every character CUPS forbids in a printer/
+// queue name with "_" - confirmed live against a real deploy: a row named
+// "Copy Room" (an entirely ordinary Windows printer object name) failed
+// lpadmin outright with "Printer name can only contain printable
+// characters", since unlike Windows, CUPS queue names can never contain a
+// space at all (`man lpadmin`: "CUPS allows printer names to contain any
+// printable character except SPACE, TAB, '/', or '#'"). Only the actual -p
+// argument needs this - row.Name itself is untouched everywhere else
+// (logging, DeployResult, and the queue's own -D description, which does
+// allow spaces - see this function's own caller in Deploy).
+func sanitizeCUPSQueueName(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '/', '#':
+			return '_'
+		}
+		return r
+	}, name)
 }
 
 // resolveDriver ports ensureDriverCurrent's role: resolve row's manufacturer
@@ -157,12 +268,19 @@ func lpdDeviceURI(ip, queueName string) string {
 // first when the model index has an entry.
 //
 // Unlike Windows, there's no cheap "read the currently-installed version"
-// check to skip a redundant reinstall (see PackageLabel's own doc comment for
-// why macOS installer packages don't expose one) - every row with a resolved
-// package re-runs `installer`, which is itself idempotent (reinstalling the
-// same package is a no-op from CUPS' point of view, just a few extra seconds
-// per row rather than the multi-minute cost the NUL: workaround existed
-// for on Windows).
+// check to skip a redundant reinstall against the *system's* own state (see
+// PackageLabel's own doc comment for why macOS installer packages don't
+// expose one) - but a redundant reinstall against a package this exact
+// Deployer has already installed earlier in the *same run* is skipped (see
+// ensureInstalledOnce), which is the case that actually matters in
+// practice: multiple rows sharing one manufacturer/family routinely resolve
+// to the identical package. This used to assume reinstalling was cheap
+// ("just a few extra seconds per row") - confirmed live to be wrong: a real
+// Canon UFR II distribution package took 4m38s to install, and 3 identical
+// test rows deployed in one run cost ~14 minutes of pure redundant work
+// (plus extra password prompts - macOS's own authorization cache is only a
+// few minutes, so back-to-back multi-minute installs routinely outlast it)
+// before ensureInstalledOnce existed.
 func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, log *printer.Logger) (ppdPath string, err error) {
 	if variant, ok := driver.MacVariantForDeploy(d.ModelIndex, row.Manufacturer, row.Model, row.Driver); ok {
 		return d.installVariant(ctx, variant, row, log)
@@ -173,7 +291,7 @@ func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, lo
 			log.Warn("%s", note)
 		}
 		log.Info("Resolved package %q (%s) for %s.", resolved.Path, resolved.Label, row.Manufacturer)
-		newPPDs, err := EnsureDriverInstalled(ctx, resolved)
+		newPPDs, err := d.ensureInstalledOnce(ctx, resolved, log)
 		if err != nil {
 			return "", fmt.Errorf("installing %s: %w", resolved.Path, err)
 		}
@@ -223,10 +341,25 @@ func (d *Deployer) installVariant(ctx context.Context, variant driver.MacPPDVari
 		return variant.LooseCachedPPDPath, nil
 	}
 
-	resolved := &driver.ResolvedMacPackage{Path: variant.PackagePath, Label: variant.NickName}
 	log.Info("Installing %s package %q for %q (%s).", variant.Language, variant.PackagePath, variant.NickName, row.Manufacturer)
-	if _, err := EnsureDriverInstalled(ctx, resolved); err != nil {
+
+	// Try the selective, Canon-UFR-II-shaped fast path first - installs just
+	// the Core sub-package for real plus this row's own one target PPD+
+	// Recipe pair out of Device (skipping the other ~548, and Icons/
+	// Profiles/cnaccm entirely). handled == false means the package didn't
+	// match that expected shape (a different manufacturer, or an
+	// unexpected/future Canon layout) - falls back to the plain full-package
+	// install below, never a hard failure just because the optimization
+	// doesn't apply.
+	handled, err := installCanonSelective(ctx, variant.PackagePath, variant.Filename, d.canonCoreInstalledThisRun, log)
+	if err != nil {
 		return "", fmt.Errorf("installing %s: %w", variant.PackagePath, err)
+	}
+	if !handled {
+		resolved := &driver.ResolvedMacPackage{Path: variant.PackagePath, Label: variant.NickName}
+		if _, err := d.ensureInstalledOnce(ctx, resolved, log); err != nil {
+			return "", fmt.Errorf("installing %s: %w", variant.PackagePath, err)
+		}
 	}
 
 	ppdPath := filepath.Join(ppdResourcesDir, variant.Filename)

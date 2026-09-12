@@ -1,8 +1,11 @@
 package driver
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 // testModelCatalog builds the catalog from testdata_mac_model - real fixtures
@@ -31,9 +34,32 @@ func testModelCatalog(t *testing.T) MacCatalog {
 	return cat
 }
 
+func TestIsJapanMarketOnly(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"Canon iR-ADV C5840/5850", false},
+		{"Canon 971Ci JP", true},
+		// Confirmed against real Canon data: JP comes after the language
+		// token, not instead of it - stripLanguageSuffix never sees this
+		// shape at all since it checks nickName's own literal suffix.
+		{"Canon 971Ci PS JP", true},
+		{"Canon iR-ADV C5840/5850 PPD", false},
+		// Must be a real trailing token, not a coincidental substring.
+		{"Canon LBPJP100", false},
+	}
+	for _, tt := range tests {
+		if got := isJapanMarketOnly(tt.name); got != tt.want {
+			t.Errorf("isJapanMarketOnly(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestBuildMacModelIndex_UnifiesModelAcrossAllThreeLanguageFamilies(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 
 	variants := index["Canon"]["TestVendor Model X"]
 	if len(variants) != 3 {
@@ -66,7 +92,8 @@ func TestBuildMacModelIndex_UnifiesModelAcrossAllThreeLanguageFamilies(t *testin
 
 func TestBuildMacModelIndex_ModelWithOnlyOneFamilyGetsOneVariant(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 
 	variants := index["Canon"]["TestVendor Model Y"]
 	if len(variants) != 1 {
@@ -79,7 +106,8 @@ func TestBuildMacModelIndex_ModelWithOnlyOneFamilyGetsOneVariant(t *testing.T) {
 
 func TestBuildMacModelIndex_ManufacturerWithNoFamilyTableIsAbsent(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 	if _, ok := index["Kyocera"]; ok {
 		t.Error("expected no model index entry at all for a manufacturer with no macFamilyPreference table")
 	}
@@ -87,7 +115,8 @@ func TestBuildMacModelIndex_ManufacturerWithNoFamilyTableIsAbsent(t *testing.T) 
 
 func TestMacModels_RanksByFilterText(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 
 	all := MacModels(index, "Canon", "")
 	if len(all) != 2 {
@@ -102,7 +131,8 @@ func TestMacModels_RanksByFilterText(t *testing.T) {
 
 func TestMacModelCandidates_PreferenceOrderedWhenNoFilter(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 
 	labels := MacModelCandidates(index, "Canon", "TestVendor Model X", "")
 	if len(labels) != 3 {
@@ -124,7 +154,8 @@ func TestMacModelCandidates_PreferenceOrderedWhenNoFilter(t *testing.T) {
 // grew its own blank-model branch - see that function's own doc comment.
 func TestMacModelCandidates_BlankModelListsEveryModel(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 
 	labels := MacModelCandidates(index, "Canon", "", "")
 	if len(labels) != 4 {
@@ -146,16 +177,62 @@ func TestMacModelCandidates_BlankModelListsEveryModel(t *testing.T) {
 
 func TestMacModelCandidates_UnknownModelReturnsEmpty(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 	labels := MacModelCandidates(index, "Canon", "No Such Model", "")
 	if len(labels) != 0 {
 		t.Errorf("expected no candidates for an unknown model, got %v", labels)
 	}
 }
 
+// TestBuildMacModelIndex_SecondBuildReusesCatalogWithoutReinspecting is the
+// whole point of catalog.<mfg>.json (MacManufacturerCatalog): a second call
+// against the exact same packages must produce the identical index without
+// paying the mount/expand cost again. Proven two ways: identical results,
+// and dramatically faster (the first build here still takes several
+// seconds - real mounting/expanding of the real testdata fixtures - a
+// cache-hit second build has no mounting to do at all).
+func TestBuildMacModelIndex_SecondBuildReusesCatalogWithoutReinspecting(t *testing.T) {
+	cat := testModelCatalog(t)
+	dir := t.TempDir()
+
+	first, changes := BuildMacModelIndex(cat, dir, dir, true)
+	if len(first["Canon"]) == 0 {
+		t.Fatal("expected the first build to actually index something")
+	}
+	if len(changes) != 0 {
+		t.Errorf("expected no changes on a first-ever build (nothing to diff against), got %v", changes)
+	}
+
+	catalogPath := filepath.Join(dir, "Canon", MacCatalogFileName("Canon"))
+	if _, err := os.Stat(catalogPath); err != nil {
+		t.Fatalf("expected %s to exist after a persisted build: %v", catalogPath, err)
+	}
+
+	start := time.Now()
+	second, changes := BuildMacModelIndex(cat, dir, dir, true)
+	elapsed := time.Since(start)
+
+	if len(changes) != 0 {
+		t.Errorf("expected no changes on a cache-hit build (nothing actually changed), got %v", changes)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("second build took %s - expected a cache hit (no mounting) to be near-instant", elapsed)
+	}
+
+	for _, mfg := range []string{"Canon"} {
+		for model, variants := range first[mfg] {
+			if len(second[mfg][model]) != len(variants) {
+				t.Errorf("%s/%q: first build had %d variant(s), second (cached) build had %d", mfg, model, len(variants), len(second[mfg][model]))
+			}
+		}
+	}
+}
+
 func TestMacVariantForDeploy_ExactLabelWins(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 
 	variant, ok := MacVariantForDeploy(index, "Canon", "TestVendor Model X", "TestVendor Model X (PostScript)")
 	if !ok {
@@ -168,7 +245,8 @@ func TestMacVariantForDeploy_ExactLabelWins(t *testing.T) {
 
 func TestMacVariantForDeploy_NoDriverCommitFallsBackToPreferenceOrder(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 
 	variant, ok := MacVariantForDeploy(index, "Canon", "TestVendor Model X", "")
 	if !ok {
@@ -181,7 +259,8 @@ func TestMacVariantForDeploy_NoDriverCommitFallsBackToPreferenceOrder(t *testing
 
 func TestMacVariantForDeploy_ModelTypedWithDifferentCasingStillMatches(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 
 	variant, ok := MacVariantForDeploy(index, "Canon", "testvendor model x", "")
 	if !ok {
@@ -194,7 +273,8 @@ func TestMacVariantForDeploy_ModelTypedWithDifferentCasingStillMatches(t *testin
 
 func TestMacVariantForDeploy_UnknownModelReportsNotFound(t *testing.T) {
 	cat := testModelCatalog(t)
-	index := BuildMacModelIndex(cat, t.TempDir())
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 	if _, ok := MacVariantForDeploy(index, "Canon", "Totally Unknown Model", ""); ok {
 		t.Error("expected no match for a model absent from the index - caller should fall back to ResolveMacFamily/choosePPD")
 	}

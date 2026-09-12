@@ -462,6 +462,13 @@ document.querySelector('#app').innerHTML = `
     </div>
     <pre id="logOutput"></pre>
   </div>
+
+  <div id="logContextMenu" class="context-menu" hidden>
+    <button id="logCtxSelectAll" class="context-menu-item">Select All</button>
+    <button id="logCtxCopy" class="context-menu-item">Copy</button>
+    <div class="context-menu-separator"></div>
+    <button id="logCtxClear" class="context-menu-item">Clear Log</button>
+  </div>
 `;
 
 const el = (id) => document.getElementById(id);
@@ -510,6 +517,27 @@ function isValidIPv4(s) {
 // missing its last octet, or any other placeholder text all count as not
 // yet ready. Used both for Deploy Checked Printers' own enabled state and
 // the IP field's yellow "needs a value" highlight.
+// The Defaults panel's Subnet field is a *prefix* (3 octets, e.g. "10.1.1."
+// - the 4th is filled in per-row), not a full address, so isValidIPv4's own
+// 4-octet regex doesn't apply here. Blank is always valid (Subnet is
+// optional, not mandatory - stays the default white background, never
+// highlighted); a trailing "." is optional too (both "10.1.1" and
+// "10.1.1." are fine, matching the field's own placeholder), but anything
+// else - the wrong octet count, an octet outside 0-255, a double dot, a
+// comma, whitespace - isn't, and gets the same yellow highlight a bad full
+// address gets elsewhere.
+function isValidSubnetPrefix(s) {
+    if (s === '') return true;
+    const trimmed = s.endsWith('.') ? s.slice(0, -1) : s;
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(trimmed);
+    if (!m) return false;
+    return m.slice(1).every((part) => {
+        if (part.length > 1 && part[0] === '0') return false;
+        const n = Number(part);
+        return n >= 0 && n <= 255;
+    });
+}
+
 function isValidPortValue(ip) {
     const v = (ip || '').trim();
     return v.toUpperCase() === 'NUL' || isValidIPv4(v);
@@ -779,6 +807,79 @@ function renderLog() {
     out.scrollTop = out.scrollHeight;
 }
 
+function clearLog() {
+    state.logLines = [];
+    renderLog();
+}
+
+// selectAllLog/copyLog operate on the log's own text content (state.logLines
+// joined the same way renderLog itself joins them), not whatever's currently
+// selected - "Select All" then "Copy" from the context menu should always
+// grab the whole log, matching how a technician would actually want to paste
+// it into a support ticket, not just whatever text happened to be selected
+// when they right-clicked.
+function selectAllLog() {
+    const out = el('logOutput');
+    const range = document.createRange();
+    range.selectNodeContents(out);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+}
+
+async function copyLog() {
+    const text = state.logLines.join('\n');
+    try {
+        await navigator.clipboard.writeText(text);
+        return;
+    } catch {
+        // Falls through to the execCommand fallback below - some webview
+        // configurations restrict the async Clipboard API outright.
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
+    } finally {
+        document.body.removeChild(textarea);
+    }
+}
+
+// wireLogContextMenu replaces the log area's native right-click menu with a
+// small custom one (Select All / Copy / Clear Log) - positioned at the
+// cursor via "contextmenu", dismissed on an outside click, a menu-item pick,
+// or Escape, the same dismiss shape every other transient popup in this file
+// (the Spooler dropdown, the Model/Driver combobox) already uses.
+function wireLogContextMenu() {
+    const menu = el('logContextMenu');
+
+    const hide = () => { menu.hidden = true; };
+
+    el('logOutput').addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        menu.hidden = false;
+        const maxLeft = window.innerWidth - menu.offsetWidth - 4;
+        const maxTop = window.innerHeight - menu.offsetHeight - 4;
+        menu.style.left = `${Math.max(0, Math.min(e.clientX, maxLeft))}px`;
+        menu.style.top = `${Math.max(0, Math.min(e.clientY, maxTop))}px`;
+    });
+
+    document.addEventListener('mousedown', (e) => {
+        if (!menu.hidden && !menu.contains(e.target)) hide();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (!menu.hidden && e.key === 'Escape') hide();
+    });
+
+    el('logCtxSelectAll').addEventListener('click', () => { hide(); selectAllLog(); });
+    el('logCtxCopy').addEventListener('click', () => { hide(); copyLog(); });
+    el('logCtxClear').addEventListener('click', () => { hide(); clearLog(); });
+}
+
 function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -806,7 +907,16 @@ function escapeHtml(s) {
 // a highlighted dropdown item - the "add a new row" shortcut piggybacks on
 // this rather than stealing Enter outright, so committing a suggestion still
 // always takes priority when the dropdown is actually open.
-function setupCombobox(input, list, fetchCandidates, onChange, onEnter) {
+// onCommit (optional) fires only from an actual commit - a dropdown item
+// picked by click or Enter - never from plain typing, unlike onChange.
+// Model's own combobox uses this to auto-fill Driver on macOS: doing that
+// from onChange instead fired on every keystroke, including a filter string
+// mid-typed and not yet a real model ("5840"), which doesn't fold-match
+// anything in the index (see MacModelCandidates) and fell through to
+// DriverCandidates' own guess-based fallback - confirmed live, the Driver
+// field flashed the manufacturer's single raw guessed package name while
+// typing, every time, until a real model was actually picked.
+function setupCombobox(input, list, fetchCandidates, onChange, onEnter, onCommit) {
     let items = [];
     let highlighted = -1;
     let closeTimer = null;
@@ -831,6 +941,7 @@ function setupCombobox(input, list, fetchCandidates, onChange, onEnter) {
         clearTimeout(closeTimer);
         input.value = value;
         onChange(value);
+        if (onCommit) onCommit(value);
         list.hidden = true;
     }
 
@@ -1080,30 +1191,35 @@ function wireRowEvents() {
             (value) => {
                 row.model = value;
                 modelInput.classList.toggle('input-needs-value', macModelDriven(row.manufacturer) && !value);
+            },
+            () => addPrinterRow(true),
+            (value) => {
                 // For a manufacturer with real per-model mac data (Canon),
                 // Driver is fully derived from Model, not a second thing to
                 // pick by hand - DriverCandidates with a blank filterText is
                 // already preference-ordered (UFR II first - see
                 // MacModelCandidates' own doc comment), so its first result
                 // is exactly "the respective model-specific UFR II variant".
-                // Cleared back to "" (needs-value again) the moment the
-                // model text no longer resolves to a real one, so Driver
-                // never silently keeps pointing at a model that's no longer
-                // what's typed. Windows' own Kyocera model-narrowing is
-                // unaffected - this only runs for macModelDriven
-                // manufacturers, where the technician was never expected to
-                // pick Driver independently of Model at all.
-                if (macModelDriven(row.manufacturer)) {
-                    App.DriverCandidates(row.manufacturer, value, '').then((candidates) => {
-                        if (row.model !== value) return; // stale - model has since changed again
-                        const picked = candidates[0] || '';
-                        row.driver = picked;
-                        driverInput.value = picked;
-                        driverInput.classList.toggle('input-needs-value', !picked);
-                    });
-                }
+                // onCommit, not onChange - a mid-typed filter string ("5840")
+                // doesn't fold-match any real model yet, so calling this on
+                // every keystroke fell through to DriverCandidates' own
+                // guess-based fallback and flashed the manufacturer's single
+                // raw guessed package name in Driver until a real model was
+                // actually picked (confirmed live - see setupCombobox's own
+                // doc comment on onCommit). Windows' own Kyocera model-
+                // narrowing is unaffected - this only runs for
+                // macModelDriven manufacturers, where the technician was
+                // never expected to pick Driver independently of Model at
+                // all.
+                if (!macModelDriven(row.manufacturer)) return;
+                App.DriverCandidates(row.manufacturer, value, '').then((candidates) => {
+                    if (row.model !== value) return; // stale - model has since changed again
+                    const picked = candidates[0] || '';
+                    row.driver = picked;
+                    driverInput.value = picked;
+                    driverInput.classList.toggle('input-needs-value', !picked);
+                });
             },
-            () => addPrinterRow(true),
         );
 
         const mfgSelect = tr.querySelector('.row-mfg');
@@ -1315,6 +1431,10 @@ function wireEvents() {
         }
     });
 
+    el('defSubnet').addEventListener('input', (e) => {
+        e.target.classList.toggle('input-needs-value', !isValidSubnetPrefix(e.target.value));
+    });
+
     if (!isMac()) {
         el('portPrefixEnabled').addEventListener('change', (e) => {
             state.portPrefixEnabled = e.target.checked;
@@ -1429,10 +1549,9 @@ function wireEvents() {
     wireBackdropDismiss('confirmBackdrop', () => { if (pendingConfirmCancel) pendingConfirmCancel(); });
     wireBackdropDismiss('stopBackdrop', () => { if (pendingStopCancel) pendingStopCancel(); });
 
-    el('btnClearLog').addEventListener('click', () => {
-        state.logLines = [];
-        renderLog();
-    });
+    el('btnClearLog').addEventListener('click', clearLog);
+
+    wireLogContextMenu();
 
     el('btnDeploy').addEventListener('click', deploy);
 
@@ -2246,10 +2365,12 @@ function wireSettingsModal() {
     el('btnRefreshDrivers').addEventListener('click', async () => {
         const btn = el('btnRefreshDrivers');
         btn.disabled = true;
-        // A real driver folder scan can take 30-45+ seconds (extracting/
-        // inspecting archives - see loadCatalog on either platform), with
-        // nothing else visible changing until it finishes - confirmed live
-        // that the disabled button alone reads as "did the click even
+        // A first-ever/genuinely-changed driver folder scan can still take a
+        // while (extracting/inspecting archives - see loadCatalog on either
+        // platform; macOS itself is fast on every later refresh once a
+        // package's been indexed once - see driver.MacManufacturerCatalog),
+        // with nothing else visible changing until it finishes - confirmed
+        // live that the disabled button alone reads as "did the click even
         // register?" rather than "working on it". This is the only signal
         // until the OK/ERR line below replaces it.
         logStatus('INFO', 'Refreshing driver catalog...');
@@ -2274,6 +2395,15 @@ function wireSettingsModal() {
                 logStatus('OK', status.hasDrivers
                     ? 'Driver catalog refreshed.'
                     : 'Driver catalog refreshed - still no drivers found in the Drivers folder.');
+                // macOS only - what changed for a manufacturer whose newest
+                // package turned out to be different from the one already
+                // recorded in its own catalog.<mfg>.json (App.CatalogStatus's
+                // own ModelChanges - see driver.DiffModels). Empty on a
+                // cache-hit refresh (nothing actually changed) or a
+                // first-ever build (nothing to diff against yet).
+                for (const change of status.modelChanges || []) {
+                    logStatus('INFO', change);
+                }
             }
         } finally {
             btn.disabled = false;

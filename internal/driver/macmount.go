@@ -150,11 +150,23 @@ func LocateLoosePPDs(path string) (ppdPaths []string, cleanup func(), err error)
 // call it, even after an error, in case an outer mount succeeded before an
 // inner step failed.
 func LocatePkg(path string) (pkgPath string, cleanup func(), err error) {
+	pkgPath, _, cleanup, err = LocatePkgWithChain(path)
+	return pkgPath, cleanup, err
+}
+
+// LocatePkgWithChain is LocatePkg plus the chain of files it actually had to
+// open to get there - path itself first, then each nested .dmg it mounted
+// along the way, ending with the resolved .pkg. Used by the catalog-
+// building code (macmodel.go) to record exactly which files (and their own
+// parents) produced a given set of indexed models - MacCatalogDB's own
+// provenance chain. LocatePkg itself is a thin wrapper that just drops the
+// chain; every one of its own existing callers is unaffected.
+func LocatePkgWithChain(path string) (pkgPath string, chain []string, cleanup func(), err error) {
 	if strings.EqualFold(filepath.Ext(path), ".pkg") {
-		return path, func() {}, nil
+		return path, []string{path}, func() {}, nil
 	}
 	if !strings.EqualFold(filepath.Ext(path), ".dmg") {
-		return "", func() {}, fmt.Errorf("%s is neither a .pkg nor a .dmg", path)
+		return "", nil, func() {}, fmt.Errorf("%s is neither a .pkg nor a .dmg", path)
 	}
 
 	var detaches []func() error
@@ -166,26 +178,26 @@ func LocatePkg(path string) (pkgPath string, cleanup func(), err error) {
 
 	mountPoint, detach, err := mountDmg(path)
 	if err != nil {
-		return "", cleanup, err
+		return "", nil, cleanup, err
 	}
 	detaches = append(detaches, detach)
 
 	if pkg := findFirstByExt(mountPoint, ".pkg"); pkg != "" {
-		return pkg, cleanup, nil
+		return pkg, []string{path, pkg}, cleanup, nil
 	}
 
 	if nested := findFirstByExt(mountPoint, ".dmg"); nested != "" {
 		nestedMount, nestedDetach, err := mountDmg(nested)
 		if err != nil {
-			return "", cleanup, err
+			return "", nil, cleanup, err
 		}
 		detaches = append(detaches, nestedDetach)
 		if pkg := findFirstByExt(nestedMount, ".pkg"); pkg != "" {
-			return pkg, cleanup, nil
+			return pkg, []string{path, nested, pkg}, cleanup, nil
 		}
 	}
 
-	return "", cleanup, fmt.Errorf("no .pkg found inside %s", path)
+	return "", nil, cleanup, fmt.Errorf("no .pkg found inside %s", path)
 }
 
 // PackageLabel returns a best-effort human-readable identifier for the

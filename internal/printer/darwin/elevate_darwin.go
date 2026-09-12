@@ -21,6 +21,27 @@ import (
 // non-zero exit, "execution error: User canceled." on the AppleScript side) -
 // callers treat it exactly like any other failed command, no special case.
 //
+// EVERY \n IN THE CAPTURED STDOUT COMES BACK AS \r: confirmed live via raw
+// byte inspection (`od -c`) of a real `do shell script ... with
+// administrator privileges` return value - AppleScript normalizes captured
+// output to its own classic-Mac \r line-ending convention on the way back,
+// universally, regardless of what actually produced the newline (a plain
+// `echo`, `printf '...\n'`, anything). Any future caller that needs to parse
+// runPrivileged's/runPrivilegedShell's own multi-line stdout must split on
+// \r (or both \r and \n, e.g. `strings.FieldsFunc` matching either) - never
+// \n alone. Found this chasing real-time install progress out of a
+// privileged call (see EnsureDriverInstalled's own doc comment for why that
+// whole approach was ultimately abandoned) - a second, more fundamental
+// finding from the same investigation: `do shell script`'s own privileged-
+// execution mechanism buffers a command's *entire* output until it fully
+// exits, no matter how many pipe stages run inside the script - confirmed
+// via a fast synthetic test (a 1-second-`sleep`-separated loop) that came
+// back with every line stamped identically despite real elapsed time
+// between them. There is no way to get genuine incremental output out of
+// this mechanism at all - only a fundamentally different one (e.g. an
+// elevated script writing progress to a file an unprivileged goroutine tails
+// independently) would.
+//
 // UNVERIFIED FROM A REAL SHIPPED APP, AND LIKELY NEEDS A REAL CODE SIGNATURE:
 // confirmed live against a real driver install (a bare `pdtdebugmac` CLI
 // binary, built with `go build`/`go run`, running on real macOS 26) that this
@@ -52,17 +73,39 @@ import (
 // Windows side's current unsigned-installer precedent, worth flagging before
 // committing to it.
 func runPrivileged(ctx context.Context, argv []string) (stdout string, err error) {
-	shellCmd := quoteShellCommand(argv)
+	return runPrivilegedShell(ctx, quoteShellCommand(argv))
+}
+
+// runPrivilegedShell is runPrivileged's own sibling for a caller that needs
+// several commands run together as one elevated call (e.g.
+// canoninstall_darwin.go's own install-Core-then-place-the-staged-files
+// script) rather than a single command's argv - a plain argv list has no way
+// to express that (quoteShellCommand quotes each argument as an inert
+// literal, never interpreted as shell syntax). shellCmd is caller-built and
+// caller-quoted (see quoteShellCommand for the same single-quote-and-escape
+// convention, or singleQuoteShellArg for one value at a time); this only
+// adds the "with administrator privileges" wrapping shared with
+// runPrivileged, nothing else.
+func runPrivilegedShell(ctx context.Context, shellCmd string) (stdout string, err error) {
 	script := fmt.Sprintf(`do shell script %s with administrator privileges`, appleScriptQuote(shellCmd))
 	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
 	out, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("running %q: %w: %s", argv, err, strings.TrimSpace(string(exitErr.Stderr)))
+			return "", fmt.Errorf("running %q: %w: %s", shellCmd, err, strings.TrimSpace(string(exitErr.Stderr)))
 		}
-		return "", fmt.Errorf("running %q: %w", argv, err)
+		return "", fmt.Errorf("running %q: %w", shellCmd, err)
 	}
 	return string(out), nil
+}
+
+// singleQuoteShellArg wraps one string in single quotes for embedding
+// literally in a POSIX shell command, the same escaping quoteShellCommand
+// applies per-argument - shared here since runPrivilegedShell callers build
+// their own multi-command shell strings by hand rather than a plain argv
+// list, but still need each interpolated value quoted just as safely.
+func singleQuoteShellArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // quoteShellCommand builds a single POSIX shell command line from argv, each

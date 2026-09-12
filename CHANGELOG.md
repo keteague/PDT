@@ -4,6 +4,411 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-12 (v0.6.9) - macOS: batch every Canon row's privileged work into one elevated call per deploy run
+
+Ken asked explicitly for this after a 2-row deploy still cost 4 separate native auth prompts (1
+install + 1 queue-create per row) - confirmed, again, that `do shell script ... with administrator
+privileges` never reuses a recent grant, so the only way down to fewer prompts is fewer actual
+invocations of it.
+
+### Added
+- **`printer.BatchPreparer`** - an optional `Deployer` extension (`PrepareBatch(ctx, reqs, confirm)`),
+  checked via a type assertion in `DeployAllWithProgress` before any row's own `Deploy()` call.
+  Windows' own Deployer doesn't implement it, so this is a no-op there.
+- **macOS's own `PrepareBatch`** (`canonbatch_darwin.go`) - a first, entirely unprivileged pass over
+  every row: resolves each one's catalog-driven Canon UFR II variant, expands/flattens its package,
+  extracts its own staged PPD+Recipe files, computes its queue name/device URI/print-defaults args -
+  everything `installCanonSelective`/`Deploy()` already knew how to do, just not executed yet.
+  Every *batchable* row's own install+queue-create+defaults commands are combined into **one**
+  script and run through **one** elevated call for the whole deploy run, deduplicating each unique
+  package's own Core install exactly the way the existing per-row cache already did. Per-row
+  success/failure comes back through a plain results file (`printf '%d:%d\n' <rowIndex> $? >>
+  file`, one line appended per row's own subshell) rather than by parsing the combined call's own
+  stdout - confirmed this session (twice) that `do shell script` mangles `\n` to `\r` and buffers
+  everything until the whole script exits, both real problems for structured multi-row output a
+  results file sidesteps entirely by having Go read it straight off disk afterward.
+  Each row's own commands run inside `( ... )` so one row's failure can never block another's -
+  confirmed live (non-privileged) with a synthetic 3-row script including a deliberately-failing
+  middle row: the other two still completed and each row's own real exit code came back correctly.
+- **Deliberately narrow scope**: only a row that resolves to a catalog-driven Canon UFR II package
+  *and* doesn't already have an existing queue to reuse gets batched - every other case (a
+  different manufacturer, the guess-based fallback with no catalog entry, a loose-PPD no-installer
+  family, or an existing queue) is left completely alone, falling back to the exact same per-row
+  path (and its own separate prompts) unchanged. This is the one path proven correct end to end
+  across this session's last several rounds, and covers every row actually live-tested so far.
+- The real, accepted trade-off: every batched row's result becomes known only once the one combined
+  call returns, not streamed in as each row would otherwise finish - deliberate, not an oversight,
+  given the alternative is a fresh native password prompt for every row needing its own privileged
+  step.
+
+**Not yet verified with a real deploy** - static verification only this round: the actual generated
+script (real paths, real quoting) syntax-checked clean, and the subshell/results-file fault-
+isolation mechanism was confirmed correct with a real (non-privileged) test. A live self-test of the
+real privileged path was attempted 3 times and each attempt's own auth prompt went unanswered
+(no stuck process found afterward, and no test queue was left behind either) - abandoned rather than
+keep prompting; needs a real deploy to confirm end to end.
+
+## 2026-09-12 (v0.6.8) - macOS: fix a real color-mode mismatch bug (`findOption`'s suffix match was too loose)
+
+Found live: a fully successful deploy still left one queue (`zBack_Yard`) set to color instead of
+mono, with the log warning about `CNProcessColorMode` having no grayscale/mono choice.
+
+### Fixed
+- **`findOption`'s suffix match could grab the wrong option entirely** - a real Canon PPD declares
+  both `*CNColorMode` (the real color/mono switch, choices mono/color) and `*CNProcessColorMode`
+  (an unrelated boolean, "Print Mixed Color/B&W Documents at High Speed", choices False/True), and
+  both end in "ColorMode". The suffix match (added in v0.6.2 to catch Canon's "CN"-prefixed
+  variants) picked whichever came first in this particular PPD's own option order
+  (`CNProcessColorMode`) instead of the real one - correctly finding no mono/gray choice on the
+  *wrong* option and silently leaving the real `CNColorMode` at its default. Replaced with an exact
+  (case-insensitive) match against an explicit allowlist of known real-world spellings - the
+  CUPS-standard `Duplex`/`ColorModel`, and Canon's own `CNDuplex`/`CNColorMode` - rather than any
+  suffix or substring match, which can never again collide with an option that merely *contains*
+  one of these words.
+
+### Testing
+- `TestFindOption_DoesNotMatchCNProcessColorModeInsteadOfCNColorMode` (new, reproduces the exact
+  real option ordering that caused this). Existing suffix-based tests renamed/updated to the new
+  exact-match calling convention (`"colormode"` → `"cncolormode"`, `"duplex"` alone →
+  `"duplex", "cnduplex"`).
+
+## 2026-09-12 (v0.6.7) - macOS: fix v0.6.6's `cp -R` (extended-attribute copy rejected on /Library)
+
+Found live testing v0.6.6's own flatten fix against two more real models: both failed with
+`cp: .../Library/.: unable to copy extended attributes to /Library/.: Operation not permitted`,
+even running as root through the elevated call.
+
+### Fixed
+- **A plain `cp -R src/. /Library/` also tries to copy the *source directory's own* extended
+  attributes onto the destination directory entry itself** (not just recurse into its contents) -
+  and `/Library`'s own inode metadata rejects that even for root. Confirmed live: reproduced the
+  identical failure against the real `/Library` with a harmless, immediately-cleaned-up test file
+  (not the real deploy) before fixing it, then confirmed `cp -RX` (`-X`: don't copy extended
+  attributes) succeeds where plain `cp -R` failed, same real test. None of the freshly-`cpio`-
+  extracted driver files carry attributes worth preserving anyway - the `chown -Rh`/`chmod` calls
+  right after already re-establish the ownership/permissions that actually matter.
+
+## 2026-09-12 (v0.6.6) - macOS: fix v0.6.5's Core install (`installer` rejects an expanded sub-package directory)
+
+Found live testing v0.6.5's own selective install against a third real model: install failed
+outright with `installer: Error - the package path specified was invalid`, while a second row in
+the same run (a no-installer "PPD"-family model) deployed fine - confirming the bug was specific to
+the new Core-install path, not a regression elsewhere. Ken's own hypothesis ("it may be a folder,
+not a file") pointed at exactly the right place.
+
+### Fixed
+- **`installer -pkg` rejects a `pkgutil --expand`-produced sub-package directory outright** -
+  reproduced the exact same error running it as the current user with no privileges at all,
+  confirming it's a format/recognition issue, not a permissions one (modern macOS `installer`
+  apparently no longer accepts a bare expanded-component directory the way older documentation/
+  habits suggested). Fixed by re-flattening the expanded Core sub-package back into a proper
+  single-file `.pkg` via `pkgutil --flatten` before ever calling `installer` on it - confirmed live
+  (still as a non-privileged dry run) that `installer` then correctly reports "Must be run as root"
+  instead of rejecting the path, and reproduced the exact previously-failing model
+  (`CNPZUIF1643FZU`, "Canon imageFORCE 1643F/1643") end to end through the real Go code to confirm
+  the fix before asking for another live retest.
+- The flatten step only runs when Core actually needs installing this call (skipped entirely once
+  `canonCoreInstalledThisRun` already covers the package, same as before).
+
+Confirmed live in the same test: deploy time was already meaningfully shorter for the row that
+*did* succeed, and mono/simplex print defaults are still correctly applied through the new install
+path (v0.6.2's fix holding up under the new code).
+
+## 2026-09-12 (v0.6.5) - macOS: real Canon UFR II install speedup (skip ~548 unused PPD/Recipe pairs + 3 unneeded sub-packages)
+
+Ken's own live install-phase timing (v0.6.4) turned out to be fundamentally unmeasurable through
+`do shell script` (confirmed via a fast synthetic diagnostic: identical timestamps for lines with
+real 1-second gaps between them, even with no intermediate buffering stage at all) - abandoned
+rather than chasing a fourth broken attempt. Independently, Ken's own manual installer run
+(1 Touch ID prompt) measured file-writing at ~30s and package scripts at ~2min for the *whole*
+5-package Distribution, and static inspection (`lsbom`, `nm -u`, reading every sub-package's own
+pre/postinstall script) had already established, without needing precise timing, that the real
+waste is structural: a UFR II Distribution installs 5 sub-packages (22,900 files, ~224MB) for a
+single printer, of which only the Core sub-package (the actual driver framework/backend/filters)
+and *one* PPD+Recipe pair out of Device's 549 are ever used.
+
+### Removed
+- The v0.6.2-v0.6.4 install-phase timing feature (`installVerboseTimestamped`/`logInstallPhases`/
+  `installerPhaseLineRe`) - `do shell script`'s own privileged-execution mechanism buffers a
+  command's entire output until it fully exits, no matter how many pipe stages run inside the
+  script; there is no way to get genuine incremental timing out of it. Documented both real
+  findings from the investigation (universal \n→\r conversion on any `do shell script` return
+  value; the buffering itself) directly on `runPrivileged`/`runPrivilegedShell`
+  (`elevate_darwin.go`) so a future real-time-progress attempt starts from a fundamentally
+  different mechanism (e.g. an elevated script writing to a file an unprivileged goroutine tails
+  independently) instead of repeating this dead end.
+
+### Added
+- **Selective Canon UFR II install** (`internal/driver/maccanonselective.go`,
+  `internal/printer/darwin/canoninstall_darwin.go`) - `installVariant`'s new fast path for a Canon
+  UFR II-shaped Distribution: installs the Core sub-package for real (needed - the actual driver
+  framework/backend/PDE filter binaries), then selectively `cpio`-extracts just the *one* target
+  model's own PPD + matching per-model "Recipe" bundle (confirmed against two real models - the
+  PPD, the whole bundle tree, and a sibling `Recipe/<model>.rcp` symlink pointing into it, found via
+  a real BOM diff, not a guess) straight out of the Device sub-package's own Payload - never running
+  Device.pkg's own installer at all, and never touching Icons/Profiles/cnaccm (confirmed their own
+  pre/postinstall scripts are all no-ops on modern macOS, and none are required for functional
+  printing - finishing features like staple/punch/fold are declared directly in the PPD's own
+  `*OpenUI` options, confirmed live, not dependent on the Recipe bundle). Both the privileged Core
+  install and the staged-file placement (`cp`/`chown -Rh`/`chmod`) ride in one combined
+  `runPrivilegedShell` call - no extra elevation prompt over the old approach. Falls back to the
+  old full-Distribution install unchanged whenever the package doesn't match this expected shape (a
+  different manufacturer, or an unexpected/future Canon layout) - never a hard failure just because
+  the optimization doesn't apply. Verified end-to-end (mount → expand → locate sub-packages →
+  selective extract) against a real UFR II download for two different real models before wiring
+  this in, and the `cp -R` merge step against a synthetic tree to confirm it doesn't clobber
+  unrelated pre-existing files.
+- `Deployer.canonCoreInstalledThisRun` - the Core sub-package's own per-run "already installed"
+  cache (bool-valued, separate from the existing full-install `installedThisRun` PPD-list cache) -
+  two rows resolving to *different* Canon models sharing one package (the exact real case tested
+  live) share one Core install; each row's own PPD+Recipe placement is cheap enough it's never
+  cached/skipped, just always run.
+
+### Testing
+- `TestCanonCoreDevicePackages_FindsBothByRealNamingConvention`,
+  `TestCanonCoreDevicePackages_MissingEitherSubPackageIsNotOK`,
+  `TestCanonCoreDevicePackages_MissingDirReturnsNotOK`, `TestCanonPPDBaseName_StripsRealExtensions`.
+
+## 2026-09-12 (v0.6.4) - macOS: fix the v0.6.3 install-phase timing itself (it logged nothing); add a Log context menu
+
+Found immediately live-testing v0.6.3's own fix: a real Canon deploy logged *zero* phase lines
+instead of wrong ones - worse visibility than v0.6.2's broken-but-present output.
+
+### Fixed
+- **`logInstallPhases` was splitting captured output on `\n` alone, but `do shell script` itself
+  silently converts every `\n` in a privileged command's captured stdout to `\r` before handing it
+  back** - confirmed via raw byte inspection (`od -c`) of a real `do shell script ... with
+  administrator privileges` return value. This is universal AppleScript behavior (a classic-Mac \r
+  line-ending convention), not anything specific to `installer -verboseR`'s own output - v0.6.3's
+  internal `tr '\r' '\n'` step ran *before* this conversion, so its carefully-created `\n`s got
+  turned right back into `\r` on the way out, leaving zero real `\n` characters for
+  `strings.Split(out, "\n")` to find. Now splits on `\r` as well (`strings.FieldsFunc`). Documented
+  this on `runPrivileged`/`runPrivilegedShell` directly (`elevate_darwin.go`) since it applies to
+  *any* future caller parsing multi-line output from either function, not just this one.
+- Diagnosed live via a fast, harmless synthetic `do shell script ... with administrator privileges`
+  test (a 3-second `sleep`-separated loop, no real system changes) rather than requiring another
+  multi-minute real install cycle to isolate.
+
+### Added
+- **Log area right-click context menu** - Select All, Copy, Clear Log (a separator between Copy and
+  Clear Log). Copy uses the async Clipboard API with an `execCommand('copy')` fallback for a
+  restricted webview context. Select All/Copy always act on the full log text (all of
+  `state.logLines`), not whatever happened to be selected when the menu was opened - closer to
+  what a technician pasting a log into a support ticket actually wants.
+
+### Testing
+- `TestLogInstallPhases_HandlesRealCarriageReturnOnlyOutputFromDoShellScript` (new, `\r`-only input
+  matching the real captured shape byte-for-byte).
+- `joinLines` test helper and all existing `logInstallPhases` fixtures switched to `\r`-joined
+  input to match reality.
+
+## 2026-09-12 (v0.6.3) - macOS: fix the v0.6.2 install-phase timing itself (it was measuring the wrong thing)
+
+Found immediately live-testing v0.6.2's own new install-phase timing feature: a real Canon deploy
+logged `Install phase "..." took 0s` for a phase that plainly took several minutes, and no log
+lines appeared at all during the wait, contradicting the feature's own purpose.
+
+### Fixed
+- **`installVerboseTimestamped` was capturing `installer -verboseR`'s output to a file, then
+  timestamping it in a replay loop *after* `installer` had already fully exited** - every
+  timestamp reflected how fast the replay could read the file back (near-instant), not when
+  `installer` actually emitted each line. Confirmed live: a real 5+ minute install logged every
+  phase as "took 0s". Rewritten to pipe `installer`'s output *live* through the timestamping loop
+  while it's still running (a real concurrent pipeline, not capture-then-replay) - `installer`'s
+  own exit code is still captured correctly via `${PIPESTATUS[0]}` (confirmed `do shell script`
+  really does run via bash, which supports it) rather than the pipeline's last stage.
+- **`-verboseR`'s own progress lines are `\r`-separated** (it renders as a single self-overwriting
+  progress line in a terminal), not `\n`-separated - a plain `read -r line` only splits on `\n`, so
+  the entire run's output was collapsing into one unparseable blob. Now piped through `tr '\r'
+  '\n'` first.
+- **The same phase gets re-announced dozens to hundreds of times** as its own internal percentage
+  climbs (confirmed live: `Running package scripts…` alone appeared 300+ times in one real
+  install) - `logInstallPhases` now only logs a transition when the phase text actually *changes*,
+  not on every repeat.
+- Corrected `installerPhaseLineRe` to match `installer`'s real line shape
+  (`installer:PHASE:<text>`), not the guessed `installer:<text>` shape v0.6.2 shipped with.
+
+### Testing
+- `TestLogInstallPhases_DoesNotRelogTheSamePhaseOnEveryRepeatedAnnouncement` (new).
+- `TestLogInstallPhases_ComputesElapsedSecondsPerPhaseIncludingTheLastOne` updated to the real
+  `installer:PHASE:` line shape and real phase-repeat pattern.
+
+## 2026-09-12 (v0.6.2) - macOS: fix print defaults, cut a redundant auth prompt, add install-phase timing
+
+Found live testing 2 real Canon deploys with mono/simplex defaults, right after v0.6.1 shipped.
+
+### Fixed
+- **Duplex/color defaults silently never applied to a real Canon UFR II queue** - `SetPrintDefaults`
+  only matched an option keyword *exactly equal to* `Duplex`/`ColorModel`, but Canon's own PPD
+  declares `*CNDuplex` (choices `None`/`DuplexFront`/`Booklet`) and `*CNColorMode` (choices
+  `mono`/`color`) instead - confirmed against a real installed Canon PPD
+  (`CNPZUIRAC5840ZU.ppd.gz`). `findOption` now matches by keyword *suffix*, checked against every
+  other real Canon color-related option (`CNColorSyncICC`, `CNColorHalftone`, `CNNumberOfColors`,
+  `CNColorToUseWithBlack`, `CNXColorAdjustment`, `CNYColorAdjustment`) to confirm it stays narrow
+  rather than grabbing an unrelated option via a loose substring match.
+- **A brand-new queue cost two separate elevated prompts back to back** (queue-create, then a
+  second `lpadmin` call for print defaults) - confirmed live these don't reliably share one cached
+  authorization even ~15s apart. `PrintDefaultsForNewQueue` now reads the target PPD's own
+  `*OpenUI`/`*CloseUI` declarations straight off disk (`readPPDFileOptions`/
+  `parsePPDOpenUIOptions`, no live queue needed) so the `-o Key=Value` args can ride along on the
+  *same* `lpadmin` call that creates the queue (`QueueOptions.ExtraOptionArgs`) - one prompt instead
+  of two for any new queue. A reused existing queue (no queue-create call to piggyback on) still
+  uses the old live-queue path (`SetPrintDefaults`), unchanged.
+
+### Added
+- **Install-phase timing** - a real Canon UFR II install was confirmed live to take 5m02s end to
+  end with zero visible progress. `EnsureDriverInstalled` now runs `installer -verboseR` inside the
+  same elevated call, capturing each phase transition with a real timestamp
+  (`installVerboseTimestamped`) and logging an elapsed-seconds-per-phase breakdown
+  (`logInstallPhases`) right after the install finishes - e.g. `Install phase "Running package
+  scripts" took 288s.` `do shell script` can't relay progress *during* the wait, so this doesn't
+  speed anything up by itself, but it turns "no visible progress" into real, first-party data on
+  which phase actually owns the time - needed before targeting any further speed fix with evidence
+  instead of guesswork.
+
+### Testing
+- `TestFindOption_MatchesCanonCNPrefixedDuplexBySuffix`,
+  `TestFindOption_MatchesCanonCNColorModeBySuffix`,
+  `TestFindOption_DoesNotMatchOtherRealCanonColorOptions`,
+  `TestParsePPDOpenUIOptions_ParsesRealCanonDuplexBlock`,
+  `TestParsePPDOpenUIOptions_ParsesRealCanonColorModeBlock`,
+  `TestParsePPDOpenUIOptions_ParsesBothBlocksTogetherAndIgnoresSurroundingLines`,
+  `TestDecidePrintDefaults_MatchesRealCanonPPDFileOptions`,
+  `TestLogInstallPhases_ComputesElapsedSecondsPerPhaseIncludingTheLastOne`,
+  `TestLogInstallPhases_IgnoresUnparsableAndPercentOnlyOutput`,
+  `TestLogInstallPhases_EmptyOutputLogsNothing`.
+
+## 2026-09-12 (v0.6.1) - macOS: fix real Deploy bugs found live (CUPS names, redundant installs); Subnet/JP polish
+
+Found live testing 3 real Canon deploys end to end for the first time this session.
+
+### Fixed
+- **Deploy failed outright for any row named with a space** (`lpadmin: Printer name can only
+  contain printable characters`) - a real, blocking bug, not a PDT quoting problem: `man lpadmin`
+  confirms CUPS queue names can never contain SPACE, TAB, `/`, or `#` at all, unlike a Windows
+  printer object name. `deploy_darwin.go`'s own `sanitizeCUPSQueueName` now replaces those four
+  characters with `_` for the actual `-p` queue name only - `-D` (the queue's own description) and
+  every other reference to `row.Name` (logging, `DeployResult`) keep the original, unsanitized
+  name. Logs a `[WARN]` the one time a row's name actually needed changing.
+- **The same driver package was reinstalled once per row, unconditionally** - confirmed live to be
+  severe, not the "a few extra seconds" a stale doc comment assumed: installing a real Canon UFR II
+  distribution package took **4m38s** end to end, so 3 identical test rows in one deploy cost ~14
+  minutes of pure redundant work - and since each multi-minute install alone routinely outlasts
+  macOS's own few-minutes authorization cache, back-to-back rows each triggered a fresh
+  `osascript` password prompt too (the "multiple auth prompts to minimize to one" ask). Both
+  `resolveDriver`'s guess-based fallback and `installVariant`'s model-index path now go through
+  `Deployer.ensureInstalledOnce`, which skips a package this exact `*Deployer` (one per deploy run)
+  has already installed and reuses the PPD list its first real install found - installing 3
+  identical rows in one run now costs one real install, not three, and (in the common case of one
+  manufacturer's packages all resolving early) needs at most one password prompt for the whole run
+  rather than one per row.
+- **The Driver field flashed the manufacturer's raw single-guess package label while typing a
+  Model filter, before a real model was ever picked** - confirmed live: typing "5840" into Model
+  doesn't fold-match any full model name yet, and the auto-fill was wired to `onChange` (fires on
+  every keystroke), which called `DriverCandidates` - the function with the old guess-based
+  fallback baked in - instead of stopping at "no match yet". `setupCombobox` (`frontend/src/
+  main.js`) grew a proper `onCommit` callback (fired only from an actual dropdown pick or Enter,
+  never plain typing); the Model combobox's Driver auto-fill moved there, so Driver only ever shows
+  a real, model-derived value or stays blank/flagged - never a wrong guess mid-search.
+
+### Added
+- **Subnet field validation** (Defaults panel): flagged (the same yellow `input-needs-value` style
+  used elsewhere) for anything that isn't 3 valid octets (0-255) with a single `.` between each,
+  optional trailing `.` - catches an out-of-range octet, a double dot, a comma, or stray
+  whitespace. Blank stays the plain white background (Subnet is optional, not mandatory) -
+  `isValidSubnetPrefix` in `frontend/src/main.js`.
+- **Japan-market-only Canon models are no longer indexed** - confirmed live against a real 641-
+  model Canon catalog build that 166 of them (26%) end in " JP", and that this isn't just visual
+  clutter: Canon's own raw PPD `*NickName` puts "JP" *after* the language token
+  ("...C5840/5850 PS JP", not the reverse), so `stripLanguageSuffix`'s own trailing-token match
+  never catches one at all - a JP variant never unified with its non-JP siblings the way the
+  model-unification feature otherwise guarantees, on top of being useless for an English-only
+  deployment. `isJapanMarketOnly` (`internal/driver/macmodel.go`) filters these out entirely
+  (never indexed, not just hidden) at the same point in `indexFamilyPackage` for both the
+  installer-backed and loose-PPD-bucket family shapes. A 9-model "EUR" suffix was also found in
+  the same data and deliberately left alone - not obviously language-related, and not what was
+  asked for; flagged for a decision later if it turns out to matter.
+
+### Testing
+- `internal/printer/darwin/deploy_darwin_test.go`: `TestSanitizeCUPSQueueName` (space/tab/`/`/`#`
+  all replaced, everything else untouched, blank stays blank),
+  `TestEnsureInstalledOnce_SkipsAlreadyCachedPackage` (a pre-cached package never reaches the real
+  install path at all).
+- `internal/driver/macmodel_test.go`: `TestIsJapanMarketOnly` (plain trailing " JP", the
+  language-token-then-JP shape, and a same-suffix-but-not-actually-JP false-positive guard).
+
+## 2026-09-12 (v0.6.0) - macOS: persistent per-manufacturer driver catalog; startup 35-45s -> ~2s
+
+The startup/Refresh cost flagged the night before ("we need to fix that last part that causes the
+launch to cost 35-45 seconds") - fixed two ways, timed and confirmed live against Ken's own real
+Canon downloads and the actual PDT.app.
+
+### Fixed
+- **`pkgutil --expand-full` was the dominant cost, not PPD parsing** - timed against a real Canon
+  UFR II package: 6.4s and 255MB written to disk, for a package whose actual PPDs total 25MB.
+  `--expand-full` fully decompresses a package's *entire* payload (driver binaries, a dozen
+  languages of README/license text, icons - everything) just so `packagePPDEntries`
+  (`internal/driver/macppd.go`) could walk it looking for `*.ppd(.gz)`. Replaced with `pkgutil
+  --expand` (structure only, ~0.1s) plus selective `cpio` extraction straight from each
+  sub-package's own gzip-compressed Payload (`gunzip -c Payload | cpio -idm "*.ppd" "*.ppd.gz"` -
+  confirmed live to be plain gzip'd cpio, no dependency on a more exotic format like pbzx) - 0.2-
+  0.4s and 25MB. A ~20x cut on the actual bottleneck, using tools already in this codebase's own
+  style (already shells out to `hdiutil`/`pkgutil`/`installer`).
+- Parsing (549 real PPDs' `*NickName`) was already cheap (~2s total) and untouched - the walk
+  itself was never the problem, what preceded it was.
+
+### Added
+- **`MacManufacturerCatalog`** (new `internal/driver/maccatalogdb.go`) - a persistent, versioned,
+  human-readable JSON record of every model/PPD a family-preference manufacturer's model index has
+  indexed, plus exactly which package (and its own parent chain - outer `.dmg` -> nested `.dmg` ->
+  installer `.pkg` -> sub-package, each with path/modtime/size/version where one exists) produced
+  it, and when. One file per manufacturer - `Drivers/macOS/<Manufacturer>/catalog.<manufacturer,
+  lowercased>.json` (e.g. `Drivers/macOS/Canon/catalog.canon.json`) - not one combined file, so
+  rebuilding or deleting one manufacturer's own catalog never touches any other's, ahead of this
+  same system extending to other manufacturers' driver families later. Lives inside the Drivers
+  folder itself, deliberately, so it travels with a portable/flash-drive copy - a technician's
+  flash drive now carries its own already-built index from one Mac to the next.
+- **`BuildMacModelIndex` skips re-inspecting (mounting, expanding, parsing) a package entirely**
+  once its catalog entry matches - `MacManufacturerCatalog.IsCurrent` compares the outermost
+  package's path/modtime/size (already free from `BuildMacCatalog`'s own directory scan, no
+  mounting needed) against what's recorded, the same "a downloaded driver package is never
+  silently modified in place, so a size match is as good as a hash" reasoning `copytree.go`'s own
+  `listFileSizes` already uses. **Confirmed live: a second build against the same real Canon
+  packages went from 17.7s to 0.147s** (~120x), with byte-identical results (641 models). The
+  real app's own startup dropped from 35-45s to ~2s the same way.
+- **`cachedVariantFilesExist`** guards the one real correctness gap this opened: catalog.json
+  travels with the Drivers folder, but a no-installer family's cached PPD bytes
+  (`~/Library/Application Support/PDT/PPDCache/` - deliberately *not* moved to live with the
+  Drivers folder; a flash drive is normally write-protected in the field, and re-inspection is
+  cheap enough now that there's no real benefit to it traveling too) don't. A fresh machine
+  reading someone else's already-built catalog.json now re-inspects instead of trusting a
+  `LooseCachedPPDPath` that doesn't resolve to anything locally yet.
+- **Read-only on a removable drive** - `loadCatalog` (`app_darwin.go`) passes `persist=false` to
+  `BuildMacModelIndex` whenever this exact running copy is on a removable drive
+  (`flashdrive.IsRemovableDrive`, already used for the same reason on the Windows side's own
+  `BuildCatalogNoExtract`): a technician's laptop is where catalog.json gets created/updated
+  (already fast to rebuild there, on local NVMe); a flash drive plugged into a different machine
+  only ever reads whatever's already there, never writes back to it.
+- **Version-diff surfaced, not just tracked** - `DiffModels` compares a family's newly-indexed
+  model names against what the catalog had recorded before a package changed, and
+  `CatalogStatus.ModelChanges` carries a human-readable summary (`"Canon UFR II: +3 new: ..., -1
+  no longer present: ..."`) back to the frontend's Log panel after a Refresh that actually found
+  something different - the raw "what changed between this package and the last one" material
+  asked for, without PDT itself trying to judge staleness or regressions (a human call once they
+  can see what actually changed). Empty on a first-ever build (nothing to diff against yet).
+- **`cmd/pdtdebugmac models <driversRoot>`** now also reports build time and any model-diff
+  output - this is what surfaced both the `--expand-full` bottleneck and confirmed the cache-hit
+  path actually works, against real files, before touching the real app.
+
+### Testing
+- `internal/driver/maccatalogdb_test.go` (new): filename convention, load/save round-trip
+  (including the full provenance chain), `IsCurrent` (path/modtime/size match and mismatch),
+  `DiffModels`, diff-summary truncation.
+- `internal/driver/macmodel_test.go`:
+  `TestBuildMacModelIndex_SecondBuildReusesCatalogWithoutReinspecting` - a second build against
+  the same packages is near-instant and produces an identical index; existing tests updated for
+  the new signature, all still passing (the fast-extraction rewrite preserves exact behavior).
+
 ## 2026-09-12 - Canon Model/Driver: no more raw package-name defaults; auto-derive Driver from Model on macOS
 
 ### Fixed

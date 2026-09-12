@@ -107,3 +107,27 @@ type Confirm func(ctx context.Context, title, message string) (bool, error)
 type Deployer interface {
 	Deploy(ctx context.Context, req DeployRequest, confirm Confirm) DeployResult
 }
+
+// BatchPreparer is an optional Deployer extension, checked via a type
+// assertion in DeployAllWithProgress before the first row's own Deploy()
+// call. macOS's own Deployer implements this to collapse every batchable
+// row's own privileged operations (driver install, queue create) into a
+// single elevated `do shell script ... with administrator privileges` call
+// up front - confirmed live, repeatedly, that each such call always shows
+// its own fresh native prompt with no caching between separate calls, so
+// this is the only way to get down to one prompt for a whole multi-row
+// deploy run rather than one (or several) per row. A row PrepareBatch
+// couldn't handle (a different manufacturer, or the guess-based fallback
+// path with no catalog entry) is simply left alone - its own Deploy() call
+// falls back to doing its own privileged work exactly as before, so
+// PrepareBatch failing or only partially applying is never a hard stop for
+// the whole run.
+//
+// The real trade-off PrepareBatch accepts: every batched row's success or
+// failure becomes known only once the single combined call returns, not
+// streamed in as each row would otherwise finish - a deliberate choice, not
+// an oversight, given the alternative is a fresh native password prompt for
+// every row needing its own privileged step.
+type BatchPreparer interface {
+	PrepareBatch(ctx context.Context, reqs []DeployRequest, confirm Confirm)
+}

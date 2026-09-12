@@ -78,26 +78,60 @@ type ppdEntry struct {
 	NickName string
 }
 
-// packagePPDEntries expands pkgPath (pkgutil --expand-full, same as
-// PackageLabel) to a scratch directory and returns every .ppd/.ppd.gz found
-// anywhere inside it, alongside its own *NickName - the shared primitive
-// behind both PackagePPDNickNames (Package Body/score matching) and
-// indexFamilyPackage (macmodel.go's own build-once model index), so both
-// read the exact same real payload the same way.
-func packagePPDEntries(pkgPath string) ([]ppdEntry, error) {
+// subPackageResult is one sub-package that actually contributed at least
+// one PPD during extractPPDsFromExpandedPkg - its own name (e.g.
+// "Canon_Family_Printer_Device.pkg" - a distribution archive's real PPDs
+// turned out to live in just one of five sub-packages, confirmed live; the
+// other four are icons/profiles/core-binary/accounting-manager payloads
+// with none) and declared version (readPackageInfoVersion - macmount.go,
+// "" if it has none).
+// Purely informational - MacCatalogDB's own provenance record of "which
+// package, specifically, produced these entries" - never used to decide
+// whether re-inspection is needed (see MacPackageRef's own doc comment for
+// why only the outermost file's identity is checked for that).
+type subPackageResult struct {
+	Name    string
+	Version string
+}
+
+// packagePPDEntries expands pkgPath's own structure and returns every
+// .ppd/.ppd.gz found inside, alongside its own *NickName - the shared
+// primitive behind both PackagePPDNickNames (Package/model score matching)
+// and indexFamilyPackage (macmodel.go's own build-once model index), so
+// both read the exact same real payload the same way.
+//
+// Uses `pkgutil --expand` (not `--expand-full`) plus selective `cpio`
+// extraction, not a full expand-and-walk - a real, confirmed-live
+// bottleneck fixed here. `--expand-full` fully decompresses every
+// sub-package's *entire* Payload to real files on disk - driver binaries, a
+// dozen languages of README/license text, icons, everything - just so the
+// old version of this function could walk it looking for *.ppd(.gz).
+// Timed against a real Canon UFR II package: 6.4s and 255MB written, for a
+// package whose actual PPDs total 25MB. `pkgutil --expand` alone unpacks
+// only each sub-package's own Bom/PackageInfo/Scripts structure (0.1s) and
+// leaves Payload as what it actually is on disk - a plain gzip-compressed
+// cpio archive (confirmed via `file`: "gzip compressed data", no dependency
+// on a more exotic format like pbzx) - which the system `cpio` tool can
+// extract selectively: `cpio -idm "*.ppd" "*.ppd.gz"` pulls out only the
+// matching entries (0.2-0.4s, 25MB - a ~20x wall-clock cut on the dominant
+// cost of building the mac model index, timed the same way).
+func packagePPDEntries(pkgPath string) ([]ppdEntry, []subPackageResult, error) {
 	tmpDir, err := os.MkdirTemp("", "pdt-ppdinspect-*")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer os.RemoveAll(tmpDir)
 
 	expandDir := filepath.Join(tmpDir, "expand")
-	if err := exec.Command("pkgutil", "--expand-full", pkgPath, expandDir).Run(); err != nil {
-		return nil, fmt.Errorf("expanding %s: %w", pkgPath, err)
+	if err := exec.Command("pkgutil", "--expand", pkgPath, expandDir).Run(); err != nil {
+		return nil, nil, fmt.Errorf("expanding %s: %w", pkgPath, err)
 	}
 
+	extractDir := filepath.Join(tmpDir, "ppds")
+	subs := extractPPDsFromExpandedPkg(expandDir, extractDir)
+
 	var entries []ppdEntry
-	_ = filepath.WalkDir(expandDir, func(path string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(extractDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -110,7 +144,76 @@ func packagePPDEntries(pkgPath string) ([]ppdEntry, error) {
 		}
 		return nil
 	})
-	return entries, nil
+	return entries, subs, nil
+}
+
+// extractPPDsFromExpandedPkg walks expandDir (a pkgutil --expand tree - one
+// or more sub-packages, each its own directory with a Payload file: either
+// pkgPath itself for a single-component package, or several nested
+// <Name>.pkg directories for a distribution/product archive, which is the
+// shape every real Canon download turned out to be - see
+// packagePPDEntries' own doc comment) and, for every Payload found,
+// decompresses it (plain gzip) and extracts just its *.ppd/*.ppd.gz entries
+// via cpio, into destDir/<sub-package name>/ - returning every sub-package
+// that actually yielded at least one file (see subPackageResult's own doc
+// comment). Every sub-package's Payload is tried independently and a
+// failure on one (cpio finding nothing, a Payload that isn't actually gzip,
+// etc.) is skipped rather than aborting the others - the same "index what's
+// readable, degrade for the rest" spirit BuildMacCatalog itself already has
+// for a corrupt/unreadable file. Always best-effort: destDir may end up
+// with nothing in it, which packagePPDEntries' own caller already treats as
+// "no PPDs found", not an error.
+func extractPPDsFromExpandedPkg(expandDir, destDir string) []subPackageResult {
+	var subs []subPackageResult
+	_ = filepath.WalkDir(expandDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "Payload" {
+			return nil
+		}
+		pkgDir := filepath.Dir(path)
+		f, ferr := os.Open(path)
+		if ferr != nil {
+			return nil
+		}
+		defer f.Close()
+		gz, gzerr := gzip.NewReader(f)
+		if gzerr != nil {
+			return nil
+		}
+		defer gz.Close()
+
+		name := filepath.Base(pkgDir)
+		sub := filepath.Join(destDir, name)
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			return nil
+		}
+		cmd := exec.Command("cpio", "-idm", "--quiet", "*.ppd", "*.ppd.gz")
+		cmd.Dir = sub
+		cmd.Stdin = gz
+		_ = cmd.Run()
+
+		if dirHasAnyFile(sub) {
+			version, _ := readPackageInfoVersion(filepath.Join(pkgDir, "PackageInfo"))
+			subs = append(subs, subPackageResult{Name: name, Version: version})
+		}
+		return nil
+	})
+	return subs
+}
+
+// dirHasAnyFile reports whether root (recursively) contains at least one
+// regular file - extractPPDsFromExpandedPkg's own "did this sub-package's
+// cpio extraction actually find anything" check, since cpio itself exits 0
+// either way (confirmed live: no error, no output, just nothing extracted,
+// for a sub-package whose Payload has no *.ppd(.gz) entries at all).
+func dirHasAnyFile(root string) bool {
+	found := false
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			found = true
+		}
+		return nil
+	})
+	return found
 }
 
 // PackagePPDNickNames returns the *NickName of every PPD pkgPath's own
@@ -118,7 +221,7 @@ func packagePPDEntries(pkgPath string) ([]ppdEntry, error) {
 // model matching happen *before* deciding which of a manufacturer's several
 // packages (see ResolveMacFamily) to actually install.
 func PackagePPDNickNames(pkgPath string) ([]string, error) {
-	entries, err := packagePPDEntries(pkgPath)
+	entries, _, err := packagePPDEntries(pkgPath)
 	if err != nil {
 		return nil, err
 	}

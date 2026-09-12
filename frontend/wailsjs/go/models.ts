@@ -111,6 +111,7 @@ export namespace main {
 	    ok: boolean;
 	    error: string;
 	    hasDrivers: boolean;
+	    modelChanges: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new CatalogStatus(source);
@@ -121,6 +122,7 @@ export namespace main {
 	        this.ok = source["ok"];
 	        this.error = source["error"];
 	        this.hasDrivers = source["hasDrivers"];
+	        this.modelChanges = source["modelChanges"];
 	    }
 	}
 	export class DeployRowResult {

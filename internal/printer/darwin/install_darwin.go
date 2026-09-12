@@ -20,6 +20,27 @@ import (
 // style descriptor rather than installing a classic PPD at all; the caller
 // (deploy_darwin.go) is the one that decides what to do about that (fall
 // back to `-m everywhere`).
+//
+// This is the "install the whole package" fallback - for a Canon UFR II-
+// shaped Distribution specifically, canoninstall_darwin.go's own selective
+// path runs instead whenever it can (skips ~548 other models' worth of
+// unused PPDs/Recipe bundles Device.pkg also ships, and Icons/Profiles/
+// cnaccm entirely), falling back to this full install when the Distribution
+// doesn't match that expected shape.
+//
+// A real, confirmed-live cost worth knowing about this path: a real Canon
+// UFR II distribution package took 5m02s to install this way. An attempt
+// this same session to get real phase-by-phase timing out of it (piping
+// `installer -verboseR` through `do shell script`) was abandoned after
+// three separate broken attempts - confirmed live (via a fast, harmless
+// synthetic diagnostic, not a real 5-minute install) that `do shell
+// script`'s own privileged-execution mechanism buffers a command's entire
+// output until it fully exits, regardless of how many pipe stages run
+// inside the script - there's no way to get genuine real-time progress or
+// timing out of it, only a real architecture change (e.g. an elevated
+// script writing to a file an unprivileged goroutine tails independently)
+// would. Not attempted here; the selective-install path below sidesteps
+// the whole question by not needing precise timing to justify itself.
 func EnsureDriverInstalled(ctx context.Context, resolved *driver.ResolvedMacPackage) (newPPDPaths []string, err error) {
 	pkgPath, cleanup, err := driver.LocatePkg(resolved.Path)
 	defer cleanup()

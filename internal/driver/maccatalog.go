@@ -30,6 +30,11 @@ type MacPackage struct {
 	Path    string
 	Kind    MacPackageKind
 	ModTime time.Time
+	// Size is the file's own byte size - free from the same os.Stat this
+	// scan already does for ModTime, and (together with Path/ModTime) the
+	// cheap identity MacCatalogDB's own staleness check compares against,
+	// with no mounting/re-inspection needed to get it.
+	Size int64
 }
 
 // MacCatalog is the macOS analog of Catalog: Manufacturer -> installer
@@ -145,10 +150,12 @@ func scanMacPackages(catalog MacCatalog, mfg, mfgPath string) {
 		}
 		info, err := d.Info()
 		modTime := time.Time{}
+		var size int64
 		if err == nil {
 			modTime = info.ModTime()
+			size = info.Size()
 		}
-		catalog.Packages[mfg] = append(catalog.Packages[mfg], MacPackage{Path: path, Kind: kind, ModTime: modTime})
+		catalog.Packages[mfg] = append(catalog.Packages[mfg], MacPackage{Path: path, Kind: kind, ModTime: modTime, Size: size})
 		return nil
 	})
 }

@@ -80,13 +80,21 @@ type QueueOptions struct {
 	Description string
 	Location    string
 	Shared      bool
+
+	// ExtraOptionArgs are additional "Key=Value" PPD option settings (each
+	// turned into its own "-o Key=Value", same as Shared's own
+	// printer-is-shared one) applied in the very same lpadmin call that
+	// creates the queue - normally PrintDefaultsForNewQueue's own result, so
+	// a brand-new queue's duplex/color defaults cost no second, separate
+	// elevated osascript call straight after queue creation.
+	ExtraOptionArgs []string
 }
 
-// EnsureQueue creates or reconfigures the CUPS queue named name against
-// deviceURI. ppdPath is a specific PPD file to use (`-P`); when ppdPath is
-// empty, falls back to `-m everywhere` (IPP-Everywhere autoconfiguration) -
-// see EnsureDriverInstalled's own doc comment for when that fallback applies.
-func EnsureQueue(ctx context.Context, name, deviceURI, ppdPath string, opts QueueOptions) error {
+// buildEnsureQueueArgv builds EnsureQueue's own lpadmin argv without running
+// it - shared with canonbatch_darwin.go's own PrepareBatch, which needs this
+// exact command as a fragment inside a larger combined script rather than
+// executed on its own.
+func buildEnsureQueueArgv(name, deviceURI, ppdPath string, opts QueueOptions) []string {
 	argv := []string{"lpadmin", "-p", name, "-E", "-v", deviceURI}
 	if ppdPath != "" {
 		argv = append(argv, "-P", ppdPath)
@@ -100,7 +108,16 @@ func EnsureQueue(ctx context.Context, name, deviceURI, ppdPath string, opts Queu
 		argv = append(argv, "-L", opts.Location)
 	}
 	argv = append(argv, "-o", "printer-is-shared="+strconv.FormatBool(opts.Shared))
+	argv = append(argv, optionArgs(opts.ExtraOptionArgs)...)
+	return argv
+}
 
+// EnsureQueue creates or reconfigures the CUPS queue named name against
+// deviceURI. ppdPath is a specific PPD file to use (`-P`); when ppdPath is
+// empty, falls back to `-m everywhere` (IPP-Everywhere autoconfiguration) -
+// see EnsureDriverInstalled's own doc comment for when that fallback applies.
+func EnsureQueue(ctx context.Context, name, deviceURI, ppdPath string, opts QueueOptions) error {
+	argv := buildEnsureQueueArgv(name, deviceURI, ppdPath, opts)
 	if _, err := runPrivileged(ctx, argv); err != nil {
 		return fmt.Errorf("configuring queue %q: %w", name, err)
 	}

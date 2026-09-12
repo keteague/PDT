@@ -38,6 +38,12 @@ func main() {
 			os.Exit(1)
 		}
 		err = cmdCatalog(os.Args[2])
+	case "models":
+		if len(os.Args) != 3 {
+			usage()
+			os.Exit(1)
+		}
+		err = cmdModels(os.Args[2])
 	case "installpkg":
 		if len(os.Args) != 3 {
 			usage()
@@ -68,6 +74,10 @@ Commands:
   catalog <driversRoot>              scan Drivers/macOS/... and print what
                                       BuildMacCatalog/ResolveMac/OpenPrinting
                                       fallback find for every manufacturer
+  models <driversRoot>               build the real BuildMacModelIndex and
+                                      print every manufacturer/model/variant
+                                      it finds - the Model/Driver dropdown's
+                                      actual data source on macOS
   installpkg <path-to-.dmg-or-.pkg>  run EnsureDriverInstalled standalone and
                                       print the resulting PPD diff (real
                                       install - prompts for admin password)
@@ -108,6 +118,38 @@ func cmdCatalog(driversRoot string) error {
 			fmt.Printf("  OpenPrinting PPD: %s\n", p)
 		}
 	}
+	return nil
+}
+
+func cmdModels(driversRoot string) error {
+	cat, err := driver.BuildMacCatalog(driversRoot)
+	if err != nil {
+		return fmt.Errorf("BuildMacCatalog: %w", err)
+	}
+	cacheDir := filepath.Join(os.TempDir(), "pdtdebugmac-ppdcache")
+	index := driver.BuildMacModelIndex(cat, cacheDir)
+
+	if len(index) == 0 {
+		fmt.Println("BuildMacModelIndex returned nothing at all for any manufacturer.")
+	}
+	for mfg, byModel := range index {
+		fmt.Printf("%s: %d model(s)\n", mfg, len(byModel))
+		for model, variants := range byModel {
+			fmt.Printf("  %q:\n", model)
+			for _, v := range variants {
+				switch {
+				case v.PackagePath != "":
+					fmt.Printf("    [%s] label=%q nickname=%q filename=%q package=%s\n", v.Language, v.Label, v.NickName, v.Filename, v.PackagePath)
+				default:
+					fmt.Printf("    [%s] label=%q nickname=%q filename=%q cached=%s\n", v.Language, v.Label, v.NickName, v.Filename, v.LooseCachedPPDPath)
+				}
+			}
+		}
+	}
+
+	fmt.Println("\n--- what App.Models/App.DriverCandidates would actually return for Canon (blank filter) ---")
+	fmt.Printf("MacModels: %v\n", driver.MacModels(index, "Canon", ""))
+	fmt.Printf("MacModelCandidates: %v\n", driver.MacModelCandidates(index, "Canon", "", ""))
 	return nil
 }
 

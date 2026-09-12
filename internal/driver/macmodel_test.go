@@ -116,6 +116,34 @@ func TestMacModelCandidates_PreferenceOrderedWhenNoFilter(t *testing.T) {
 	}
 }
 
+// TestMacModelCandidates_BlankModelListsEveryModel guards against a real,
+// previously-shipped bug: a blank Model returned zero candidates instead of
+// every model's own variants, collapsing DriverCandidates down to
+// Manufacturer's own single guessed-package label on every real Canon
+// download (641 real models, none ever offered) until MacModelCandidates
+// grew its own blank-model branch - see that function's own doc comment.
+func TestMacModelCandidates_BlankModelListsEveryModel(t *testing.T) {
+	cat := testModelCatalog(t)
+	index := BuildMacModelIndex(cat, t.TempDir())
+
+	labels := MacModelCandidates(index, "Canon", "", "")
+	if len(labels) != 4 {
+		t.Fatalf("expected 4 labels (3 for Model X + 1 for Model Y), got %v", labels)
+	}
+	// Grouped by language rank (UFR II, then PostScript, then Generic PPD -
+	// macFamilyPreference's own order), models sorted alphabetically within
+	// each language group - fully deterministic, not map iteration order.
+	want := []string{
+		"TestVendor Model X (UFR II)", "TestVendor Model Y (UFR II)",
+		"TestVendor Model X (PostScript)", "TestVendor Model X (Generic PPD)",
+	}
+	for i, w := range want {
+		if labels[i] != w {
+			t.Errorf("labels[%d] = %q, want %q (full list: %v)", i, labels[i], w, labels)
+		}
+	}
+}
+
 func TestMacModelCandidates_UnknownModelReturnsEmpty(t *testing.T) {
 	cat := testModelCatalog(t)
 	index := BuildMacModelIndex(cat, t.TempDir())

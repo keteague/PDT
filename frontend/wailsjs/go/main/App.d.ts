@@ -34,6 +34,8 @@ export function ListPreinstallFolders(arg1:string):Promise<main.PreinstallFolder
 
 export function ListRemovableDrives():Promise<main.ListDrivesResult>;
 
+export function MacModelManufacturers():Promise<Array<string>>;
+
 export function Manufacturers():Promise<Array<string>>;
 
 export function Models(arg1:string,arg2:string):Promise<Array<string>>;

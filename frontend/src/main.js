@@ -154,6 +154,12 @@ const state = {
     portPrefixEnabled: false,
     portPrefixText: '',
     manufacturers: [],
+    // Manufacturers with real per-model mac PPD data (Canon today) -
+    // fetched once at init() and refreshed alongside the driver catalog
+    // (App.MacModelManufacturers, macOS-only - see macModelDriven below).
+    // Always empty on Windows, so macModelDriven is unconditionally false
+    // there with no extra platform check needed at most call sites.
+    macModelManufacturers: new Set(),
     rows: [],
     deploying: false,
     logLines: [],
@@ -662,8 +668,21 @@ function isMac() {
     return state.platform === 'darwin';
 }
 
+// macModelDriven: true for a manufacturer with real per-model mac PPD data
+// (Canon today - state.macModelManufacturers, populated from
+// App.MacModelManufacturers). Manufacturer, not row-specific, since the
+// same question - Defaults panel driver optional? / grid Model mandatory,
+// Driver auto-derived from Model? - is asked for both. Always false on
+// Windows (state.macModelManufacturers stays empty there).
+function macModelDriven(manufacturer) {
+    return isMac() && state.macModelManufacturers.has(manufacturer);
+}
+
 async function init() {
     state.platform = await App.Platform();
+    if (isMac()) {
+        state.macModelManufacturers = new Set(await App.MacModelManufacturers());
+    }
     document.body.classList.add(state.platform === 'darwin' ? 'platform-darwin' : 'platform-windows');
 
     state.manufacturers = await App.Manufacturers();
@@ -922,7 +941,7 @@ function rowHtml(r) {
       <td><input type="text" class="row-ip${isValidPortValue(r.ip) ? '' : ' input-needs-value'}" value="${attr(r.ip)}" placeholder="or NUL" title="${tip('ip')}"></td>
       <td><input type="text" class="row-lpdqueue" value="${attr(r.lpdQueueName)}" placeholder="optional" title="${tip('lpdQueue')}"></td>
       <td>${mfgSelectHtml(r)}</td>
-      <td><div class="combo"><input type="text" class="row-model" value="${attr(r.model)}" title="${tip('model')}"><div class="combo-list" hidden></div></div></td>
+      <td><div class="combo"><input type="text" class="row-model${(macModelDriven(r.manufacturer) && !r.model) ? ' input-needs-value' : ''}" value="${attr(r.model)}" title="${tip('model')}"><div class="combo-list" hidden></div></div></td>
       <td><div class="combo"><input type="text" class="row-driver${r.driver ? '' : ' input-needs-value'}" value="${attr(r.driver)}" title="${tip('driver')}"><div class="combo-list" hidden></div></div></td>
       <td class="platform-windows-only"><input type="text" class="row-snmp" value="${attr(r.snmpCommunity)}" placeholder="off" title="${tip('snmpGrid')}"></td>
       <td class="checkbox-cell"><input type="checkbox" class="row-mono" ${r.mono ? 'checked' : ''} title="${tip('mono')}"></td>
@@ -1058,15 +1077,52 @@ function wireRowEvents() {
             // never appears - same "plain free-text input" behavior either
             // way.
             (filterText) => App.Models(row.manufacturer, filterText),
-            (value) => { row.model = value; },
+            (value) => {
+                row.model = value;
+                modelInput.classList.toggle('input-needs-value', macModelDriven(row.manufacturer) && !value);
+                // For a manufacturer with real per-model mac data (Canon),
+                // Driver is fully derived from Model, not a second thing to
+                // pick by hand - DriverCandidates with a blank filterText is
+                // already preference-ordered (UFR II first - see
+                // MacModelCandidates' own doc comment), so its first result
+                // is exactly "the respective model-specific UFR II variant".
+                // Cleared back to "" (needs-value again) the moment the
+                // model text no longer resolves to a real one, so Driver
+                // never silently keeps pointing at a model that's no longer
+                // what's typed. Windows' own Kyocera model-narrowing is
+                // unaffected - this only runs for macModelDriven
+                // manufacturers, where the technician was never expected to
+                // pick Driver independently of Model at all.
+                if (macModelDriven(row.manufacturer)) {
+                    App.DriverCandidates(row.manufacturer, value, '').then((candidates) => {
+                        if (row.model !== value) return; // stale - model has since changed again
+                        const picked = candidates[0] || '';
+                        row.driver = picked;
+                        driverInput.value = picked;
+                        driverInput.classList.toggle('input-needs-value', !picked);
+                    });
+                }
+            },
             () => addPrinterRow(true),
         );
 
         const mfgSelect = tr.querySelector('.row-mfg');
-        mfgSelect.addEventListener('change', (e) => {
+        mfgSelect.addEventListener('change', async (e) => {
             row.manufacturer = e.target.value;
-            row.driver = '';
             row.model = '';
+            // Mirrors addPrinterRow's own "copy the Defaults panel's current
+            // Driver" - if the Defaults panel is itself already set to this
+            // same manufacturer, its current Driver value (auto-filled or a
+            // manual override the technician typed there) is exactly what
+            // this row should start with too; otherwise there's nothing
+            // relevant to inherit, so ask for that manufacturer's own fresh
+            // default the same way the Defaults panel itself would. On
+            // macOS this naturally comes out blank for a manufacturer with
+            // real per-model data (Canon) - DefaultDriverFor returns "" for
+            // those (see its own doc comment) since Driver isn't meaningful
+            // again until Model (now mandatory - see modelInput above) is
+            // actually picked.
+            row.driver = (el('defMfg').value === row.manufacturer) ? el('defDriver').value : await App.DefaultDriverFor(row.manufacturer);
             // Always tracks the newly-picked manufacturer's own default
             // (confirmed live: leaving a stale "raw" behind after switching
             // HP -> Ricoh read as a bug, not a preserved override) - unlike
@@ -1150,7 +1206,11 @@ function setupDefaultsComboboxes() {
         // No separate Model field here either - see the grid row driver
         // combobox's own comment.
         (filterText) => App.DriverCandidates(el('defMfg').value, '', filterText),
-        (value) => { el('defDriver').classList.toggle('input-needs-value', !value); },
+        // Blank is fine, not "needs a value", for a manufacturer with real
+        // per-model mac data (Canon) - the Defaults panel has no Model field
+        // to narrow by, so there's no single correct driver to require here
+        // (see DefaultDriverFor's own doc comment).
+        (value) => { el('defDriver').classList.toggle('input-needs-value', !value && !macModelDriven(el('defMfg').value)); },
     );
 }
 
@@ -1165,7 +1225,7 @@ async function resetDefaultsPanel() {
     mfgSelect.value = state.manufacturers[0] || '';
     mfgSelect.classList.toggle('input-needs-value', !mfgSelect.value);
     el('defDriver').value = mfgSelect.value ? await App.DefaultDriverFor(mfgSelect.value) : '';
-    el('defDriver').classList.toggle('input-needs-value', !el('defDriver').value);
+    el('defDriver').classList.toggle('input-needs-value', !el('defDriver').value && !macModelDriven(mfgSelect.value));
     if (!isMac()) {
         el('portPrefixEnabled').checked = false;
         state.portPrefixEnabled = false;
@@ -1268,7 +1328,7 @@ function wireEvents() {
     el('defMfg').addEventListener('change', async (e) => {
         e.target.classList.toggle('input-needs-value', !e.target.value);
         el('defDriver').value = await App.DefaultDriverFor(el('defMfg').value);
-        el('defDriver').classList.toggle('input-needs-value', !el('defDriver').value);
+        el('defDriver').classList.toggle('input-needs-value', !el('defDriver').value && !macModelDriven(el('defMfg').value));
     });
 
     el('selectAllHeader').addEventListener('change', (e) => {
@@ -2199,10 +2259,18 @@ function wireSettingsModal() {
             if (!status.ok) {
                 logStatus('ERR', `Driver catalog refresh failed: ${status.error}`);
             } else {
+                if (isMac()) {
+                    state.macModelManufacturers = new Set(await App.MacModelManufacturers());
+                }
                 const mfgSelect = el('defMfg');
                 if (mfgSelect.value) {
                     el('defDriver').value = await App.DefaultDriverFor(mfgSelect.value);
+                    el('defDriver').classList.toggle('input-needs-value', !el('defDriver').value && !macModelDriven(mfgSelect.value));
                 }
+                // A refresh can change which manufacturers have real
+                // per-model mac data - re-render so any already-added row's
+                // Model mandatory/optional styling reflects it.
+                renderGrid();
                 logStatus('OK', status.hasDrivers
                     ? 'Driver catalog refreshed.'
                     : 'Driver catalog refreshed - still no drivers found in the Drivers folder.');

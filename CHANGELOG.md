@@ -4,6 +4,86 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-12 - Canon Model/Driver: no more raw package-name defaults; auto-derive Driver from Model on macOS
+
+### Fixed
+- **`DefaultDriverFor` on macOS still defaulted the Defaults panel's Driver field to a raw package
+  label** (`"UFRII_v10.19.25_mac"` - the driver *package's* own filename, not a real driver name)
+  for any manufacturer with real per-model data (Canon), even after fixing `MacModelCandidates`'
+  own blank-model bug earlier today - `DefaultDriverFor` is a separate function and wasn't touched
+  by that fix. It now returns `""` for those manufacturers instead (`drivercatalog_darwin.go`) -
+  correct, since the Defaults panel has no Model field to narrow by at all, so there was never a
+  single genuinely-correct package to guess among Canon's UFR II/PostScript/Generic PPD. Every
+  other manufacturer (one real package, no ambiguity) is unaffected.
+
+### Added
+- **New `App.MacModelManufacturers()`** (macOS-only bound method) lists every manufacturer with
+  real per-model PPD data (Canon today), letting the frontend ask "does this manufacturer need
+  Model to pick a driver" without hardcoding a manufacturer name or exposing
+  `macFamilyPreference` directly. Backs three behavior changes, all conditioned on it
+  (`macModelDriven()` in `frontend/src/main.js`), platform-specific per Ken's own spec:
+  - **Windows, Manufacturer = Canon**: unaffected/confirmed-already-working - `DefaultDriverFor`
+    already resolves to "Canon Generic Plus UFR II" via the existing `defaultDriverTokens`
+    (`internal/driver/default.go`, `{"UFR", "II"}` - already ships from before this session). A
+    grid row's own Driver now auto-fills on Manufacturer change too (previously cleared to blank)
+    - the Defaults panel's own current Driver value when its Manufacturer already matches
+    (preserving a manual override the technician typed there), otherwise a fresh
+    `DefaultDriverFor` call for the newly-picked manufacturer - mirroring how `addPrinterRow`
+    already sources a *new* row's Driver. Model is unaffected: already optional, blank, typable,
+    and fuzzy-searched when data exists (Kyocera) - genuinely infeasible to extend to Canon's own
+    mac model data from Windows, since indexing it depends on `hdiutil`/`pkgutil` (macOS-only).
+  - **macOS, Manufacturer = Canon, Defaults panel**: Driver field is blank and no longer flagged
+    as needing a value (`DefaultDriverFor`'s own fix above, plus the needs-value toggle at every
+    call site now checking `macModelDriven`).
+  - **macOS, Manufacturer = Canon, grid row**: Model is now mandatory (flagged when blank) for a
+    macModelDriven manufacturer, and committing a Model (typed or picked) auto-fills Driver to
+    that model's own preferred variant - `DriverCandidates(manufacturer, model, "")`'s first
+    result, which is already preference-ordered UFR II-first (`MacModelCandidates`'s own doc
+    comment) - so this is exactly "the respective model-specific UFR II variant", with no new
+    Go-side lookup needed. Clears back to blank/needs-value the moment the typed Model text no
+    longer resolves to a real one, so Driver never silently keeps pointing at stale data.
+
+### Testing
+- `drivercatalog_darwin_test.go` (new): `TestDefaultDriverFor_BlankForManufacturerWithModelIndex`,
+  `TestDefaultDriverFor_NoModelIndexEntryUnaffected`,
+  `TestMacModelManufacturers_SortedKeysOfModelIndex`.
+
+## 2026-09-12 - Fix Canon Model/Driver dropdown collapsing to one raw label with Model blank
+
+### Fixed
+- **A real, previously-deferred bug, root-caused against Ken's own real Canon downloads**: with
+  Canon selected and Model left blank (the default state), the Driver dropdown showed exactly one
+  entry - a raw, unparsed label like `"UFRII_v10.19.25_mac"` - instead of the hundreds of real,
+  friendly model names the catalog actually has. Root cause: `MacModelCandidates`
+  (`internal/driver/macmodel.go`) calls `lookupMacModel` first, which treats a blank model as
+  "nothing to look up" and returns not-found - so `MacModelCandidates` returned `[]string{}` for
+  *any* blank Model, regardless of whether the index had data, and `App.DriverCandidates`
+  (`drivercatalog_darwin.go`) silently fell through to its `ResolveMac` fallback, which only ever
+  offers the single package it guessed was newest. Confirmed via a new `pdtdebugmac models`
+  command (see below) that `BuildMacModelIndex` itself was working perfectly all along - it
+  indexed all 641 of Ken's real Canon models correctly; the bug was entirely in how a blank Model
+  was handled one layer up.
+- **Fix**: `MacModelCandidates` now has its own blank-model branch - lists every variant of every
+  model the index has for the manufacturer (sorted alphabetically by model, then by
+  `macFamilyPreference`'s own language order within each), the same "un-narrowed, list everything"
+  behavior Windows' own `Candidates` (`internal/driver/candidates.go`) already has for a blank
+  model - `DriverCandidates`'s own doc comment claims to mirror that two-step Model-narrows-Driver
+  behavior, which requires the blank case to match too. `lookupMacModel` itself is untouched -
+  `MacVariantForDeploy`'s exact-match deploy-time lookup still correctly treats a blank model as
+  not-found there.
+- **`cmd/pdtdebugmac models <driversRoot>`** (new debug subcommand): builds the real
+  `BuildMacModelIndex` against real files and prints every manufacturer/model/variant it finds,
+  plus what `App.Models`/`App.DriverCandidates` would actually return - this is what surfaced the
+  bug precisely (full model index correct, `MacModelCandidates` alone empty for blank Model).
+- Also found and cleaned up in the same session: a stale, never-detached `.dmg` mount
+  (`/Volumes/CANON_MAC`) left over from an earlier catalog build - not the cause of this bug, but
+  a real resource leak worth knowing about if mounted-volume clutter ever comes up again.
+
+### Testing
+- `internal/driver/macmodel_test.go`: `TestMacModelCandidates_BlankModelListsEveryModel` - a blank
+  model returns every model's variants (both test fixture models), grouped by language then
+  sorted by model name, not the empty list this bug produced.
+
 ## 2026-09-12 - Log an entry when Refresh Drivers actually starts, not just when it finishes
 
 ### Fixed

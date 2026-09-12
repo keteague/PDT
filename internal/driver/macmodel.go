@@ -256,10 +256,43 @@ func MacModels(index MacModelIndex, manufacturer, filterText string) []string {
 // token order - UFR II before PostScript before Generic PPD for Canon) when
 // filterText is empty, matching ResolveMacFamily's own preference order
 // rather than an arbitrary map iteration order.
+//
+// A blank model lists every variant of every model index has for
+// manufacturer, not nothing - confirmed live as a real, previously-shipped
+// bug against a real Canon download (641 real models indexed successfully,
+// MacModelCandidates still returning empty for a blank Model because
+// lookupMacModel's own single-model lookup - the right behavior for
+// MacVariantForDeploy's exact-match use below, left untouched - treats a
+// blank model as "nothing to look up" rather than "everything"). Windows'
+// own Candidates (internal/driver/candidates.go) already does the
+// un-narrowed "list every driver name" thing when its own model is blank;
+// DriverCandidates' own doc comment claims this mirrors that same two-step
+// Model-narrows-Driver behavior, which requires the blank case to behave the
+// same way on both platforms - without this, DriverCandidates' own
+// ResolveMac fallback silently took over instead, collapsing the whole
+// dropdown down to Manufacturer's own single guessed package label the
+// moment Model wasn't narrowed down yet, on every real Canon download.
 func MacModelCandidates(index MacModelIndex, manufacturer, model, filterText string) []string {
-	_, variants, ok := lookupMacModel(index, manufacturer, model)
-	if !ok {
-		return []string{}
+	var variants []MacPPDVariant
+	if model == "" {
+		byModel := index[manufacturer]
+		if len(byModel) == 0 {
+			return []string{}
+		}
+		modelNames := make([]string, 0, len(byModel))
+		for m := range byModel {
+			modelNames = append(modelNames, m)
+		}
+		sort.Strings(modelNames)
+		for _, m := range modelNames {
+			variants = append(variants, byModel[m]...)
+		}
+	} else {
+		_, v, ok := lookupMacModel(index, manufacturer, model)
+		if !ok {
+			return []string{}
+		}
+		variants = v
 	}
 	tokens := macFamilyPreference[manufacturer]
 	rank := make(map[string]int, len(tokens))

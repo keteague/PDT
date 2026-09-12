@@ -62,6 +62,10 @@ export function ListRemovableDrives() {
   return window['go']['main']['App']['ListRemovableDrives']();
 }
 
+export function MacModelManufacturers() {
+  return window['go']['main']['App']['MacModelManufacturers']();
+}
+
 export function Manufacturers() {
   return window['go']['main']['App']['Manufacturers']();
 }

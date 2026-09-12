@@ -1,6 +1,10 @@
 package main
 
-import "PDT/internal/driver"
+import (
+	"sort"
+
+	"PDT/internal/driver"
+)
 
 // macCatalogSnapshot returns the current macCatalog/macModelIndex/catalogErr
 // under catalogMu's read lock - the darwin analog of catalogSnapshot
@@ -88,17 +92,44 @@ func (a *App) DriverCandidates(manufacturer, model, filterText string) []string 
 // locally, "" otherwise (an OpenPrinting-only manufacturer has no single
 // obvious default among its PPDs, same as Models/DefaultDriverFor's own
 // "nothing to pre-fill" case on Windows when a manufacturer has no rule).
-// Deliberately unaffected by the model index: the Defaults panel has no
-// Model field to narrow with at all (see setupDefaultsComboboxes in
-// frontend/src/main.js, which always passes model=""), so there's no
-// language variant to prefer over another here - this keeps returning
-// whichever package ResolveMac picks by newest mtime, same as before the
-// model index existed.
+//
+// "" too - deliberately, and not treated as a missing value (see
+// tip('driver') in frontend/src/main.js) - for a manufacturer with real
+// per-model data (MacModelManufacturers below, Canon today): the Defaults
+// panel has no Model field to narrow with at all, so there's no way to pick
+// a genuinely correct single default among that manufacturer's several
+// real driver packages (UFR II/PostScript/Generic PPD). This used to fall
+// through to ResolveMac's own newest-by-mtime guess instead, which surfaced
+// as a raw, unparsed package label like "UFRII_v10.19.25_mac" - not a real
+// driver name at all, and a real, previously-shipped bug (see CHANGELOG).
+// Every other manufacturer (one real package, no ambiguity to hide behind
+// blank) keeps the ResolveMac guess exactly as before.
 func (a *App) DefaultDriverFor(manufacturer string) string {
 	<-a.ready
-	catalog, _, _ := a.macCatalogSnapshot()
+	catalog, modelIndex, _ := a.macCatalogSnapshot()
+	if len(modelIndex[manufacturer]) > 0 {
+		return ""
+	}
 	if resolved := driver.ResolveMac(catalog, manufacturer); resolved != nil {
 		return resolved.Label
 	}
 	return ""
+}
+
+// MacModelManufacturers lists every manufacturer with real per-model PPD
+// data in the current model index (Canon today) - the frontend's own signal
+// for which manufacturers make the grid's Model field mandatory and drive
+// an auto-selected Driver once Model resolves (see tip('model')), and make
+// the Defaults panel's own Driver field optional (DefaultDriverFor above) -
+// without exposing macFamilyPreference's own internal manufacturer set
+// directly.
+func (a *App) MacModelManufacturers() []string {
+	<-a.ready
+	_, modelIndex, _ := a.macCatalogSnapshot()
+	out := make([]string, 0, len(modelIndex))
+	for mfg := range modelIndex {
+		out = append(out, mfg)
+	}
+	sort.Strings(out)
+	return out
 }

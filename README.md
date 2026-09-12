@@ -41,13 +41,11 @@ UAC-prompts every time, per its own manifest.
   LPD print queue, verified against real vendor packages and this machine's own real queues. `package
   main` now compiles and runs as a real macOS `.app`, with a reduced frontend UI for the Windows-only
   concepts (Spooler, SNMP/port config, APF, DEVMODE capture, app self-update) that have no CUPS/macOS
-  equivalent yet. Not yet installer-packaged. What's still genuinely open: the Canon model index
-  (`internal/driver/macmodel.go`) doesn't yet match every real-world Canon download - a technician's
-  own real UFR II package showed only one raw, unparsed label instead of the friendly model list
-  (not yet root-caused against that specific file); the open question of whether a real signed `.app`
-  avoids the ad-hoc-signing AMFI rejection a bare test binary hit; and each cached model/PPD entry
-  isn't yet tagged with which `.dmg`/`.pkg` it came from, so a rebuild can't skip re-inspecting
-  archives it's already indexed - see "macOS support" below and the Changelog for the current list.
+  equivalent yet. Not yet installer-packaged. What's still genuinely open: the open question of
+  whether a real signed `.app` avoids the ad-hoc-signing AMFI rejection a bare test binary hit; and
+  each cached model/PPD entry isn't yet tagged with which `.dmg`/`.pkg` it came from, so a rebuild
+  can't skip re-inspecting archives it's already indexed - see "macOS support" below and the
+  Changelog for the current list.
 - **Not started**: Linux support.
 
 ## Windows bindings (`internal/printer/windows`)
@@ -116,6 +114,32 @@ narrows to just that model's options. On macOS this matters for exactly the manu
 driver as separate packages (UFR II, PostScript, and a plain-PPD-only package, each supporting a
 different, overlapping-but-not-identical set of models) needs Model to know *which* package even
 applies, not just which PPD inside one package to pick.
+
+**Model is mandatory, and Driver is fully derived from it, for exactly these manufacturers - not
+just narrowed.** `App.MacModelManufacturers()` (`drivercatalog_darwin.go`) lists them (Canon
+today) without hardcoding a name in the frontend; `macModelDriven()` (`frontend/src/main.js`) is
+the one predicate every call site below keys off:
+- The grid row's own Model field is flagged (the same yellow `input-needs-value` styling
+  Name/IP/Driver already use) when left blank for one of these manufacturers, since there's no
+  single correct Driver to guess at without it.
+- Committing a Model (typed or picked) auto-fills Driver to `DriverCandidates(manufacturer,
+  model, "")`'s first result - already preference-ordered UFR II-first (see below), so this is
+  exactly "the model's own UFR II variant" with no extra Go-side lookup - and clears Driver back
+  to blank/flagged the moment the typed Model text stops resolving to a real one.
+- The **Defaults panel's own Driver field is blank and not flagged** for these manufacturers
+  (`App.DefaultDriverFor` returns `""` rather than guessing) - the Defaults panel has no Model
+  field to narrow by at all, so there's no single package it could honestly default to among
+  Canon's UFR II/PostScript/Generic PPD (a raw, unparsed package label like
+  `"UFRII_v10.19.25_mac"` used to leak through here - a real, previously-shipped bug).
+- A grid row's Driver also now auto-fills from the Defaults panel on a plain Manufacturer change
+  (previously cleared to blank) on **both** platforms - the Defaults panel's own current Driver
+  value when its Manufacturer already matches (preserving a manual override typed there),
+  otherwise a fresh per-manufacturer default. On Windows this is how a Canon row picks up "Canon
+  Generic Plus UFR II" automatically (`internal/driver/default.go`'s own `defaultDriverTokens`);
+  Windows' Model field itself is unaffected by any of the above - it stays optional, and fuzzy
+  search only ever has real data for Kyocera, since indexing Canon's own mac model data depends on
+  `hdiutil`/`pkgutil` (macOS-only tools) - a technician can still type a Model on Windows anyway,
+  for a config meant to be opened on a Mac later.
 
 **The catalog is built once, not re-inspected per deploy.** `driver.BuildMacModelIndex`
 (`internal/driver/macmodel.go`) runs at the same points `BuildMacCatalog` already does - app startup
@@ -193,10 +217,16 @@ detail worth knowing about, not a bug.
 
 ### `cmd/pdtdebugmac`
 
-The macOS analog of `cmd/pdtdebug` - `catalog`/`installpkg`/`deployqueue` commands for exercising the
-catalog/install/queue-creation codepaths by hand against real state, validated before the Wails UI
-could drive them directly. `installpkg`/`deployqueue` run real privileged commands and prompt for the
-admin password the same way a real Deploy does.
+The macOS analog of `cmd/pdtdebug` - `catalog`/`models`/`installpkg`/`deployqueue` commands for
+exercising the catalog/model-index/install/queue-creation codepaths by hand against real state,
+validated before the Wails UI could drive them directly. `installpkg`/`deployqueue` run real
+privileged commands and prompt for the admin password the same way a real Deploy does. `models
+<driversRoot>` builds the real `BuildMacModelIndex` and prints every manufacturer/model/variant it
+finds, plus what `App.Models`/`App.DriverCandidates` would actually return for a blank Model and
+filter - what surfaced a real, previously-shipped bug precisely: the model index itself was
+indexing real data correctly the whole time (641 real Canon models, confirmed live), while
+`MacModelCandidates` alone returned nothing for a blank Model (see "Model-driven PPD selection on
+macOS" above).
 
 ### `package main` on darwin
 

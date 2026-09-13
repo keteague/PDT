@@ -613,7 +613,12 @@ driver's own version string directly into the name (`"Xerox C300 Color Printer, 
 if a technician ever keeps two different Xerox driver versions side by side in the same
 OS-version folder, the same physical model would register as two different friendly model
 names rather than two coexisting variants of one model; no real file demonstrating this
-combination exists yet, so left alone rather than guessed at.
+combination exists yet, so left alone rather than guessed at. **Confirmed live**: Ken ran a
+real 2-row Xerox deploy against the rebuilt app - exactly 1 elevated prompt for both rows (full
+install completed in ~39s under that one prompt - slower than Ricoh/Sharp but still fast enough
+that no selective-install treatment is needed), no ColorModel warning on either row, and CUPS'
+own "Xerox Black and White" option showed the correct value for each row's own intended Mono
+setting.
 
 ### `cmd/pdtdebugmac`
 

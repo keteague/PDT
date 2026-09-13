@@ -50,6 +50,13 @@ Real Xerox files landed across 8 of them.
   model names rather than two coexisting variants of one model. No real file demonstrating this
   combination exists yet, so left alone rather than guessed at.
 
+**Confirmed live**: Ken ran a real 2-row Xerox deploy ("zChip Foo"/"zKey Peanut") against the
+rebuilt app - exactly 1 elevated prompt for both rows (the full install completed in ~39s
+under that one prompt - notably slower than Ricoh/Sharp but still comfortably fast enough that
+no selective-install treatment is needed), no ColorModel warning on either row, and CUPS' own
+"Xerox Black and White" option (the PPD's own label for `XROutputColor`) showed the correct
+value for the row's own intended Mono setting.
+
 
 
 Ken's own first real deploy against v0.9.5's Sharp support (2 rows, "zCom Two"/"zCom Three")

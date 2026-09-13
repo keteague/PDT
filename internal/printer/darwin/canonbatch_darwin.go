@@ -15,13 +15,16 @@ import (
 
 // canonBatchResult is PrepareBatch's own stored outcome for one row, read
 // back by that row's later Deploy() call instead of doing any privileged
-// work itself. planErr means planning itself failed (a bad model reference,
-// an unreadable package) - never attempted privileged execution at all, so
+// work itself. Despite the name (kept from when this only handled Canon),
+// this is manufacturer-agnostic now - see PrepareBatch's own doc comment.
+// planErr means planning itself failed (a bad model reference, an
+// unreadable package) - never attempted privileged execution at all, so
 // there's nothing to blame on the batch. A row absent from canonBatchResults
-// entirely wasn't something PrepareBatch could handle at all (not a
-// catalog-driven Canon UFR II row, or already had an existing queue to
-// reuse) - its own Deploy() call falls back to doing everything itself
-// exactly as before v0.6.9, unaffected by batching.
+// entirely wasn't something PrepareBatch could handle at all (a
+// manufacturer/shape it doesn't recognize, the guess-based fallback with no
+// catalog entry, or an existing queue to reuse) - its own Deploy() call
+// falls back to doing everything itself exactly as before batching existed,
+// unaffected.
 type canonBatchResult struct {
 	planErr          error
 	privilegedErr    error
@@ -33,35 +36,45 @@ type canonBatchResult struct {
 
 // canonBatchRowPlan is one row's own fully-resolved, not-yet-executed plan -
 // built once in PrepareBatch's first pass (all read-only/local work, no
-// privileged calls yet), then used to build that row's own script segment
+// privileged calls yet) by whichever manufacturer-specific planner
+// recognized this row's package shape (planCanonBatchRow,
+// planKyoceraBatchRow), then used to build that row's own script segment
 // and, after the one combined privileged call returns, to build its
-// canonBatchResult.
+// canonBatchResult. installScript is the fully-rendered "install the
+// manufacturer's own real components, then place this row's own PPD" shell
+// fragment - manufacturer-specific mechanics stay entirely inside whichever
+// planner built it; everything downstream (queue creation, defaults,
+// per-row result-file bookkeeping) is shared and doesn't care which
+// manufacturer produced it.
 type canonBatchRowPlan struct {
-	row             printer.PrinterRow
-	packagePath     string // variant.PackagePath - the cache key ensureInstalledOnce/canonCoreInstalledThisRun also use
-	ppdFilename     string
-	queueName       string
-	deviceURI       string
-	stageDir        string
-	flatCorePkgPath string // "" when this package's Core was already covered by an earlier plan in the same batch
-	extraArgs       []string
+	row              printer.PrinterRow
+	packagePath      string // variant.PackagePath - the cache key sharedComponentsInstalledThisRun also uses
+	ppdFilename      string
+	queueName        string
+	deviceURI        string
+	installScript    string
+	sharedInstalled  bool // true when this plan's own installScript includes the shared/real-components install (not just the PPD copy) - see sharedQueuedThisBatch's own use
+	extraArgs        []string
 	defaultsWarnings []string
 }
 
 // PrepareBatch implements printer.BatchPreparer - see that interface's own
-// doc comment for the full rationale. Scoped deliberately narrow: only rows
-// that resolve to a catalog-driven Canon UFR II-shaped package (
-// driver.MacVariantForDeploy finds an entry, and the package itself expands
-// to the expected Core/Device sub-package shape) AND don't already have an
-// existing queue to reuse get batched into the one combined elevated call.
-// Every other row (a different manufacturer, the guess-based fallback with
-// no catalog entry, a loose-PPD no-installer family, or a queue that
-// already exists) is left alone entirely - simply absent from
-// canonBatchResults afterward, so its own Deploy() call takes the exact same
-// path it always has, own separate prompts included. Confirmed-live
-// reasoning for this scope: it's the one path proven (repeatedly, this
-// session) correct end to end, and every row PDT has actually been
-// live-tested with so far falls inside it.
+// doc comment for the full rationale (getting down to one elevated prompt
+// for a whole multi-row deploy run instead of one, or several, per row).
+// Tries each manufacturer-specific planner in turn for every row
+// (planCanonBatchRow, planKyoceraBatchRow) - whichever recognizes the row's
+// actual package shape claims it; a row neither recognizes (a different
+// manufacturer entirely, the guess-based fallback with no catalog entry, a
+// loose-PPD no-installer family, or an existing queue to reuse) is left
+// alone completely, falling back to the old per-row path with its own
+// separate prompts, never a hard failure just because batching doesn't
+// apply. Confirmed-live reasoning for keeping this an explicit allowlist of
+// recognized shapes rather than a generic "try anything": each one so far
+// has needed its own real investigation against a real downloaded package
+// (Canon's Core/Device split, Kyocera's Distribution-XML-identified PPD
+// installer plus 15 real sub-packages) - guessing at a shape without one
+// risks exactly the kind of live-test-driven bug hunt both of these went
+// through before landing correctly.
 //
 // Per-row success/failure comes back through a plain results FILE
 // (`printf '%d:%d\n' <rowIndex> $? >> resultsFile`, one line per row's own
@@ -85,7 +98,7 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 	}()
 
 	var plans []canonBatchRowPlan
-	coreQueuedThisBatch := map[string]bool{}
+	sharedQueuedThisBatch := map[string]bool{}
 
 	for _, req := range reqs {
 		row := req.Row
@@ -112,7 +125,7 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 		}
 		cleanups = append(cleanups, cleanup)
 
-		expandDir, err := os.MkdirTemp("", "pdt-canon-batch-expand-*")
+		expandDir, err := os.MkdirTemp("", "pdt-mac-batch-expand-*")
 		if err != nil {
 			continue
 		}
@@ -122,40 +135,21 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 			continue
 		}
 
-		corePkgPath, devicePkgPath, ok := driver.CanonCoreDevicePackages(expanded)
-		if !ok {
-			continue // not Canon-UFR-II-shaped - not batched
+		plan, handled := planCanonBatchRow(ctx, row, variant, expandDir, expanded, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+		if !handled {
+			plan, handled = planKyoceraBatchRow(ctx, row, variant, expandDir, expanded, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
-
-		stageDir, err := os.MkdirTemp("", "pdt-canon-batch-stage-*")
-		if err != nil {
+		if !handled {
+			continue // not a recognized shape - not batched, falls back to the old per-row path
+		}
+		if plan.installScript == "" {
+			// A planner claimed this row (handled == true) but hit a real
+			// error partway through (e.g. selective extraction failed) -
+			// see planErr's own doc comment: this row gets a definite
+			// answer now rather than silently falling back, since falling
+			// back would just re-attempt the same doomed extraction anyway.
 			continue
 		}
-		cleanups = append(cleanups, func() { os.RemoveAll(stageDir) })
-		if err := driver.ExtractCanonDeviceFiles(devicePkgPath, variant.Filename, stageDir); err != nil {
-			d.canonBatchResults[row.Name] = canonBatchResult{planErr: fmt.Errorf("selectively extracting %s: %w", variant.Filename, err)}
-			continue
-		}
-
-		plan := canonBatchRowPlan{
-			row:         row,
-			packagePath: variant.PackagePath,
-			ppdFilename: variant.Filename,
-			queueName:   sanitizeCUPSQueueName(row.Name),
-			deviceURI:   deviceURI,
-			stageDir:    stageDir,
-		}
-
-		if !d.canonCoreInstalledThisRun[variant.PackagePath] && !coreQueuedThisBatch[variant.PackagePath] {
-			flatCorePkgPath := filepath.Join(expandDir, "core-flat.pkg")
-			if err := exec.CommandContext(ctx, "pkgutil", "--flatten", corePkgPath, flatCorePkgPath).Run(); err != nil {
-				continue // couldn't even flatten Core - leave this row unbatched, its own Deploy() call retries the old way
-			}
-			plan.flatCorePkgPath = flatCorePkgPath
-			coreQueuedThisBatch[variant.PackagePath] = true
-		}
-
-		plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromStagedPPD(stageDir, variant.Filename, row.OneSided, row.Mono, row.Name)
 
 		plans = append(plans, plan)
 	}
@@ -164,7 +158,7 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 		return
 	}
 
-	resultsFile, err := os.CreateTemp("", "pdt-canon-batch-results-*")
+	resultsFile, err := os.CreateTemp("", "pdt-mac-batch-results-*")
 	if err != nil {
 		return // every planned row simply stays absent from canonBatchResults - falls back to the old per-row path
 	}
@@ -174,21 +168,12 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 
 	var script strings.Builder
 	for i, p := range plans {
-		base := driver.CanonPPDBaseName(p.ppdFilename)
-		recipeBundleDir := filepath.Join(canonRecipeDir, base+".bundle")
-		recipeSymlink := filepath.Join(canonRecipeDir, base+".rcp")
 		ppdDest := filepath.Join(ppdResourcesDir, p.ppdFilename)
 		queueArgv := buildEnsureQueueArgv(p.queueName, p.deviceURI, ppdDest, QueueOptions{Description: p.row.Name, Shared: true, ExtraOptionArgs: p.extraArgs})
 
 		script.WriteString("( ")
-		if p.flatCorePkgPath != "" {
-			fmt.Fprintf(&script, "installer -pkg %s -target / && ", singleQuoteShellArg(p.flatCorePkgPath))
-		}
-		fmt.Fprintf(&script, "cp -RX %s/. /Library/ && ", singleQuoteShellArg(filepath.Join(p.stageDir, "Library")))
-		fmt.Fprintf(&script, "chown -Rh root:admin %s %s && ", singleQuoteShellArg(recipeBundleDir), singleQuoteShellArg(recipeSymlink))
-		fmt.Fprintf(&script, "chmod 644 %s && ", singleQuoteShellArg(ppdDest))
-		fmt.Fprintf(&script, "find %s -type d -exec chmod 755 {} + && find %s -type f -exec chmod 644 {} + && ",
-			singleQuoteShellArg(recipeBundleDir), singleQuoteShellArg(recipeBundleDir))
+		script.WriteString(p.installScript)
+		script.WriteString(" && ")
 		script.WriteString(quoteShellCommand(queueArgv))
 		fmt.Fprintf(&script, " ) ; printf '%%d:%%d\\n' %d $? >> %s ; ", i, singleQuoteShellArg(resultsPath))
 	}
@@ -217,7 +202,7 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 	for i, p := range plans {
 		rc, ran := rowRC[i]
 		result := canonBatchResult{
-			ppdPath:          filepath.Join(ppdResourcesDir, p.ppdFilename),
+			ppdPath:          ppdDestFor(p.ppdFilename),
 			queueName:        p.queueName,
 			deviceURI:        p.deviceURI,
 			defaultsWarnings: p.defaultsWarnings,
@@ -235,11 +220,119 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 		case rc != 0:
 			result.privilegedErr = fmt.Errorf("batched install/queue-create failed (exit %d)", rc)
 		}
-		if p.flatCorePkgPath != "" && ran && rc == 0 {
-			d.canonCoreInstalledThisRun[p.packagePath] = true
+		// A later, non-batched row needing this same package (e.g. one that
+		// fell through to the old per-row path for an unrelated reason)
+		// shouldn't pay to reinstall the shared/real components again -
+		// ensureInstalledOnce/installCanonSelective/installKyoceraSelective
+		// all check this same map.
+		if p.sharedInstalled && ran && rc == 0 {
+			d.sharedComponentsInstalledThisRun[p.packagePath] = true
 		}
 		d.canonBatchResults[p.row.Name] = result
 	}
+}
+
+func ppdDestFor(ppdFilename string) string {
+	return filepath.Join(ppdResourcesDir, ppdFilename)
+}
+
+// planCanonBatchRow is PrepareBatch's own Canon-specific planner - see
+// installCanonSelective's doc comment for the underlying mechanics
+// (identical here, just building a script fragment to return rather than
+// running it directly). handled reports whether the package matched Canon's
+// own UFR-II Core/Device shape at all; a real error mid-plan (extraction
+// failing) still reports handled=true with plan.installScript left empty,
+// so the row gets a definite planErr result rather than silently falling
+// back to re-attempt the same doomed extraction through the old path.
+func planCanonBatchRow(ctx context.Context, row printer.PrinterRow, variant driver.MacPPDVariant, expandDir, expanded, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+	corePkgPath, devicePkgPath, ok := driver.CanonCoreDevicePackages(expanded)
+	if !ok {
+		return canonBatchRowPlan{}, false
+	}
+
+	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
+
+	stageDir, err := os.MkdirTemp("", "pdt-canon-batch-stage-*")
+	if err != nil {
+		return plan, true
+	}
+	*cleanups = append(*cleanups, func() { os.RemoveAll(stageDir) })
+	if err := driver.ExtractCanonDeviceFiles(devicePkgPath, variant.Filename, stageDir); err != nil {
+		return plan, true
+	}
+
+	var flatCorePkgPath string
+	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
+		flatCorePkgPath = filepath.Join(expandDir, "core-flat.pkg")
+		if err := exec.CommandContext(ctx, "pkgutil", "--flatten", corePkgPath, flatCorePkgPath).Run(); err != nil {
+			return plan, true
+		}
+		sharedQueuedThisBatch[variant.PackagePath] = true
+		plan.sharedInstalled = true
+	}
+
+	base := driver.CanonPPDBaseName(variant.Filename)
+	recipeBundleDir := filepath.Join(canonRecipeDir, base+".bundle")
+	recipeSymlink := filepath.Join(canonRecipeDir, base+".rcp")
+	ppdDest := ppdDestFor(variant.Filename)
+
+	var s strings.Builder
+	if flatCorePkgPath != "" {
+		fmt.Fprintf(&s, "installer -pkg %s -target / && ", singleQuoteShellArg(flatCorePkgPath))
+	}
+	fmt.Fprintf(&s, "cp -RX %s/. /Library/ && ", singleQuoteShellArg(filepath.Join(stageDir, "Library")))
+	fmt.Fprintf(&s, "chown -Rh root:admin %s %s && ", singleQuoteShellArg(recipeBundleDir), singleQuoteShellArg(recipeSymlink))
+	fmt.Fprintf(&s, "chmod 644 %s && ", singleQuoteShellArg(ppdDest))
+	fmt.Fprintf(&s, "find %s -type d -exec chmod 755 {} + && find %s -type f -exec chmod 644 {} +",
+		singleQuoteShellArg(recipeBundleDir), singleQuoteShellArg(recipeBundleDir))
+	plan.installScript = s.String()
+	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromStagedCanonPPD(stageDir, variant.Filename, row.OneSided, row.Mono, row.Name)
+	return plan, true
+}
+
+// planKyoceraBatchRow is PrepareBatch's own Kyocera-specific planner -
+// installKyoceraSelective's own sibling, same "build a script fragment
+// instead of running it" adaptation planCanonBatchRow makes.
+func planKyoceraBatchRow(ctx context.Context, row printer.PrinterRow, variant driver.MacPPDVariant, expandDir, expanded, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+	ppdInstallerPkgPath, otherPkgPaths, ok := driver.KyoceraSelectivePackages(expanded)
+	if !ok {
+		return canonBatchRowPlan{}, false
+	}
+
+	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
+
+	stageDir, err := os.MkdirTemp("", "pdt-kyocera-batch-stage-*")
+	if err != nil {
+		return plan, true
+	}
+	*cleanups = append(*cleanups, func() { os.RemoveAll(stageDir) })
+	if err := driver.ExtractKyoceraPPD(ppdInstallerPkgPath, variant.Filename, stageDir); err != nil {
+		return plan, true
+	}
+
+	var s strings.Builder
+	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
+		var flatPaths []string
+		for _, p := range otherPkgPaths {
+			flat := p + "-flat.pkg"
+			if err := exec.CommandContext(ctx, "pkgutil", "--flatten", p, flat).Run(); err != nil {
+				return plan, true // couldn't flatten one - report as a real planErr rather than silently falling back
+			}
+			flatPaths = append(flatPaths, flat)
+		}
+		for _, flat := range flatPaths {
+			fmt.Fprintf(&s, "installer -pkg %s -target / && ", singleQuoteShellArg(flat))
+		}
+		sharedQueuedThisBatch[variant.PackagePath] = true
+		plan.sharedInstalled = true
+	}
+
+	ppdDest := ppdDestFor(variant.Filename)
+	fmt.Fprintf(&s, "cp -RX %s/. %s/ && ", singleQuoteShellArg(stageDir), singleQuoteShellArg(ppdResourcesDir))
+	fmt.Fprintf(&s, "chown root:admin %s && chmod 644 %s", singleQuoteShellArg(ppdDest), singleQuoteShellArg(ppdDest))
+	plan.installScript = s.String()
+	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromStagedFlatPPD(stageDir, variant.Filename, row.OneSided, row.Mono, row.Name)
+	return plan, true
 }
 
 // deployFromBatchResult builds row's own DeployResult straight from
@@ -268,15 +361,28 @@ func (d *Deployer) deployFromBatchResult(row printer.PrinterRow, result canonBat
 	return printer.DeployResult{RowName: row.Name, Log: log.Lines(), Err: nil}
 }
 
-// decidePrintDefaultsFromStagedPPD is PrintDefaultsForNewQueue's own logic,
-// fed from a batch plan's own staged PPD copy (under stageDir, extracted by
-// driver.ExtractCanonDeviceFiles) rather than the final system destination -
-// the batch plans this *before* anything has actually been copied into
-// place, so the final path doesn't exist yet at planning time; the staged
-// copy has byte-identical content.
-func decidePrintDefaultsFromStagedPPD(stageDir, ppdFilename string, oneSided, mono bool, rowName string) (toSet, warnings []string) {
+// decidePrintDefaultsFromStagedCanonPPD is PrintDefaultsForNewQueue's own
+// logic, fed from a Canon batch plan's own staged PPD copy (under stageDir,
+// extracted by driver.ExtractCanonDeviceFiles - a nested
+// Library/Printers/PPDs/Contents/Resources/<file> nested destination path)
+// rather than the final system destination - the batch plans this *before*
+// anything has actually been copied into place, so the final path doesn't
+// exist yet at planning time; the staged copy has byte-identical content.
+func decidePrintDefaultsFromStagedCanonPPD(stageDir, ppdFilename string, oneSided, mono bool, rowName string) (toSet, warnings []string) {
 	stagedPPDPath := filepath.Join(stageDir, "Library", "Printers", "PPDs", "Contents", "Resources", ppdFilename)
-	opts, err := readPPDFileOptions(stagedPPDPath)
+	return decidePrintDefaultsFromPath(stagedPPDPath, oneSided, mono, rowName)
+}
+
+// decidePrintDefaultsFromStagedFlatPPD is the same idea, for a Kyocera batch
+// plan's own staged PPD copy - a flat file directly under stageDir (no
+// nested Library/... path the way Canon's own staged tree has - see
+// driver.ExtractKyoceraPPD's own doc comment for why).
+func decidePrintDefaultsFromStagedFlatPPD(stageDir, ppdFilename string, oneSided, mono bool, rowName string) (toSet, warnings []string) {
+	return decidePrintDefaultsFromPath(filepath.Join(stageDir, ppdFilename), oneSided, mono, rowName)
+}
+
+func decidePrintDefaultsFromPath(ppdPath string, oneSided, mono bool, rowName string) (toSet, warnings []string) {
+	opts, err := readPPDFileOptions(ppdPath)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("could not read staged PPD options for row %q: %v", rowName, err)}
 	}

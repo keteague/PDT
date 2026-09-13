@@ -92,12 +92,21 @@ func TestResolveMacFamily_BlankModelFallsBackWithNote(t *testing.T) {
 
 func TestResolveMacFamily_ManufacturerWithNoFamilyTableBehavesLikeResolveMac(t *testing.T) {
 	cat := testMacCatalog(t) // the plain (non-family) fixture from macresolve_test.go
-	resolved, note := ResolveMacFamily(cat, "Kyocera", "anything")
+	// "Ricoh", not "Kyocera" - Kyocera got its own single-token
+	// macFamilyPreference entry (see macfamily.go's own doc comment) once it
+	// got a real model index built, so it's no longer a valid example of "a
+	// manufacturer with no family table at all". Ricoh has no installer-
+	// package fixture either (only an OpenPrinting bucket one, unrelated to
+	// catalog.Packages) and no macFamilyPreference entry, so both calls
+	// below should agree there's nothing to resolve - both nil, no note -
+	// purely from ResolveMacFamily's own len(tokens)==0 short-circuit, never
+	// reaching the family-matching logic at all.
+	resolved, note := ResolveMacFamily(cat, "Ricoh", "anything")
 	if note != "" {
 		t.Errorf("expected no note for a manufacturer with no family table, got %q", note)
 	}
-	plain := ResolveMac(cat, "Kyocera")
-	if resolved == nil || plain == nil || resolved.Path != plain.Path {
-		t.Errorf("expected ResolveMacFamily to match ResolveMac exactly for a non-family manufacturer: got %v vs %v", resolved, plain)
+	plain := ResolveMac(cat, "Ricoh")
+	if resolved != nil || plain != nil {
+		t.Errorf("expected both ResolveMacFamily and ResolveMac to return nil for a manufacturer with no installer package at all: got %v vs %v", resolved, plain)
 	}
 }

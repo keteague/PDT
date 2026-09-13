@@ -18,6 +18,20 @@ import (
 // listed here has no family concept at all.
 var macFamilyPreference = map[string][]string{
 	"Canon": {"UFRII", "PS", "PPD"},
+
+	// Kyocera ships exactly one real driver package (its own "Web Build"
+	// download, e.g. "Kyocera Web build 2026.07.03.dmg") - no genuinely
+	// distinct driver families to choose between the way Canon has. A
+	// single "Kyocera" token still gets it a real model index (see
+	// BuildMacModelIndex) rather than the guess-based post-install fallback
+	// every other single-package manufacturer uses: classifyMacFamily's
+	// substring match against "Kyocera" trivially matches any real Kyocera
+	// download's own filename (the manufacturer's own name is always in
+	// there), so newestInFamily degrades to "whichever package is newest"
+	// the same way ResolveMac's plain single-package case already works -
+	// this is purely what unlocks the model-index code path, not a real
+	// multi-family preference list.
+	"Kyocera": {"Kyocera"},
 }
 
 // classifyMacFamily returns which of tokens appears in path's own basename

@@ -116,6 +116,17 @@ type subPackageResult struct {
 // matching entries (0.2-0.4s, 25MB - a ~20x wall-clock cut on the dominant
 // cost of building the mac model index, timed the same way).
 func packagePPDEntries(pkgPath string) ([]ppdEntry, []subPackageResult, error) {
+	return packagePPDEntriesFiltered(pkgPath, nil)
+}
+
+// packagePPDEntriesFiltered is packagePPDEntries, with an optional extra
+// step between expanding and extracting: given the freshly-expanded tree,
+// restrict computes which sub-package(s) selective PPD extraction is
+// allowed to draw from (nil restrict, or a false ok, means "every
+// sub-package with a Payload" - every manufacturer except Kyocera today).
+// See kyoceraRestrictSubPackages (mackyocera.go) for the one real caller
+// and why it's needed.
+func packagePPDEntriesFiltered(pkgPath string, restrict func(expandDir string) (allow map[string]bool, ok bool)) ([]ppdEntry, []subPackageResult, error) {
 	tmpDir, err := os.MkdirTemp("", "pdt-ppdinspect-*")
 	if err != nil {
 		return nil, nil, err
@@ -127,8 +138,15 @@ func packagePPDEntries(pkgPath string) ([]ppdEntry, []subPackageResult, error) {
 		return nil, nil, fmt.Errorf("expanding %s: %w", pkgPath, err)
 	}
 
+	var allow map[string]bool
+	if restrict != nil {
+		if a, ok := restrict(expandDir); ok {
+			allow = a
+		}
+	}
+
 	extractDir := filepath.Join(tmpDir, "ppds")
-	subs := extractPPDsFromExpandedPkg(expandDir, extractDir)
+	subs := extractPPDsFromExpandedPkgFiltered(expandDir, extractDir, allow)
 
 	var entries []ppdEntry
 	_ = filepath.WalkDir(extractDir, func(path string, d fs.DirEntry, err error) error {
@@ -164,12 +182,29 @@ func packagePPDEntries(pkgPath string) ([]ppdEntry, []subPackageResult, error) {
 // with nothing in it, which packagePPDEntries' own caller already treats as
 // "no PPDs found", not an error.
 func extractPPDsFromExpandedPkg(expandDir, destDir string) []subPackageResult {
+	return extractPPDsFromExpandedPkgFiltered(expandDir, destDir, nil)
+}
+
+// extractPPDsFromExpandedPkgFiltered is extractPPDsFromExpandedPkg, with an
+// optional allow-list restricting which sub-package directory *names* get
+// walked at all - nil means every sub-package with a Payload, same as
+// before (every manufacturer except Kyocera today). Kyocera's own real "Web
+// Build" package ships the identical PPD set duplicated across 3
+// sub-packages (a baseline installer plus two that only patch a default
+// value into an otherwise byte-identical copy afterward, confirmed live) -
+// without this, every model would get indexed 3 times over with completely
+// duplicate variants. See kyoceraRestrictSubPackages (mackyocera.go) for the
+// one real caller.
+func extractPPDsFromExpandedPkgFiltered(expandDir, destDir string, allow map[string]bool) []subPackageResult {
 	var subs []subPackageResult
 	_ = filepath.WalkDir(expandDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || d.Name() != "Payload" {
 			return nil
 		}
 		pkgDir := filepath.Dir(path)
+		if allow != nil && !allow[filepath.Base(pkgDir)] {
+			return nil
+		}
 		f, ferr := os.Open(path)
 		if ferr != nil {
 			return nil
@@ -186,7 +221,14 @@ func extractPPDsFromExpandedPkg(expandDir, destDir string) []subPackageResult {
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			return nil
 		}
-		cmd := exec.Command("cpio", "-idm", "--quiet", "*.ppd", "*.ppd.gz")
+		// Four patterns, not two - cpio's own glob matching is
+		// case-sensitive, and a real Kyocera "Web Build" download mixes
+		// both extension cases in the same sub-package (confirmed live:
+		// 124 real PPDs named "*.ppd", 336 named "*.PPD" - lowercase-only
+		// patterns silently dropped 73% of Kyocera's own real model
+		// coverage, discovered only once the model count came back
+		// suspiciously low against the real BOM's own 460-file count).
+		cmd := exec.Command("cpio", "-idm", "--quiet", "*.ppd", "*.PPD", "*.ppd.gz", "*.PPD.gz")
 		cmd.Dir = sub
 		cmd.Stdin = gz
 		_ = cmd.Run()

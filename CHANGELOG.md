@@ -4,6 +4,122 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-12 (v0.7.2) - macOS: extend the 1-auth-prompt batching to Kyocera
+
+Ken confirmed v0.7.1's Kyocera install itself now works correctly and completes quickly, but still
+cost 4 separate native auth prompts for a 2-row deploy - the "batch every row into one elevated
+call" work from v0.6.9 only recognized Canon UFR II-shaped packages, so every Kyocera row was
+still taking the old, unbatched, 2-prompts-per-row path.
+
+### Added
+- **`PrepareBatch` now recognizes Kyocera rows too**, not just Canon. Refactored into a
+  manufacturer-agnostic core (`canonBatchRowPlan.installScript` - a fully-rendered "install the
+  manufacturer's own real components, then place this row's own PPD" shell fragment) plus two
+  separate planners (`planCanonBatchRow`, `planKyoceraBatchRow`) that each build one using exactly
+  the same mechanics their own non-batched `installCanonSelective`/`installKyoceraSelective`
+  already use - just returning a string instead of running it immediately. Whichever planner
+  recognizes a row's actual package shape claims it; everything else (a different manufacturer, the
+  guess-based fallback, a loose-PPD family, or an existing queue) still falls back to the old
+  per-row path unaffected. Confirmed live: 1 auth prompt for a 2-row same-package Canon deploy
+  already proved the underlying mechanism; this extends the same mechanism to a second
+  manufacturer's own real package shape.
+- The per-run "shared components already installed" cache (`sharedComponentsInstalledThisRun`) is
+  now correctly updated after a batched run too, not just after the old non-batched path - a later
+  row needing the same package (batched or not) never pays to reinstall it twice.
+
+Also confirmed live and not a bug: a genuinely monochrome-only Kyocera model (`ECOSYS MA4500ifx`,
+`*ColorDevice: False`) correctly warns "no ColorModel option" - its only "Color"-named PPD option
+(`*WmColor`) is for watermark tint, unrelated to print color mode.
+
+**Confirmed live**: a 2-row same-package Kyocera deploy (`TASKalfa 2550ci` + `TASKalfa 6052ci`)
+completed both rows' install+queue-create within the same second after a single wait for the auth
+prompt - the batched path, not the old 2-prompts-per-row fallback.
+
+## 2026-09-12 (v0.7.1) - macOS: fix v0.7.0's Kyocera install (one sub-package can't install under this elevation mechanism)
+
+Found live testing v0.7.0's own selective Kyocera install: both rows failed with `PKInstallErrorDomain
+Code=120 "An unexpected error occurred while moving files to the final destination."`, after 6 of
+16 sub-packages had already installed successfully.
+
+### Fixed
+- **"Print Panel App" (a GUI status/monitoring utility) is the only one of Kyocera's 19 choices
+  whose own `PackageInfo` declares `install-location="/Applications"`** - every other real choice
+  targets `/Library/...`, `/usr/libexec/cups/filter`, or `/Library/PreferencePanes`. Got real
+  verbose installer output (`installer -verboseR -dumplog`, run directly rather than guessed at) to
+  find the actual underlying error: `NSPOSIXErrorDomain Code=1 "Operation not permitted"` inside
+  PackageKit's own sandboxed install, specifically while moving files into `/Applications` - not
+  something a script-side workaround like `-X` or `--flatten` can fix, since the failure is inside
+  `installer`'s own internal move, not anything PDT's own command controls. Very likely a TCC/SIP-
+  related restriction on this specific elevation mechanism that a real, GUI-driven `Installer.app`
+  run wouldn't hit. Skipped entirely rather than risked further - a GUI status app isn't required
+  for actual CUPS printing (the real functional pieces - CUPS filters, PDEs, the driver Framework -
+  all target `/Library`/`/usr` and already installed successfully).
+
+**Not yet re-verified with a real deploy** - confirmed via `pkgutil`/direct inspection that Print
+Panel App is now correctly excluded from the "install for real" list (15 remaining, down from 16),
+and confirmed all 15 still flatten successfully (non-privileged). A live re-test of the full
+privileged install is still needed - two attempts to self-verify this round went unanswered rather
+than actually failing (no error, no partial state left behind either).
+
+## 2026-09-12 (v0.7.0) - macOS: generalize the model catalog + selective install past Canon (Kyocera)
+
+Ken reported a real Kyocera install taking 3-5+ minutes and asked for "a custom installer like we
+did for Canon" - the first real second-manufacturer case for the "generalize past Canon" work
+noted as a future item throughout this project's own history (tracked in
+[github.com/keteague/PDT/issues/2](https://github.com/keteague/PDT/issues/2), now addressed for
+Kyocera specifically).
+
+### Added
+- **Kyocera now gets a real, catalog-driven model index**, the same as Canon - previously Kyocera
+  had no `macFamilyPreference` entry at all, so Model resolved only through the older guess-based
+  install-then-diff-then-fuzzy-match fallback. `internal/driver/mackyocera.go` parses a Kyocera
+  "Web Build" Distribution's own `<pkg-ref>` bundle identifiers (far more stable across different
+  downloads than file names - Kyocera's own web-based driver-builder tool names the outer
+  `.dmg`/`.pkg` after the build date) to identify its baseline PPD-only sub-package.
+- **Selective Kyocera install** (`internal/printer/darwin/kyoceraselective_darwin.go`,
+  `installCanonSelective`'s own sibling) - installs the 16 real functional sub-packages (driver
+  framework/CUPS filters/PDEs/Print Panel App/etc) for real, then `cpio`-extracts just the *one*
+  target model's own PPD out of the baseline installer's Payload - never running the "Duplex On"
+  or "Net Manager On" choices' own installer at all. Both were confirmed to ship the exact
+  byte-identical PPD set as the baseline, differing only in a default value each one's own
+  postinstall script patches in afterward via a slow per-file `sed`+`cp` shell loop (which itself
+  also re-scans every PPD already installed on the machine looking for duplicate device IDs to
+  remove first) - since PDT already sets duplex/color defaults itself via `lpadmin` after queue
+  creation, neither patched variant was ever useful here.
+- Extended `extractPPDsFromExpandedPkg`/`packagePPDEntries` with an optional sub-package
+  allow-list (`extractPPDsFromExpandedPkgFiltered`/`packagePPDEntriesFiltered`) so Kyocera's own
+  catalog indexing can restrict itself to just the one real PPD source, never the two redundant
+  variants - without this, every Kyocera model would have been indexed 3 times over with
+  completely duplicate entries.
+
+### Fixed
+- **A real, shared-code bug found investigating the above**: `extractPPDsFromExpandedPkg`'s own
+  `cpio` extraction pattern only matched lowercase `*.ppd`/`*.ppd.gz` - `cpio`'s glob matching is
+  case-sensitive, and a real Kyocera download mixes both extension cases in the very same
+  sub-package (confirmed live: 124 real PPDs named `*.ppd`, 336 named `*.PPD`). This silently
+  dropped 73% of Kyocera's own real model coverage from the catalog - caught only because the
+  indexed model count (124) came back suspiciously low against the real BOM's own file count
+  (460), not from any error or warning. Now matches all four case combinations
+  (`*.ppd`/`*.PPD`/`*.ppd.gz`/`*.PPD.gz`); confirmed live the full 460-model set now indexes
+  correctly. This was latent, not previously triggered, for every other manufacturer inspected so
+  far (Canon's own real downloads happen to use consistent lowercase extensions throughout).
+
+### Testing
+- `TestExtractPPDsFromExpandedPkg_CaseInsensitiveExtensions` (new) - builds a real gzip-compressed
+  cpio archive via the system `cpio`/`gzip` tools directly (no synthetic byte-format guessing) and
+  confirms both a lowercase- and uppercase-extension PPD get extracted; confirmed this test
+  actually fails without the fix by temporarily reverting it.
+- `TestResolveMacFamily_ManufacturerWithNoFamilyTableBehavesLikeResolveMac`,
+  `TestBuildMacModelIndex_ManufacturerWithNoFamilyTableIsAbsent`: updated to use "Ricoh" instead of
+  "Kyocera" as the "manufacturer with no family table" example, since Kyocera now has one.
+
+**Not yet verified with a real deploy** - static/non-privileged verification only this round: the
+real Distribution XML parsing, sub-package identification, PPD extraction, and all 16 sub-package
+flattens were each confirmed against the real downloaded Kyocera package (`pkgutil`/`cpio`, no
+root needed for any of it), and the full 460-model catalog now builds and caches correctly. The
+actual privileged install path (`installer -pkg` × 16 + the PPD copy, all in one elevated call)
+has not yet been exercised live - needs a real Kyocera deploy to confirm end to end.
+
 ## 2026-09-12 (v0.6.9) - macOS: batch every Canon row's privileged work into one elevated call per deploy run
 
 Ken asked explicitly for this after a 2-row deploy still cost 4 separate native auth prompts (1

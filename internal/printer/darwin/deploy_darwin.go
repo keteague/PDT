@@ -36,7 +36,7 @@ type Deployer struct {
 	// internal/printer/batch.go), so this needs no locking.
 	installedThisRun map[string][]string
 
-	// canonCoreInstalledThisRun is installCanonSelective's own equivalent
+	// sharedComponentsInstalledThisRun is installCanonSelective's own equivalent
 	// cache, keyed the same way (by packagePath) but bool-valued rather than
 	// a PPD list - the selective path never needs a post-install PPD diff at
 	// all (it already knows exactly which one PPD it placed), only whether
@@ -46,7 +46,7 @@ type Deployer struct {
 	// install but each still get their own PPD+Recipe placement (see
 	// installCanonSelective's own doc comment for why that part is never
 	// cached/skipped).
-	canonCoreInstalledThisRun map[string]bool
+	sharedComponentsInstalledThisRun map[string]bool
 
 	// canonBatchResults holds PrepareBatch's own pre-computed, already-
 	// executed outcome for every row it could handle (keyed by row.Name) -
@@ -59,10 +59,10 @@ type Deployer struct {
 
 func NewDeployer(catalog driver.MacCatalog, modelIndex driver.MacModelIndex) *Deployer {
 	return &Deployer{
-		Catalog:                   catalog,
-		ModelIndex:                modelIndex,
-		installedThisRun:          map[string][]string{},
-		canonCoreInstalledThisRun: map[string]bool{},
+		Catalog:                          catalog,
+		ModelIndex:                       modelIndex,
+		installedThisRun:                 map[string][]string{},
+		sharedComponentsInstalledThisRun: map[string]bool{},
 	}
 }
 
@@ -351,9 +351,20 @@ func (d *Deployer) installVariant(ctx context.Context, variant driver.MacPPDVari
 	// unexpected/future Canon layout) - falls back to the plain full-package
 	// install below, never a hard failure just because the optimization
 	// doesn't apply.
-	handled, err := installCanonSelective(ctx, variant.PackagePath, variant.Filename, d.canonCoreInstalledThisRun, log)
+	handled, err := installCanonSelective(ctx, variant.PackagePath, variant.Filename, d.sharedComponentsInstalledThisRun, log)
 	if err != nil {
 		return "", fmt.Errorf("installing %s: %w", variant.PackagePath, err)
+	}
+	if !handled {
+		// Kyocera's own "Web Build" fast path - installCanonSelective's
+		// sibling, see kyoceraselective_darwin.go's own doc comment. Same
+		// handled==false fallback contract: a different manufacturer, or an
+		// unexpected/future Kyocera "Web Build" layout, degrades to the
+		// plain full-package install below rather than a hard failure.
+		handled, err = installKyoceraSelective(ctx, variant.PackagePath, variant.Filename, d.sharedComponentsInstalledThisRun, log)
+		if err != nil {
+			return "", fmt.Errorf("installing %s: %w", variant.PackagePath, err)
+		}
 	}
 	if !handled {
 		resolved := &driver.ResolvedMacPackage{Path: variant.PackagePath, Label: variant.NickName}

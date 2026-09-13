@@ -15,9 +15,10 @@ import (
 // a technician would actually read them rather than as a bare filename
 // fragment.
 var macLanguageDisplayNames = map[string]string{
-	"UFRII": "UFR II",
-	"PS":    "PostScript",
-	"PPD":   "Generic PPD",
+	"UFRII":   "UFR II",
+	"PS":      "PostScript",
+	"PPD":     "Generic PPD",
+	"Kyocera": "Driver",
 }
 
 func languageDisplayName(token string) string {
@@ -121,14 +122,27 @@ func isJapanMarketOnly(nickName string) bool {
 // it's read from won't still be mounted at deploy time. cacheDir == ""
 // skips the loose-PPD fallback entirely (nowhere to persist a copy) rather
 // than erroring - the caller just gets fewer variants indexed.
-func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir string) (map[string][]MacPPDVariant, MacFamilyProvenance) {
+// macSubPackageRestrictor returns indexFamilyPackage's own sub-package
+// restrictor for a manufacturer, or nil for every manufacturer whose whole
+// Distribution shape doesn't need one (everyone except Kyocera today - see
+// kyoceraRestrictSubPackages' own doc comment for why Kyocera specifically
+// needs one: its "Web Build" Distribution ships the identical PPD set
+// duplicated across 3 sub-packages).
+func macSubPackageRestrictor(manufacturer string) func(expandDir string) (map[string]bool, bool) {
+	if manufacturer == "Kyocera" {
+		return kyoceraRestrictSubPackages
+	}
+	return nil
+}
+
+func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir string, restrict func(expandDir string) (map[string]bool, bool)) (map[string][]MacPPDVariant, MacFamilyProvenance) {
 	out := map[string][]MacPPDVariant{}
 	outerRef := MacPackageRef{Path: pkg.Path, ModTime: pkg.ModTime, Size: pkg.Size}
 
 	pkgPath, chain, pkgCleanup, pkgErr := LocatePkgWithChain(pkg.Path)
 	if pkgErr == nil {
 		defer pkgCleanup()
-		entries, subs, err := packagePPDEntries(pkgPath)
+		entries, subs, err := packagePPDEntriesFiltered(pkgPath, restrict)
 		if err != nil {
 			return out, MacFamilyProvenance{}
 		}
@@ -299,7 +313,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 			if ppdCacheDir != "" {
 				famCacheDir = filepath.Join(ppdCacheDir, mfg, family)
 			}
-			variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir)
+			variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir, macSubPackageRestrictor(mfg))
 			if len(variants) == 0 {
 				continue
 			}

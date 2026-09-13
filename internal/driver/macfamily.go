@@ -3,6 +3,8 @@ package driver
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -32,6 +34,13 @@ var macFamilyPreference = map[string][]string{
 	// this is purely what unlocks the model-index code path, not a real
 	// multi-family preference list.
 	"Kyocera": {"Kyocera"},
+
+	// Ricoh ships many small, independent downloads side by side, each
+	// covering its own disjoint set of models - not version variants of one
+	// driver the way Canon's UFRII/PS/PPD are. See ricohFamilyTokens'
+	// (macricoh.go) own doc comment for the full story and why each token
+	// is a real, verified-collision-free filename fragment.
+	"Ricoh": ricohFamilyTokens,
 }
 
 // classifyMacFamily returns which of tokens appears in path's own basename
@@ -63,6 +72,48 @@ func newestInFamily(packages []MacPackage, tokens []string, family string) (MacP
 		}
 	}
 	return newest, found
+}
+
+// packagesInFamily is newestInFamily's own sibling, returning every
+// *distinct* package classifyMacFamily assigns to family rather than just
+// the newest - newest first by file modification time. Exists so more than
+// one compatible version of the same family can sit in the Drivers folder
+// at once and still each be individually indexed/selectable (see
+// MacModelIndex's own doc comment) - newestInFamily itself is left
+// unchanged, still the right choice for ResolveMacFamily's own guess-based
+// fallback path, which has no per-version UI to offer a choice through
+// anyway.
+//
+// Confirmed live against a real Drivers folder (2026-09-13) that this must
+// deduplicate by (basename, size), not just return every MacPackage match
+// verbatim: the established Drivers/macOS/<Manufacturer>/<OS-version>/...
+// convention has a technician copy the *exact same* downloaded file into
+// several OS-version folders side by side (one real Canon UFR II download
+// showed up identically in 6 different OS-version folders) - without this,
+// those 6 byte-identical copies each surfaced as their own "distinct
+// coexisting version" in the Driver dropdown, which is real, confirmed-live
+// data corruption this feature must never produce. Two copies sharing a
+// basename and byte size are treated as the same logical download (the
+// same "never silently modified in place" assumption IsCurrent's own doc
+// comment already relies on for exactly this reason) - only the newest-
+// mtime copy among them is kept as that version's own representative.
+func packagesInFamily(packages []MacPackage, tokens []string, family string) []MacPackage {
+	byIdentity := map[string]MacPackage{}
+	for _, p := range packages {
+		if classifyMacFamily(tokens, p.Path) != family {
+			continue
+		}
+		key := filepath.Base(p.Path) + "|" + strconv.FormatInt(p.Size, 10)
+		if existing, ok := byIdentity[key]; !ok || p.ModTime.After(existing.ModTime) {
+			byIdentity[key] = p
+		}
+	}
+	out := make([]MacPackage, 0, len(byIdentity))
+	for _, p := range byIdentity {
+		out = append(out, p)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ModTime.After(out[j].ModTime) })
+	return out
 }
 
 // ResolveMacFamily is ResolveMac, but family-and-model-aware for a
@@ -105,7 +156,7 @@ func ResolveMacFamily(catalog MacCatalog, manufacturer, model string) (resolved 
 			cleanup()
 			continue
 		}
-		nick, _, matched := PackageBestModelScore(pkgPath, model)
+		nick, _, matched := PackageBestModelScore(pkgPath, manufacturer, model)
 		cleanup()
 		if !matched {
 			continue

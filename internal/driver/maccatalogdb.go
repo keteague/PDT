@@ -38,7 +38,19 @@ import (
 // format change needed.
 type MacManufacturerCatalog struct {
 	Provenance map[string]MacFamilyProvenance `json:"provenance"`
-	Models     map[string][]MacCatalogVariant `json:"models"`
+	// ExtraProvenance: family -> packagePath -> MacFamilyProvenance - one
+	// entry per OLDER, intentionally-kept compatible package for that family
+	// (the current *newest* one still lives in Provenance above, exactly as
+	// before). Added once more than one coexisting version of the same
+	// family became individually selectable (see MacModelIndex's own doc
+	// comment) rather than always collapsing to "newest wins" - each older
+	// version gets its own independent staleness record, so it doesn't need
+	// re-inspecting on every launch just because it isn't the newest.
+	// Additive: omitempty, and absent entirely in every catalog.<mfg>.json
+	// written before this field existed - LoadMacManufacturerCatalog treats
+	// that the same as "no extra versions cached yet," never a parse error.
+	ExtraProvenance map[string]map[string]MacFamilyProvenance `json:"extraProvenance,omitempty"`
+	Models          map[string][]MacCatalogVariant             `json:"models"`
 }
 
 // MacPackageRef identifies one file in a package's own chain of nesting, at
@@ -85,6 +97,22 @@ type MacCatalogVariant struct {
 	Filename           string `json:"filename"`
 	PackagePath        string `json:"packagePath,omitempty"`
 	LooseCachedPPDPath string `json:"looseCachedPPDPath,omitempty"`
+	// SourcePackagePath is the *outer* package (pkg.Path, the real file
+	// BuildMacCatalog's own directory scan found) that produced this variant -
+	// always set, unlike PackagePath, which is deliberately left empty for a
+	// no-installer/loose-PPD family (deploy_darwin.go's own installVariant
+	// reads that emptiness to mean "hand the cached PPD straight to lpadmin,
+	// no `installer -pkg` run needed" - PackagePath's existing meaning can't
+	// be repurposed without breaking that). ModelsForFamilyPackage and
+	// BuildMacModelIndex's own per-package pruning match on this field, not
+	// PackagePath, so a loose-PPD family's cached variants are found
+	// correctly on a cache-hit rebuild too.
+	SourcePackagePath string `json:"sourcePackagePath,omitempty"`
+	// PackageModTime is the source package's own file modification time, at
+	// the moment this variant was indexed - persisted (rather than re-stat'd
+	// live every time) so a decorated multi-version label can be rebuilt
+	// straight from the catalog file alone.
+	PackageModTime time.Time `json:"packageModTime,omitempty"`
 }
 
 // MacCatalogFileName returns the catalog filename for manufacturer, meant
@@ -105,7 +133,11 @@ func MacCatalogFileName(manufacturer string) string {
 // catalog file just costs one full re-inspection of that one manufacturer,
 // the same cost every build paid before this file existed at all.
 func LoadMacManufacturerCatalog(path string) MacManufacturerCatalog {
-	empty := MacManufacturerCatalog{Provenance: map[string]MacFamilyProvenance{}, Models: map[string][]MacCatalogVariant{}}
+	empty := MacManufacturerCatalog{
+		Provenance:      map[string]MacFamilyProvenance{},
+		ExtraProvenance: map[string]map[string]MacFamilyProvenance{},
+		Models:          map[string][]MacCatalogVariant{},
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return empty
@@ -116,6 +148,9 @@ func LoadMacManufacturerCatalog(path string) MacManufacturerCatalog {
 	}
 	if cat.Provenance == nil {
 		cat.Provenance = map[string]MacFamilyProvenance{}
+	}
+	if cat.ExtraProvenance == nil {
+		cat.ExtraProvenance = map[string]map[string]MacFamilyProvenance{}
 	}
 	if cat.Models == nil {
 		cat.Models = map[string][]MacCatalogVariant{}
@@ -168,6 +203,40 @@ func (cat MacManufacturerCatalog) ModelsForFamily(family string) map[string][]Ma
 		}
 	}
 	return out
+}
+
+// ModelsForFamilyPackage is ModelsForFamily narrowed to just the variants
+// that came from sourcePackagePath specifically - needed once more than one
+// package can contribute variants to the same family at once (see
+// ExtraProvenance's own doc comment); ModelsForFamily itself still answers
+// "every variant for this family, from any package," which is what
+// DiffModels' own whole-family diff wants. Matches on SourcePackagePath, not
+// PackagePath - the latter is deliberately empty for a loose-PPD family (see
+// MacCatalogVariant's own doc comment), which would otherwise never be found
+// here at all.
+func (cat MacManufacturerCatalog) ModelsForFamilyPackage(family, sourcePackagePath string) map[string][]MacCatalogVariant {
+	out := map[string][]MacCatalogVariant{}
+	for model, variants := range cat.Models {
+		for _, v := range variants {
+			if v.Language == family && v.SourcePackagePath == sourcePackagePath {
+				out[model] = append(out[model], v)
+			}
+		}
+	}
+	return out
+}
+
+// IsCurrentForPackage is IsCurrent's own sibling for one specific,
+// intentionally-kept OLDER package within a family (see ExtraProvenance's
+// own doc comment) - identical check, just against
+// cat.ExtraProvenance[family][pkg.Path] instead of cat.Provenance[family].
+func (cat MacManufacturerCatalog) IsCurrentForPackage(family string, pkg MacPackage) bool {
+	prov, ok := cat.ExtraProvenance[family][pkg.Path]
+	if !ok || len(prov.Chain) == 0 {
+		return false
+	}
+	outer := prov.Chain[0]
+	return outer.Path == pkg.Path && outer.ModTime.Equal(pkg.ModTime) && outer.Size == pkg.Size
 }
 
 // DiffModels compares the model names cat already had recorded for family

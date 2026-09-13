@@ -259,3 +259,28 @@ func readPackageInfoVersion(path string) (string, bool) {
 	}
 	return v, true
 }
+
+// packageInfoInstallLocationRe matches a sub-package's own declared
+// install-location attribute - present on every real Ricoh sub-package
+// (e.g. `install-location="/Library/Printers/PPDs/Contents/Resources/"` on
+// its own baseline "ppds.pkg"), absent on a package whose Payload instead
+// bakes the real destination into each entry's own relative path (confirmed
+// against a real legacy "RicohPrinterDrivers.pkg" - see macricoh.go).
+var packageInfoInstallLocationRe = regexp.MustCompile(`<pkg-info\b[^>]* install-location="([^"]*)"`)
+
+// readPackageInfoInstallLocation reads a sub-package's own declared
+// install-location, ok false when the attribute is absent entirely (not
+// just empty) - readPackageInfoVersion's own sibling, same file, same
+// regex-over-plain-XML approach (no need for a full XML parser just for one
+// attribute already proven reliable this way).
+func readPackageInfoInstallLocation(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	m := packageInfoInstallLocationRe.FindSubmatch(data)
+	if m == nil {
+		return "", false
+	}
+	return string(m[1]), true
+}

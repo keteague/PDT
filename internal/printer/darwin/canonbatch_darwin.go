@@ -140,6 +140,9 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 			plan, handled = planKyoceraBatchRow(ctx, row, variant, expandDir, expanded, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
+			plan, handled = planRicohBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+		}
+		if !handled {
 			continue // not a recognized shape - not batched, falls back to the old per-row path
 		}
 		if plan.installScript == "" {
@@ -332,6 +335,49 @@ func planKyoceraBatchRow(ctx context.Context, row printer.PrinterRow, variant dr
 	fmt.Fprintf(&s, "chown root:admin %s && chmod 644 %s", singleQuoteShellArg(ppdDest), singleQuoteShellArg(ppdDest))
 	plan.installScript = s.String()
 	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromStagedFlatPPD(stageDir, variant.Filename, row.OneSided, row.Mono, row.Name)
+	return plan, true
+}
+
+// planRicohBatchRow is PrepareBatch's own Ricoh-specific planner. Unlike
+// Canon/Kyocera, Ricoh's own real packages are small enough (a few hundred
+// KB to ~35MB total for the one legacy bundle - see macricoh.go) that
+// there's no speed problem installing the whole thing for real: confirmed
+// live, a full install completes in well under a minute including the auth
+// wait. No selective extraction needed at all - just the same plain full
+// `installer -pkg` run the non-batched fallback path already uses
+// successfully. This planner exists purely to fold that into the same
+// one-elevated-call-per-run batching every other manufacturer already gets;
+// it recognizes a row by manufacturer name alone, not by inspecting the
+// package's own internal shape - unnecessary here, since a full install
+// works identically regardless of which of Ricoh's two real download shapes
+// (see macricoh.go) this row's own package turns out to be.
+func planRicohBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+	if row.Manufacturer != "Ricoh" {
+		return canonBatchRowPlan{}, false
+	}
+
+	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
+
+	ppdPath, cleanup, err := driver.RicohPPDPathForDefaults(pkgPath, variant.Filename)
+	if err != nil {
+		return plan, true
+	}
+	*cleanups = append(*cleanups, cleanup)
+	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromPath(ppdPath, row.OneSided, row.Mono, row.Name)
+
+	var s strings.Builder
+	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
+		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		sharedQueuedThisBatch[variant.PackagePath] = true
+		plan.sharedInstalled = true
+	} else {
+		// Already installed (or queued) earlier in this same batch/run - an
+		// earlier row's own full install already placed this row's own PPD
+		// too. Still need *some* command here: the caller always joins
+		// installScript and the queue-create command with " && ".
+		s.WriteString("true")
+	}
+	plan.installScript = s.String()
 	return plan, true
 }
 

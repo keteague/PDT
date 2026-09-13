@@ -4,6 +4,145 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-13 (v0.9.1) - macOS: fix v0.9.0 wiping out Kyocera/Ricoh's Model dropdown
+
+Ken's first real test of v0.9.0 found Canon working, but Kyocera and Ricoh had lost their
+Model dropdown entirely - the Driver field just auto-populated with a raw package label
+(the pre-catalog guess-based fallback), as if neither manufacturer had ever had catalog
+support at all.
+
+### Fixed
+- **A real migration bug**: every catalog.\<mfg\>.json written before v0.9.0 (i.e. every
+  real one Ken had) has each entry's own new `SourcePackagePath` field empty, since that
+  field didn't exist yet when those files were written. The new per-package cache lookup
+  (`ModelsForFamilyPackage`) matches on that field, so it came back empty for every
+  pre-v0.9.0 entry - and `cachedVariantFilesExist`'s own vacuous-true-on-an-empty-map
+  behavior meant that empty result was silently trusted as "already correctly cached,
+  nothing to do" instead of falling through to a real reindex. Kyocera and Ricoh's real
+  packages were completely untouched; the catalog just never looked at them again. Fixed
+  by requiring the cache lookup to actually return something before trusting it, and by
+  having the reindex that follows correctly replace - not just add alongside - any
+  leftover pre-v0.9.0 entries for the package currently being (re)indexed.
+- **A second, related bug found immediately after fixing the first**: the established
+  Drivers/macOS/\<Manufacturer\>/\<OS-version\>/... convention has a technician copy the
+  same download into several OS-version folders (a real Kyocera "Web Build" download
+  showed up in 10 folders) - packagesInFamily's own (v0.9.0) deduplication correctly
+  collapses those into one representative package, but the *other* 9 copies, each
+  individually tracked as their own "package" before that deduplication existed, were
+  never revisited by the per-package loop again once they dropped out of the current set
+  - their own stale catalog entries lingered forever. Every real Kyocera model was showing
+  10 duplicate "versions" of the identical download. Fixed with an explicit cleanup pass
+  that prunes any catalog entry or provenance record for a package no longer part of a
+  family's current package set at all, once that family's own current packages have all
+  been processed.
+
+Both bugs are new regression tests (`TestBuildMacModelIndex_MigratesLegacyCatalogMissingSourcePackagePath`,
+`TestBuildMacModelIndex_PrunesOrphanedPackageNoLongerInCurrentSet`), and both confirmed
+live against Ken's own real, previously-broken Kyocera and Ricoh catalog files (not
+synthetic fixtures) - both restored to their correct model counts (460 and 354
+respectively) with zero duplicate entries.
+
+## 2026-09-13 (v0.9.0) - macOS: multiple coexisting driver versions, individually selectable
+
+Ken asked whether two versions of the same manufacturer's driver could coexist in the
+Drivers folder the way Windows' own Kyocera handling already allows (`Candidates()`'s
+per-version decorated Driver-dropdown labels) - checked the real code and found macOS had
+no equivalent: `newestInFamily` always collapsed straight to the single newest package,
+silently discarding any older one a technician might have deliberately kept around.
+
+### Added
+- **Every compatible package for a family gets indexed now, not just the newest**
+  (`packagesInFamily`, replacing `newestInFamily` inside `BuildMacModelIndex`) - a
+  technician can now deliberately hold a printer fleet back on an already-validated older
+  driver version and still have it show up as its own selectable Driver-dropdown entry,
+  real parity with Windows' own multi-version `Candidates()` decoration.
+- **Each coexisting package gets its own independent staleness cache**
+  (`MacManufacturerCatalog.ExtraProvenance`, `IsCurrentForPackage`,
+  `ModelsForFamilyPackage` - additive to the existing catalog.\<mfg\>.json schema, so
+  already-written catalog files keep working unmodified) - an older, rarely-changing kept
+  version doesn't get re-inspected on every launch just because it isn't the newest one.
+- **A model's Driver-dropdown label only gets decorated once a real second version
+  exists** (`decorateMultiVersionLabels`) - a single-version model's label stays exactly
+  as plain as it always was. Decorated with the bare filename + the file's own
+  modification date (`packageVersionTag`) - not `PackageLabel`, whose first attempt is a
+  real, confirmed-expensive `pkgutil --expand-full` call; not a real declared version
+  field either, since macOS installer packages don't reliably carry one at all (confirmed
+  against real Canon/Kyocera/Ricoh downloads - see `ResolveMac`'s own doc comment).
+- **A blank/ambiguous Driver selection always still resolves to the newest version** -
+  Ken's own explicit requirement. `packagesInFamily` returns newest-first, so every
+  downstream consumer (`MacVariantForDeploy`, `MacModelCandidates`) already gets this for
+  free from append order, no extra logic needed.
+- Two coexisting versions that happen to share a no-installer/loose-PPD family's own PPD
+  filename no longer silently overwrite each other's permanently-cached copy
+  (`packageCacheKey` gives each package its own cache subdirectory).
+
+### Fixed
+- A real nil-map panic caught by this work's own new tests before it ever shipped:
+  `LoadMacManufacturerCatalog`'s "empty catalog" value never initialized the new
+  `ExtraProvenance` field, so a technician's very first multi-version build (nothing on
+  disk yet) would have crashed outright.
+- A real cache-reuse bug for the no-installer/loose-PPD family shape (Canon's own "PPD"
+  bucket): the new per-package cache lookup matched on `PackagePath`, which is
+  deliberately left empty for that shape (deploy_darwin.go reads that emptiness to mean
+  "no `installer` run needed") - a cache-hit rebuild silently dropped that family's own
+  variants. Fixed with a new `SourcePackagePath` field, always set regardless of shape,
+  used for cache/pruning matching instead of repurposing `PackagePath`'s own existing
+  meaning.
+- **A real, more serious bug found only by live-testing against production data, not
+  synthetic fixtures**: the established Drivers/macOS/\<Manufacturer\>/\<OS-version\>/...
+  convention has a technician copy the *same* downloaded file into several OS-version
+  folders side by side - confirmed live that a real Canon UFR II download sitting
+  identically in 6 different OS-version folders was, before this fix, surfaced as 6
+  separate "coexisting versions" in the Driver dropdown. `packagesInFamily` now
+  deduplicates by (basename, size) before treating anything as a distinct version -
+  the same "never silently modified in place" assumption `IsCurrent`'s own staleness
+  check already relies on.
+
+### Confirmed live
+Staged a real second Canon UFR II version (a genuinely different real download,
+`UFRII_v10.19.23_mac.dmg`) alongside the two already present across the Drivers folder
+(`UFRII_v10.19.25_mac.dmg`, `UFRII_v10.19.21_mac.dmg`) and rebuilt the real catalog:
+all 3 versions correctly indexed and decorated, newest-first, no duplicate/corrupted
+entries, catalog file restored cleanly afterward. Also surfaced (and filed as its own,
+separate, lower-urgency issue - not part of this work's scope) a real, pre-existing
+locale-handling inconsistency between different Canon "PPD" bucket versions, invisible
+until an older package was ever indexed at all.
+
+## 2026-09-13 (v0.8.0) - macOS: Ricoh driver support (catalog, install, batching)
+
+Ken's next real, second-manufacturer test of the "generalize past Canon" work
+(issue #2) - Ricoh's own real shape turned out meaningfully different from both
+Canon and Kyocera: many small, independent downloads side by side (10 real files
+inspected), each covering its own small, disjoint model group, rather than one
+driver line periodically superseded.
+
+### Added
+- A real catalog-driven model index for Ricoh (`macricoh.go`) - 427 real models
+  across 10 real downloads, each download's own family token a verified
+  collision-free filename fragment. Confirmed live that a download's own filename
+  systematically undersells its real model coverage (a "2500/3500/4000"-named
+  file actually registers 9 real models).
+- **A real, latent extraction bug found and fixed**: Ricoh's own modern PPDs
+  carry no file extension at all, and one legacy Apple-distributed bundle
+  (`RicohPrinterDrivers.pkg`, 356 real models, Snow Leopard-era) names them
+  `<model>.gz` with no ".ppd" anywhere - neither matched the existing
+  extension-based cpio glob at all. Added a manufacturer-dispatched, content-
+  verified fallback (`ppdExtractionFallback`, `looksLikeRealPPD`) - zero cost or
+  behavior change for Canon/Kyocera, whose real PPDs still match the fast path.
+- Ricoh's own real packages are small (~150x smaller than Canon's) - a full
+  `installer -pkg` run is already fast (confirmed live: ~20s including the real
+  auth wait), so no Canon/Kyocera-style selective installer was needed, just a
+  plain full install (`planRicohBatchRow`) folded into the existing 1-auth-
+  prompt batching.
+- Two more real Japan-market-only naming conventions found and filtered
+  (`isJapanMarketOnly`), neither matching Canon's own "trailing ` JP`" shape -
+  an explicit `JPN` token before the language suffix, and a bare `J` glued onto
+  the model number itself.
+
+### Confirmed live
+Real deploys of two different Ricoh models batched to 1 auth prompt; full
+install completes in the confirmed ~20s range.
+
 ## 2026-09-12 (v0.7.2) - macOS: extend the 1-auth-prompt batching to Kyocera
 
 Ken confirmed v0.7.1's Kyocera install itself now works correctly and completes quickly, but still

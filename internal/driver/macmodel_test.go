@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -48,6 +49,18 @@ func TestIsJapanMarketOnly(t *testing.T) {
 		{"Canon iR-ADV C5840/5850 PPD", false},
 		// Must be a real trailing token, not a coincidental substring.
 		{"Canon LBPJP100", false},
+		// Ricoh's own two real conventions, neither matching Canon's shape -
+		// confirmed against a real 427-model Ricoh catalog build, 2026-09.
+		{"RICOH MP 1301 JPN PS", true},
+		{"RICOH IM 2509J PS", true},
+		{"RICOH MP 2554J PS", true},
+		// Must be a real digit-J token, not a coincidental one.
+		{"RICOH IM C300", false},
+		// Matches even with nothing after the "J" (end-of-string counts as a
+		// boundary too, not just a following space) - a bare Japan-market
+		// model number with no language suffix at all is still a real shape
+		// this needs to catch.
+		{"RICOH IM C300J", true},
 	}
 	for _, tt := range tests {
 		if got := isJapanMarketOnly(tt.name); got != tt.want {
@@ -108,11 +121,11 @@ func TestBuildMacModelIndex_ManufacturerWithNoFamilyTableIsAbsent(t *testing.T) 
 	cat := testModelCatalog(t)
 	dir := t.TempDir()
 	index, _ := BuildMacModelIndex(cat, dir, dir, true)
-	// "Ricoh", not "Kyocera" - Kyocera got its own macFamilyPreference entry
-	// (see macfamily.go's own doc comment) once it got a real model index
-	// built, so it's no longer a valid example of "a manufacturer with no
-	// family table at all".
-	if _, ok := index["Ricoh"]; ok {
+	// "Sharp", not "Kyocera" or "Ricoh" - both of those got their own real
+	// macFamilyPreference entries (see macfamily.go's own doc comment) once
+	// each got a real model index built, so neither is a valid example of "a
+	// manufacturer with no family table at all" anymore.
+	if _, ok := index["Sharp"]; ok {
 		t.Error("expected no model index entry at all for a manufacturer with no macFamilyPreference table")
 	}
 }
@@ -229,6 +242,244 @@ func TestBuildMacModelIndex_SecondBuildReusesCatalogWithoutReinspecting(t *testi
 			if len(second[mfg][model]) != len(variants) {
 				t.Errorf("%s/%q: first build had %d variant(s), second (cached) build had %d", mfg, model, len(variants), len(second[mfg][model]))
 			}
+		}
+	}
+}
+
+// testMultiVersionCatalog builds the catalog from testdata_mac_multiversion -
+// its own isolated fixture directory (deliberately separate from
+// testdata_mac_model, which several other tests already make assumptions
+// about a single UFRII package producing) containing two byte-identical
+// copies of the same real UFRII .pkg fixture, forced to deterministic,
+// distinct mtimes the same way testMacCatalog already does for its own
+// Older/Newer pair - git doesn't preserve mtimes across a clone/checkout, so
+// both files would otherwise land with essentially the same checkout-time
+// mtime.
+func testMultiVersionCatalog(t *testing.T) MacCatalog {
+	t.Helper()
+	if _, err := exec.LookPath("pkgutil"); err != nil {
+		t.Skip("pkgutil not on PATH (not running on macOS)")
+	}
+	now := time.Now()
+	older := filepath.Join("testdata_mac_multiversion", "macOS", "Canon", "26-Tahoe", "UFRII_test_fixture_v1.pkg")
+	newer := filepath.Join("testdata_mac_multiversion", "macOS", "Canon", "26-Tahoe", "UFRII_test_fixture_v2.pkg")
+	if err := os.Chtimes(older, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", older, err)
+	}
+	if err := os.Chtimes(newer, now.Add(-1*time.Hour), now.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("os.Chtimes(%s): %v", newer, err)
+	}
+	cat, err := BuildMacCatalog("testdata_mac_multiversion")
+	if err != nil {
+		t.Fatalf("BuildMacCatalog: %v", err)
+	}
+	return cat
+}
+
+// TestBuildMacModelIndex_TwoCoexistingVersionsBothIndexedAndDecorated is the
+// real end-to-end proof for issue #4: two compatible UFRII packages sitting
+// in the Drivers folder at once must both get indexed (not just the newest,
+// unlike before this feature existed), each with its own decorated Label so
+// a technician can tell them apart in the Driver dropdown - mirroring
+// Windows' own Candidates() decoration for a multi-version driver name.
+func TestBuildMacModelIndex_TwoCoexistingVersionsBothIndexedAndDecorated(t *testing.T) {
+	cat := testMultiVersionCatalog(t)
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
+
+	variants := index["Canon"]["TestVendor Model X"]
+	var ufrii []MacPPDVariant
+	for _, v := range variants {
+		if v.Language == "UFRII" {
+			ufrii = append(ufrii, v)
+		}
+	}
+	if len(ufrii) != 2 {
+		t.Fatalf("expected 2 coexisting UFRII variants for TestVendor Model X, got %d: %+v", len(ufrii), ufrii)
+	}
+
+	for _, v := range ufrii {
+		if v.Label == "TestVendor Model X (UFR II)" {
+			t.Errorf("variant from %s kept the plain undecorated label %q - expected it decorated once a second coexisting version exists", v.PackagePath, v.Label)
+		}
+	}
+	if ufrii[0].Label == ufrii[1].Label {
+		t.Errorf("both coexisting variants got the identical label %q - expected them distinguishable", ufrii[0].Label)
+	}
+
+	// A model with only one real variant elsewhere in the *same* build
+	// (there isn't one here - both fixtures register the same two models) is
+	// covered by TestMacVariantForDeploy_ExactLabelWins's own plain-label
+	// assertion already; this test's own job is just the multi-version case.
+}
+
+// TestMacVariantForDeploy_BlankSelectionAlwaysPicksNewestVersion is Ken's own
+// explicit requirement (2026-09-13): once more than one coexisting version
+// is individually selectable, a blank/ambiguous Driver selection must still
+// always resolve to the *latest* version, never an arbitrary older one left
+// around for manual selection.
+func TestMacVariantForDeploy_BlankSelectionAlwaysPicksNewestVersion(t *testing.T) {
+	cat := testMultiVersionCatalog(t)
+	dir := t.TempDir()
+	index, _ := BuildMacModelIndex(cat, dir, dir, true)
+
+	variant, ok := MacVariantForDeploy(index, "Canon", "TestVendor Model X", "")
+	if !ok {
+		t.Fatal("expected a match")
+	}
+	if !strings.Contains(variant.PackagePath, "_v2") {
+		t.Errorf("expected the newer package (_v2) to win a blank/ambiguous selection, got %q", variant.PackagePath)
+	}
+}
+
+// TestBuildMacModelIndex_MultiVersionSecondBuildReusesCatalog proves the
+// cache-hit path works correctly for *each* coexisting package
+// independently (ExtraProvenance/IsCurrentForPackage/ModelsForFamilyPackage) -
+// not just the single-newest-package cache path
+// TestBuildMacModelIndex_SecondBuildReusesCatalogWithoutReinspecting already
+// covers.
+func TestBuildMacModelIndex_MultiVersionSecondBuildReusesCatalog(t *testing.T) {
+	cat := testMultiVersionCatalog(t)
+	dir := t.TempDir()
+
+	first, _ := BuildMacModelIndex(cat, dir, dir, true)
+	second, _ := BuildMacModelIndex(cat, dir, dir, true)
+
+	firstCount := 0
+	for _, v := range first["Canon"]["TestVendor Model X"] {
+		if v.Language == "UFRII" {
+			firstCount++
+		}
+	}
+	secondCount := 0
+	for _, v := range second["Canon"]["TestVendor Model X"] {
+		if v.Language == "UFRII" {
+			secondCount++
+		}
+	}
+	if firstCount != 2 || secondCount != 2 {
+		t.Fatalf("expected 2 UFRII variants both before and after a cache-hit rebuild, got %d then %d", firstCount, secondCount)
+	}
+}
+
+// TestBuildMacModelIndex_MigratesLegacyCatalogMissingSourcePackagePath
+// guards a real bug found live (2026-09-13) against Ken's own real Drivers
+// folder: a catalog.<mfg>.json written before SourcePackagePath existed has
+// every persisted entry's own SourcePackagePath empty. The cache-reuse
+// lookup (ModelsForFamilyPackage, matching on SourcePackagePath) came back
+// empty for every such legacy entry, and cachedVariantFilesExist's own
+// vacuous-true-on-an-empty-map behavior meant that empty result was
+// silently trusted as "already correctly cached, nothing to do" instead of
+// falling through to a real reindex - Kyocera and Ricoh's entire Model
+// dropdown went silently empty as a result, even though their real
+// downloaded packages were completely untouched. Also confirms the
+// migration actually *replaces* the stale untagged entries rather than
+// just adding freshly-tagged ones alongside them.
+func TestBuildMacModelIndex_MigratesLegacyCatalogMissingSourcePackagePath(t *testing.T) {
+	cat := testModelCatalog(t)
+	dir := t.TempDir()
+
+	first, _ := BuildMacModelIndex(cat, dir, dir, true)
+	if len(first["Canon"]) == 0 {
+		t.Fatal("expected the first build to actually index something")
+	}
+
+	// Simulate a pre-2026-09-13 catalog file by stripping SourcePackagePath
+	// from every persisted entry, exactly like a real catalog.json written
+	// before that field existed.
+	catalogPath := filepath.Join(dir, "Canon", MacCatalogFileName("Canon"))
+	legacy := LoadMacManufacturerCatalog(catalogPath)
+	for model, variants := range legacy.Models {
+		for i := range variants {
+			variants[i].SourcePackagePath = ""
+		}
+		legacy.Models[model] = variants
+	}
+	if err := SaveMacManufacturerCatalog(catalogPath, legacy); err != nil {
+		t.Fatalf("writing simulated legacy catalog: %v", err)
+	}
+
+	second, _ := BuildMacModelIndex(cat, dir, dir, true)
+	if len(second["Canon"]) == 0 {
+		t.Fatal("expected a legacy catalog (missing SourcePackagePath) to be transparently reindexed, not silently emptied - this is the exact real bug found live")
+	}
+	if len(second["Canon"]) != len(first["Canon"]) {
+		t.Errorf("expected the same model count after migrating a legacy catalog: first=%d second=%d", len(first["Canon"]), len(second["Canon"]))
+	}
+
+	migrated := LoadMacManufacturerCatalog(catalogPath)
+	for model, variants := range migrated.Models {
+		seen := map[string]int{}
+		for _, v := range variants {
+			seen[v.Language]++
+		}
+		for lang, count := range seen {
+			if count > 1 {
+				t.Errorf("%q has %d duplicate %s entries after migration - stale legacy entries were not replaced, just added alongside", model, count, lang)
+			}
+		}
+	}
+}
+
+// TestBuildMacModelIndex_PrunesOrphanedPackageNoLongerInCurrentSet guards a
+// real bug found live (2026-09-13), right after the SourcePackagePath
+// migration fix above: a real Kyocera catalog had the exact same download
+// copied into 10 different OS-version folders (the established Drivers
+// folder convention), and packagesInFamily's own (basename, size)
+// deduplication correctly collapsed those down to a single representative
+// package - but the 9 *other* copies, each individually tracked as their
+// own "package" under an earlier code path (before dedup existed, or simply
+// no longer part of the current set for any other reason - a file genuinely
+// removed works the same way), were never revisited by BuildMacModelIndex's
+// own per-package loop again at all once they dropped out of
+// packagesInFamily's result, so their own stale cat.Models entries and
+// ExtraProvenance keys lingered forever - every one of 460 real Kyocera
+// models showed up with 10 duplicate "versions" of the identical download.
+func TestBuildMacModelIndex_PrunesOrphanedPackageNoLongerInCurrentSet(t *testing.T) {
+	cat := testModelCatalog(t)
+	dir := t.TempDir()
+
+	first, _ := BuildMacModelIndex(cat, dir, dir, true)
+	if len(first["Canon"]) == 0 {
+		t.Fatal("expected the first build to actually index something")
+	}
+
+	// Inject an orphaned "extra" package entry - simulating a package that
+	// used to be individually tracked but is no longer part of the current
+	// set at all (the real scenario: a duplicate OS-folder copy that
+	// packagesInFamily's own dedup now correctly excludes).
+	catalogPath := filepath.Join(dir, "Canon", MacCatalogFileName("Canon"))
+	withOrphan := LoadMacManufacturerCatalog(catalogPath)
+	const orphanPath = "/nonexistent/orphaned/UFRII_test_fixture_stale_copy.pkg"
+	if withOrphan.ExtraProvenance["UFRII"] == nil {
+		withOrphan.ExtraProvenance["UFRII"] = map[string]MacFamilyProvenance{}
+	}
+	withOrphan.ExtraProvenance["UFRII"][orphanPath] = MacFamilyProvenance{
+		Chain: []MacPackageRef{{Path: orphanPath}},
+	}
+	withOrphan.Models["TestVendor Model X"] = append(withOrphan.Models["TestVendor Model X"], MacCatalogVariant{
+		Language: "UFRII", NickName: "TestVendor Model X", Filename: "TESTX1.ppd",
+		PackagePath: orphanPath, SourcePackagePath: orphanPath,
+	})
+	if err := SaveMacManufacturerCatalog(catalogPath, withOrphan); err != nil {
+		t.Fatalf("writing catalog with injected orphan: %v", err)
+	}
+
+	second, _ := BuildMacModelIndex(cat, dir, dir, true)
+
+	for _, v := range second["Canon"]["TestVendor Model X"] {
+		if v.PackagePath == orphanPath {
+			t.Errorf("orphaned package entry %q survived a rebuild - should have been pruned since it's no longer part of the current package set", orphanPath)
+		}
+	}
+
+	migrated := LoadMacManufacturerCatalog(catalogPath)
+	if _, stillThere := migrated.ExtraProvenance["UFRII"][orphanPath]; stillThere {
+		t.Errorf("orphaned ExtraProvenance entry for %q survived a rebuild", orphanPath)
+	}
+	for _, v := range migrated.Models["TestVendor Model X"] {
+		if v.PackagePath == orphanPath {
+			t.Errorf("orphaned Models entry for %q survived on disk after a rebuild", orphanPath)
 		}
 	}
 }

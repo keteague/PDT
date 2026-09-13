@@ -421,6 +421,66 @@ per-row path unaffected. **Confirmed live**: a 2-row same-package Kyocera deploy
 + `TASKalfa 6052ci`) completed both rows' install+queue-create within the same second after a
 single wait for the one auth prompt.
 
+### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.1)
+
+Ricoh's own real macOS shape turned out different again from both Canon and Kyocera: many
+small, independent downloads side by side (10 real files), each covering its own small,
+disjoint model group - not one driver line periodically superseded. `macricoh.go` builds a
+real catalog-driven index the same way Canon/Kyocera get one, plus a content-verified
+extraction fallback (`ppdExtractionFallback`) for two real PPD-naming shapes the existing
+extension-based cpio glob couldn't match at all (no extension whatsoever on modern Ricoh
+downloads; a bare `.gz` with no ".ppd" anywhere on one legacy Apple-distributed bundle) -
+zero cost or behavior change for Canon/Kyocera, whose real PPDs still hit the fast path.
+Since Ricoh's own packages are tiny (confirmed live: a full `installer -pkg` run completes
+in ~20s, no Canon/Kyocera-style selective install needed), `planRicohBatchRow` just folds a
+plain full install into the existing 1-auth-prompt batching.
+
+Checking whether two versions of the same driver could coexist the way Windows' own Kyocera
+handling already allows (`internal/driver/candidates.go`'s per-version decorated Driver
+labels) found a real gap: macOS's `newestInFamily` always collapsed straight to the single
+newest package, silently discarding anything older. `BuildMacModelIndex` now indexes every
+compatible package per family (`packagesInFamily`), not just the newest, each with its own
+independent staleness cache (`MacManufacturerCatalog.ExtraProvenance` - additive, existing
+catalog.\<mfg\>.json files keep working unmodified) so an intentionally-kept older version
+doesn't get re-inspected on every launch. A model's Driver-dropdown label only gets
+decorated once a real second version exists (`decorateMultiVersionLabels`) - filename + the
+file's own modification date, not a real declared version field, which (confirmed against
+real Canon/Kyocera/Ricoh downloads) macOS installer packages don't reliably carry at all. A
+blank/ambiguous selection always still resolves to the newest version - `packagesInFamily`
+returns newest-first, so every consumer gets this for free from append order.
+
+**Confirmed live, not just against synthetic fixtures** - and this is exactly why that
+mattered: staging a real second Canon UFR II version turned up a real, more serious bug
+synthetic tests alone never would have caught. The established
+Drivers/macOS/\<Manufacturer\>/\<OS-version\>/... convention has a technician copy the same
+downloaded file into several OS-version folders side by side (a real download showed up
+identically in 6 different folders) - before a fix, each of those 6 byte-identical copies
+surfaced as its own "distinct coexisting version" in the dropdown. `packagesInFamily` now
+deduplicates by (basename, size) first, the same "never silently modified in place"
+assumption `IsCurrent`'s own staleness check already relies on. A second real bug (a nil-map
+panic on a technician's very first multi-version build) was caught by this feature's own new
+tests before ever reaching live verification.
+
+**v0.9.1 - a real regression Ken's own first live test of v0.9.0 found**: Canon worked, but
+Kyocera/Ricoh's Model dropdown disappeared entirely, silently falling back to the pre-catalog
+guess-based behavior. Two real bugs, both confirmed against Ken's own actual (not synthetic)
+catalog files: every pre-v0.9.0 `catalog.<mfg>.json` has each entry's new
+`SourcePackagePath` field empty (didn't exist yet when written) - the new per-package cache
+lookup matched on it and came back empty, and an empty result was being silently trusted as
+a valid cache hit instead of triggering a real reindex, leaving Kyocera/Ricoh's real,
+untouched packages simply never looked at again. Fixed by requiring the cache lookup to
+actually return something before trusting it, plus making the reindex that follows correctly
+*replace* leftover pre-v0.9.0 entries rather than adding alongside them. Fixing that surfaced
+a second, related bug immediately: the same file copied into several OS-version folders (a
+real Kyocera download in 10) means the *other* 9 copies, each individually tracked before
+`packagesInFamily`'s own deduplication existed, were never revisited once they dropped out of
+the current set - their stale entries lingered forever, showing every real Kyocera model with
+10 duplicate "versions" of the identical download. Fixed with an explicit cleanup pass that
+prunes any entry/provenance for a package no longer part of a family's current set, once that
+family's own current packages have all been processed. Both bugs have dedicated regression
+tests and were confirmed live against Ken's own real, previously-broken catalog files -
+restored to 460 (Kyocera) and 354 (Ricoh) models with zero duplicates.
+
 ### `cmd/pdtdebugmac`
 
 The macOS analog of `cmd/pdtdebug` - `catalog`/`models`/`installpkg`/`deployqueue` commands for
@@ -1027,3 +1087,79 @@ populated `Drivers` folder sitting next to the running executable first - true f
 The installer is unsigned (no code-signing certificate) - Windows SmartScreen will likely show an
 "unrecognized app" warning on first run ("More info" -> "Run anyway"). This is expected for a small
 internal tool without a paid signing certificate, not a build error.
+
+## Which drivers should I use?
+
+I tried to make PDT as future-proof as possible when it comes to new drivers. Every manufacturer
+packages their drivers their own way, and usually has more than one driver package to choose from.
+I use generic/universal drivers wherever possible - but on macOS, most drivers are model-specific.
+That said, here's what to grab when you go looking for updated drivers, to have the best success
+with PDT.
+
+To start: the **Defaults** section of the main PDT window has a **Manufacturer** dropdown with a
+**Check for Updates** button next to it. Clicking **Check for Updates** takes you straight to the
+selected manufacturer's download page. Those URLs are configured in **Settings > External Sites**
+- the goal is just to make it easy to get to the right starting point.
+
+### Canon
+
+1. From the Canon download page, search for any major MFD model (e.g. imageRUNNER ADVANCE DX
+   C5840).
+2. From that MFD's info page, click **Software & Drivers**.
+3. Select your OS and version.
+4. For Windows, get all 3 `Generic_Plus_[UFRII|PCL6|PS]_vX.YY.zip` files. For macOS, get the
+   `UFRII_vXX.YY.ZZ_mac.zip` file, the `PS_vX.YY.ZZ_mac.zip` file, and the `PPDvX.YY_mac.zip` file.
+
+### Kyocera
+
+1. From the Kyocera Download Center page, search for any major MFD model (e.g. MZ6001ci).
+2. From the MFD's download page, select your OS.
+3. For Windows, download the KX driver package (e.g. "KX Print Driver (8.6A.1412)"). For macOS,
+   download the Mac Print Driver package (e.g. "Mac Print Driver (6.4)") - it contains a full set
+   of KPDL drivers.
+
+### Ricoh
+
+**Windows**: there's a Universal Print Driver link under the red rectangle where you can download
+the PCL6 Driver for Universal Print. This is a **Type 3** driver, and it's what I recommend you
+use. Don't confuse it with the PCL6 V4 Driver for Universal Print, which is a Type 4 driver -
+you're welcome to try the V4 driver, but it isn't tested or supported by PDT.
+
+**macOS**: it's a lot more convoluted, since you need model-specific drivers and each one only
+supports a small range of MFDs.
+
+1. Search for your specific model - you'll be taken to its download page.
+2. Download the "PPD Installer" for your OS version. In my own testing, Ricoh appears to use the
+   same PPD Installer for macOS v13, v14, v15, and v26, and I've been copying the same installer
+   `.dmg` file into each of those OS-version folders under PDT's own Drivers folder (more on that
+   below). macOS v27 will be out very soon and I'd expect the same driver to work there too. If
+   you're on a Mac running something older than these, your best options are Ricoh's own Generic
+   PS Driver (available through PDT), Apple's built-in Generic PostScript Driver or Generic PCL
+   Driver (comes with macOS itself, not installable through PDT), or an IPP port with the
+   classless "Everywhere" driver (also not installable through PDT).
+
+### Sharp
+
+Download the latest UD3 PCL driver.
+
+### Toshiba, Xerox, Konica Minolta, Lexmark, and HP
+
+All of these use a universal driver.
+
+## Where do I put these downloaded driver files?
+
+PDT has a Drivers repo. When you (the technician) install PDT on your own laptop, the idea is that
+you maintain the Drivers repo from that laptop - not from the portable flash drive. The workflow
+is:
+
+1. From your local (laptop) copy of PDT, download any new drivers.
+2. Copy them into the matching folder in the Drivers repo. For example, a new Canon Generic Plus
+   UFR II driver's `.zip` file goes to:
+   - Windows: `%LocalAppData%\PDT\Drivers\Windows\11\Canon`
+   - macOS: `~/Library/Application Support/PDT/Drivers/macOS/Canon/26-Tahoe`
+3. In PDT, click the **Rescan** button at the top (two arrows in a circle). This tells PDT to look
+   for and process any new drivers. On macOS, that includes updating the `catalog.<mfg>.json` file
+   that lists every known driver and which file it came from - these catalog files live under
+   `Drivers/macOS/<mfg>` (e.g. `Drivers/macOS/Canon/catalog.canon.json`).
+4. Insert your flash drive and click the **Sync** button (two arrows pointing in opposite
+   directions). This syncs your local Drivers repo onto the flash drive.

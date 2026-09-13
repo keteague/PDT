@@ -1,8 +1,11 @@
 package driver
 
 import (
+	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +22,18 @@ var macLanguageDisplayNames = map[string]string{
 	"PS":      "PostScript",
 	"PPD":     "Generic PPD",
 	"Kyocera": "Driver",
+}
+
+func init() {
+	// Every real Ricoh download's own PPDs declare a *NickName ending in
+	// " PS" (confirmed live across all 9 modern downloads plus the legacy
+	// RicohPrinterDrivers bundle) - all genuinely PostScript, unlike
+	// Kyocera's single non-language-specific "Driver" bucket. Registered
+	// here rather than inline in the literal map above so ricohFamilyTokens
+	// (macricoh.go) stays the one place that list needs maintaining.
+	for _, tok := range ricohFamilyTokens {
+		macLanguageDisplayNames[tok] = "PostScript"
+	}
 }
 
 func languageDisplayName(token string) string {
@@ -61,18 +76,44 @@ type MacPPDVariant struct {
 	Filename           string
 	PackagePath        string
 	LooseCachedPPDPath string
+	// SourcePackagePath is the outer package (pkg.Path) that produced this
+	// variant - always set, unlike PackagePath (see MacCatalogVariant's own
+	// doc comment for why PackagePath itself can't be repurposed for this).
+	SourcePackagePath string
+	// PackageModTime is PackagePath's own file modification time - set
+	// whenever PackagePath is, used to tell two coexisting versions of the
+	// same family apart (finalizeMultiVersionLabels) and to make sure a
+	// blank/ambiguous selection always resolves to the newest one
+	// (MacVariantForDeploy). See MacModelIndex's own doc comment for why
+	// more than one package can now contribute a variant to the same
+	// (model, family) pair at once.
+	PackageModTime time.Time
 }
 
 // MacModelIndex: manufacturer -> friendly model name (language suffix
-// stripped - see stripLanguageSuffix) -> every language variant available
-// for that model. Built once (BuildMacModelIndex, at catalog build/refresh
-// time - the same "expensive extraction happens once, every later lookup is
-// a plain map read" pattern internal/driver/model.go's own BuildModelIndex
-// established for Windows' Kyocera model index), populated only for a
-// manufacturer macFamilyPreference lists (Canon today) - a manufacturer with
-// just one real driver package has no "which package" ambiguity to resolve
-// ahead of install at all; choosePPD's existing post-install NickName match
-// (deploy_darwin.go) already handles that case correctly.
+// stripped - see stripLanguageSuffix) -> every variant available for that
+// model. Built once (BuildMacModelIndex, at catalog build/refresh time - the
+// same "expensive extraction happens once, every later lookup is a plain map
+// read" pattern internal/driver/model.go's own BuildModelIndex established
+// for Windows' Kyocera model index), populated only for a manufacturer
+// macFamilyPreference lists - a manufacturer with just one real driver
+// package has no "which package" ambiguity to resolve ahead of install at
+// all; choosePPD's existing post-install NickName match (deploy_darwin.go)
+// already handles that case correctly.
+//
+// A model's own variant list isn't just one entry per language/family
+// anymore (2026-09-13) - if more than one compatible package version sits in
+// the Drivers folder for the same family at once (a technician deliberately
+// holding a fleet back on an already-validated older version - real parity
+// with Windows' own Candidates() decoration for a multi-version driver name,
+// see internal/driver/candidates.go), each one gets its own separate variant
+// here too, its Label decorated to tell them apart (decorateMultiVersionLabels)
+// - a plain, undecorated Label means only one version exists, nothing to
+// disambiguate. BuildMacModelIndex's own per-family loop always processes
+// packagesInFamily's newest-first order, so within any one (model, family)
+// pair the newest package's variant always comes first - the property
+// MacVariantForDeploy/MacModelCandidates both rely on to make "no explicit
+// pick" always resolve to the latest version, never an arbitrary older one.
 type MacModelIndex map[string]map[string][]MacPPDVariant
 
 // stripLanguageSuffix strips a trailing " <token>" (checked against every
@@ -92,6 +133,14 @@ func stripLanguageSuffix(nickName string, tokens []string) (model, matchedToken 
 	return nickName, ""
 }
 
+// ricohJapanModelNumberRe matches Ricoh's own second real Japan-market
+// convention - a bare "J" glued directly onto the model number itself, no
+// space ("RICOH IM 2509J PS", "RICOH MP 3554J PS") - confirmed against a
+// real Ricoh catalog build (427 models, 2026-09) that all 16 real
+// occurrences are genuinely Japan-only SKUs, with zero false positives
+// anywhere else in the same catalog.
+var ricohJapanModelNumberRe = regexp.MustCompile(`[0-9]J(\s|$)`)
+
 // isJapanMarketOnly reports whether nickName names a Japan-market-only SKU -
 // confirmed against a real Canon catalog build (641 models) that 166 of
 // them (26%) end in " JP", and that this isn't just a cosmetic label:
@@ -107,8 +156,21 @@ func stripLanguageSuffix(nickName string, tokens []string) (model, matchedToken 
 // deployments have no use for these; filtered out entirely (never indexed
 // at all, not just hidden from the UI) rather than carried as catalog
 // clutter nothing in this codebase ever resolves a deploy against.
+//
+// Ricoh's own real data (confirmed 2026-09, 427-model catalog) needed two
+// more, neither matching Canon's shape at all: an explicit "JPN" token that
+// sits *before* the language suffix, not after ("RICOH MP 1301 JPN PS", not
+// "...PS JPN" - 55 real occurrences), and ricohJapanModelNumberRe's own
+// glued-on-"J" convention (16 real occurrences). Checked as plain substring/
+// suffix matches against the raw NickName, same as Canon's own check.
 func isJapanMarketOnly(nickName string) bool {
-	return strings.HasSuffix(nickName, " JP")
+	if strings.HasSuffix(nickName, " JP") {
+		return true
+	}
+	if strings.Contains(nickName, " JPN ") || strings.HasSuffix(nickName, " JPN") {
+		return true
+	}
+	return ricohJapanModelNumberRe.MatchString(nickName)
 }
 
 // indexFamilyPackage inspects family's own newest package (pkg) once,
@@ -135,14 +197,14 @@ func macSubPackageRestrictor(manufacturer string) func(expandDir string) (map[st
 	return nil
 }
 
-func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir string, restrict func(expandDir string) (map[string]bool, bool)) (map[string][]MacPPDVariant, MacFamilyProvenance) {
+func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir string, restrict func(expandDir string) (map[string]bool, bool), ppdFallback ppdExtractionFallback) (map[string][]MacPPDVariant, MacFamilyProvenance) {
 	out := map[string][]MacPPDVariant{}
 	outerRef := MacPackageRef{Path: pkg.Path, ModTime: pkg.ModTime, Size: pkg.Size}
 
 	pkgPath, chain, pkgCleanup, pkgErr := LocatePkgWithChain(pkg.Path)
 	if pkgErr == nil {
 		defer pkgCleanup()
-		entries, subs, err := packagePPDEntriesFiltered(pkgPath, restrict)
+		entries, subs, err := packagePPDEntriesFilteredFallback(pkgPath, restrict, ppdFallback)
 		if err != nil {
 			return out, MacFamilyProvenance{}
 		}
@@ -152,11 +214,13 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 			}
 			model, _ := stripLanguageSuffix(e.NickName, tokens)
 			out[model] = append(out[model], MacPPDVariant{
-				Language:    family,
-				Label:       model + " (" + languageDisplayName(family) + ")",
-				NickName:    e.NickName,
-				Filename:    filepath.Base(e.Path),
-				PackagePath: pkg.Path,
+				Language:          family,
+				Label:             model + " (" + languageDisplayName(family) + ")",
+				NickName:          e.NickName,
+				Filename:          filepath.Base(e.Path),
+				PackagePath:       pkg.Path,
+				SourcePackagePath: pkg.Path,
+				PackageModTime:    pkg.ModTime,
 			})
 		}
 		if len(out) == 0 {
@@ -198,6 +262,8 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 			NickName:           nick,
 			Filename:           filename,
 			LooseCachedPPDPath: cached,
+			SourcePackagePath:  pkg.Path,
+			PackageModTime:     pkg.ModTime,
 		})
 	}
 	if len(out) == 0 {
@@ -220,6 +286,79 @@ func toMacPPDVariant(model string, v MacCatalogVariant) MacPPDVariant {
 		Filename:           v.Filename,
 		PackagePath:        v.PackagePath,
 		LooseCachedPPDPath: v.LooseCachedPPDPath,
+		SourcePackagePath:  v.SourcePackagePath,
+		PackageModTime:     v.PackageModTime,
+	}
+}
+
+// packageCacheKey turns a package's own path into a short, filesystem-safe
+// directory-name fragment - gives each package within a family its own
+// loose-PPD cache subdirectory now that more than one package can be
+// "current" for the same family at once (see MacModelIndex's own doc
+// comment), so two coexisting versions that happen to share a model's own
+// PPD filename can't silently overwrite each other's permanently-cached
+// copy (CachePPDFile). Keeps the real basename as a human-readable prefix
+// (easier to spot which cache directory belongs to which download when
+// looking at the filesystem directly) plus a short hash for guaranteed
+// uniqueness, rather than trying to sanitize a full path into a directory
+// name.
+func packageCacheKey(path string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(path))
+	return fmt.Sprintf("%s-%08x", filepath.Base(path), h.Sum32())
+}
+
+// packageVersionTag renders a short, cheap-to-compute "which download, and
+// when" tag for a decorated multi-version Driver-dropdown label - the bare
+// filename (no extension) plus the file's own modification date. Not
+// PackageLabel (macmount.go): that one's first attempt is a real
+// `pkgutil --expand-full` call, confirmed elsewhere in this codebase to be
+// genuinely expensive (packagePPDEntries' own doc comment - 6.4s/255MB for a
+// real Canon package) - far too costly to pay for every variant on every
+// catalog build just to decorate a label, when the bare filename is already
+// the same "honest signal" ResolveMac itself trusts for ordering (see that
+// function's own doc comment: macOS has no reliable package-level version
+// field at all).
+func packageVersionTag(packagePath string, modTime time.Time) string {
+	base := filepath.Base(packagePath)
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	if modTime.IsZero() {
+		return base
+	}
+	return base + " - " + modTime.Format("2006-01-02")
+}
+
+// decorateMultiVersionLabels mutates byModel in place: for any (model,
+// family) pair with more than one variant - two coexisting package versions
+// both registering a PPD for the same model - every one of those variants'
+// own Label gets packageVersionTag appended, so a technician can tell them
+// apart in the Driver dropdown (mirrors Windows' own Candidates() decoration
+// for a multi-version driver name). A model/family pair with only one
+// variant is untouched - its Label stays exactly as plain as it always was.
+// Variants are left in packagesInFamily's own newest-first order (already
+// guaranteed by BuildMacModelIndex's own per-family loop), so the first
+// (newest) one is always still first after decoration too - see
+// MacVariantForDeploy's own doc comment for why that ordering is what makes
+// "no explicit pick" always resolve to the latest version.
+func decorateMultiVersionLabels(byModel map[string][]MacPPDVariant) {
+	for model, variants := range byModel {
+		byLanguage := map[string][]int{}
+		for i, v := range variants {
+			byLanguage[v.Language] = append(byLanguage[v.Language], i)
+		}
+		for _, idxs := range byLanguage {
+			if len(idxs) < 2 {
+				continue
+			}
+			for _, i := range idxs {
+				v := &variants[i]
+				v.Label = model + " (" + languageDisplayName(v.Language) + ", " + packageVersionTag(v.PackagePath, v.PackageModTime) + ")"
+			}
+		}
+		// variants shares byModel[model]'s own backing array (both came from
+		// the same `for model, variants := range byModel` above) - the
+		// in-place edits above are already reflected there, no reassignment
+		// needed.
 	}
 }
 
@@ -251,14 +390,33 @@ func cachedVariantFilesExist(variants map[string][]MacCatalogVariant) bool {
 }
 
 // BuildMacModelIndex builds the model->variant index for every manufacturer
-// macFamilyPreference lists, inspecting only each family's own newest
-// package (the same one ResolveMacFamily would pick for that family) - and
-// only when it's actually new or changed since the last build (see
-// MacManufacturerCatalog.IsCurrent) - never every version-folder's own
-// copy, keeping the one-time cost bounded to "one pkgutil --expand (or one
-// dmg mount) per family that's actually new", not per package, and not
-// even paid again on a later launch once a package has already been
-// indexed once.
+// macFamilyPreference lists, inspecting every package classifyMacFamily
+// assigns to each family (packagesInFamily) - not just the newest - so more
+// than one compatible version of the same family can sit in the Drivers
+// folder at once and still each be individually indexed and selectable in
+// the Driver dropdown (a technician deliberately holding a printer fleet
+// back on an already-validated older version, the same real capability
+// Windows' own Candidates() decoration already gives Kyocera - see
+// MacModelIndex's own doc comment). Each package is still only ever
+// re-inspected when it's actually new or changed since the last build (see
+// MacManufacturerCatalog.IsCurrent/IsCurrentForPackage) - the newest
+// package's own provenance still lives in cat.Provenance (unchanged from
+// before this existed), every other, older-but-kept package's own
+// provenance lives in cat.ExtraProvenance instead - keeping the one-time
+// cost bounded to "one pkgutil --expand (or one dmg mount) per package
+// that's actually new," not paid again on a later launch once a package has
+// already been indexed once, regardless of how many coexisting versions
+// there are.
+//
+// A model with more than one variant for the *same* family (two coexisting
+// versions both registering a PPD for it) gets each of those variants'
+// own Label decorated with which package produced it (packageVersionTag) -
+// a single-version model's Label stays exactly as plain as it always was.
+// Auto-selection (MacVariantForDeploy, MacModelCandidates) always still
+// resolves to the newest one absent an explicit pick: every per-family loop
+// below processes packagesInFamily's own newest-first order, so the newest
+// package's own variants are always appended to byModel[model] before any
+// older package's - Ken's own explicit requirement (2026-09-13).
 //
 // macRoot is the Drivers/macOS directory - each manufacturer with real
 // per-model data gets its own catalog file there (inside that
@@ -292,64 +450,166 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 
 		byModel := map[string][]MacPPDVariant{}
 		for _, family := range tokens {
-			pkg, ok := newestInFamily(packages, tokens, family)
-			if !ok {
+			all := packagesInFamily(packages, tokens, family)
+			if len(all) == 0 {
+				// The !ok-continue gap tracked as issue #5 - a family whose
+				// last package disappeared entirely never gets pruned from
+				// cat.Models/cat.Provenance/cat.ExtraProvenance here.
+				// Deliberately not fixed as part of this change (#4) - see
+				// #5's own "blocked on #4" note.
 				continue
 			}
 
-			if cat.IsCurrent(family, pkg) {
-				cached := cat.ModelsForFamily(family)
-				if cachedVariantFilesExist(cached) {
-					for model, variants := range cached {
-						for _, v := range variants {
-							byModel[model] = append(byModel[model], toMacPPDVariant(model, v))
+			for i, pkg := range all {
+				newest := i == 0 // packagesInFamily is newest-first
+
+				var cached bool
+				if newest {
+					cached = cat.IsCurrent(family, pkg)
+				} else {
+					cached = cat.IsCurrentForPackage(family, pkg)
+				}
+				if cached {
+					cachedModels := cat.ModelsForFamilyPackage(family, pkg.Path)
+					// len(cachedModels) > 0 is required, not just
+					// cachedVariantFilesExist (which is vacuously true for an
+					// empty map) - confirmed live as a real bug: a catalog
+					// written before SourcePackagePath existed (any
+					// pre-2026-09-13 catalog.<mfg>.json) has every entry's own
+					// SourcePackagePath empty, so this lookup always came back
+					// empty for it, and an empty-but-vacuously-"valid" cache
+					// hit was silently trusted as "nothing to index" instead
+					// of falling through to a real reindex - Kyocera/Ricoh
+					// disappeared from the Model dropdown entirely as a
+					// result, even though their real packages were untouched.
+					if len(cachedModels) > 0 && cachedVariantFilesExist(cachedModels) {
+						for model, variants := range cachedModels {
+							for _, v := range variants {
+								byModel[model] = append(byModel[model], toMacPPDVariant(model, v))
+							}
 						}
+						continue
 					}
+				}
+
+				famCacheDir := ""
+				if ppdCacheDir != "" {
+					// Each package within a family gets its own cache
+					// subdirectory (packageCacheKey) - without this, two
+					// coexisting versions that happen to share a model's own
+					// loose-PPD filename would silently overwrite each
+					// other's permanently-cached copy (CachePPDFile), which
+					// would defeat the whole point of keeping an older
+					// version reachable.
+					famCacheDir = filepath.Join(ppdCacheDir, mfg, family, packageCacheKey(pkg.Path))
+				}
+				variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir, macSubPackageRestrictor(mfg), macSubPackagePPDFallback(mfg))
+				if len(variants) == 0 {
 					continue
 				}
+				for model, vs := range variants {
+					byModel[model] = append(byModel[model], vs...)
+				}
+
+				current := map[string][]MacCatalogVariant{}
+				for model, vs := range variants {
+					for _, v := range vs {
+						current[model] = append(current[model], MacCatalogVariant{
+							Language: v.Language, NickName: v.NickName, Filename: v.Filename,
+							PackagePath: v.PackagePath, LooseCachedPPDPath: v.LooseCachedPPDPath,
+							SourcePackagePath: v.SourcePackagePath, PackageModTime: v.PackageModTime,
+						})
+					}
+				}
+				// Diffed against whatever was there before this *package's*
+				// own entries get overwritten below - only when there was a
+				// previous build to compare against at all (a fresh/
+				// first-ever index has nothing meaningful to diff; everything
+				// would show as "added", which isn't a real change). See
+				// DiffModels' own doc comment for why this only reports
+				// *what* changed, not whether that's good or bad - that's a
+				// human call. Only run for the newest package - DiffModels
+				// itself compares against ModelsForFamily's whole-family
+				// view, which would otherwise also see (and misreport
+				// against) any older, unrelated package's own entries.
+				if newest {
+					if _, hadPrevious := cat.Provenance[family]; hadPrevious {
+						if added, removed := DiffModels(cat, family, current); len(added) > 0 || len(removed) > 0 {
+							changes = append(changes, mfg+" "+languageDisplayName(family)+": "+formatModelDiff(added, removed))
+						}
+					}
+				}
+				// Drop this *specific package's* previous entries (family
+				// AND packagePath both) before merging in the fresh ones -
+				// not the whole family, since another coexisting package's
+				// own already-cached entries for the same family must
+				// survive this untouched. A legacy entry with no
+				// SourcePackagePath at all (written before that field
+				// existed) is only ever treated as "belonging" to the
+				// *newest* package being reindexed, never an older one - the
+				// old single-version format only ever cached one package per
+				// family in the first place, so that's the only package a
+				// legacy entry could possibly have come from. Without this,
+				// reindexing after the len(cachedModels)>0 fix above would
+				// add fresh, correctly-tagged entries *alongside* the old
+				// untagged ones instead of replacing them, leaving orphaned
+				// duplicates in the catalog file forever.
+				for model, vs := range cat.Models {
+					kept := vs[:0]
+					for _, v := range vs {
+						isThisPackage := v.SourcePackagePath == pkg.Path || (newest && v.SourcePackagePath == "")
+						if !(v.Language == family && isThisPackage) {
+							kept = append(kept, v)
+						}
+					}
+					if len(kept) == 0 {
+						delete(cat.Models, model)
+					} else {
+						cat.Models[model] = kept
+					}
+				}
+				if cat.Models == nil {
+					cat.Models = map[string][]MacCatalogVariant{}
+				}
+				for model, vs := range current {
+					cat.Models[model] = append(cat.Models[model], vs...)
+				}
+				if newest {
+					cat.Provenance[family] = prov
+				} else {
+					if cat.ExtraProvenance[family] == nil {
+						cat.ExtraProvenance[family] = map[string]MacFamilyProvenance{}
+					}
+					cat.ExtraProvenance[family][pkg.Path] = prov
+				}
+				dirty = true
 			}
 
-			famCacheDir := ""
-			if ppdCacheDir != "" {
-				famCacheDir = filepath.Join(ppdCacheDir, mfg, family)
+			// Prune any entry/provenance left over for a package that's no
+			// longer part of this family's *current* package set at all -
+			// confirmed live as a real, immediate bug (not a hypothetical):
+			// a package that used to be individually tracked (before
+			// packagesInFamily's own (basename, size) deduplication existed
+			// earlier today) but has since collapsed away into another
+			// package's own representative entry never gets revisited by
+			// the loop above at all once it's gone from `all` - without
+			// this, its own stale cat.Models entries and
+			// cat.ExtraProvenance key sit there forever, showing up as
+			// bogus duplicate "versions" of the exact same real download
+			// (confirmed live: a real Kyocera catalog carried 10 duplicate
+			// entries per model, one per OS-version folder, after the
+			// dedup fix alone).
+			currentPaths := make(map[string]bool, len(all))
+			for _, pkg := range all {
+				currentPaths[pkg.Path] = true
 			}
-			variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir, macSubPackageRestrictor(mfg))
-			if len(variants) == 0 {
-				continue
-			}
-			for model, vs := range variants {
-				byModel[model] = append(byModel[model], vs...)
-			}
-
-			current := map[string][]MacCatalogVariant{}
-			for model, vs := range variants {
-				for _, v := range vs {
-					current[model] = append(current[model], MacCatalogVariant{
-						Language: v.Language, NickName: v.NickName, Filename: v.Filename,
-						PackagePath: v.PackagePath, LooseCachedPPDPath: v.LooseCachedPPDPath,
-					})
-				}
-			}
-			// Diffed against whatever was there before this family gets
-			// overwritten below - only when there was a previous build to
-			// compare against at all (a fresh/first-ever index has nothing
-			// meaningful to diff; everything would show as "added", which
-			// isn't a real change). See DiffModels' own doc comment for why
-			// this only reports *what* changed, not whether that's good or
-			// bad - that's a human call.
-			if _, hadPrevious := cat.Provenance[family]; hadPrevious {
-				if added, removed := DiffModels(cat, family, current); len(added) > 0 || len(removed) > 0 {
-					changes = append(changes, mfg+" "+languageDisplayName(family)+": "+formatModelDiff(added, removed))
-				}
-			}
-			// Drop this family's previous entries before merging in the
-			// fresh ones - a superseded model (no longer in the new
-			// package at all) shouldn't linger in the catalog forever.
 			for model, vs := range cat.Models {
 				kept := vs[:0]
 				for _, v := range vs {
-					if v.Language != family {
+					if v.Language != family || currentPaths[v.SourcePackagePath] {
 						kept = append(kept, v)
+					} else {
+						dirty = true
 					}
 				}
 				if len(kept) == 0 {
@@ -358,15 +618,15 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 					cat.Models[model] = kept
 				}
 			}
-			if cat.Models == nil {
-				cat.Models = map[string][]MacCatalogVariant{}
+			for path := range cat.ExtraProvenance[family] {
+				if !currentPaths[path] {
+					delete(cat.ExtraProvenance[family], path)
+					dirty = true
+				}
 			}
-			for model, vs := range current {
-				cat.Models[model] = append(cat.Models[model], vs...)
-			}
-			cat.Provenance[family] = prov
-			dirty = true
 		}
+
+		decorateMultiVersionLabels(byModel)
 
 		if len(byModel) > 0 {
 			index[mfg] = byModel
@@ -558,6 +818,16 @@ func MacModelCandidates(index MacModelIndex, manufacturer, model, filterText str
 // ResolveMacFamily's own preference order for the "Model chosen, language
 // not decided" case). ok is false whenever model doesn't resolve to any
 // index entry at all - the caller falls back to ResolveMacFamily/choosePPD.
+//
+// When a family has more than one coexisting package version indexed (see
+// MacModelIndex's own doc comment), "matches the family-preference order
+// first" also means "the newest one" without needing any extra logic here -
+// BuildMacModelIndex's own per-family loop always appends a family's newest
+// package's variants to variants before any older package's, so the first
+// v.Language == tok match found below is guaranteed to already be the
+// latest version. Ken's own explicit requirement (2026-09-13): a blank/
+// ambiguous selection must always resolve to the newest version, never an
+// older one left around for manual selection.
 func MacVariantForDeploy(index MacModelIndex, manufacturer, model, driverLabel string) (MacPPDVariant, bool) {
 	_, variants, ok := lookupMacModel(index, manufacturer, model)
 	if !ok || len(variants) == 0 {

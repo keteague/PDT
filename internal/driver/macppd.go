@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -127,6 +128,16 @@ func packagePPDEntries(pkgPath string) ([]ppdEntry, []subPackageResult, error) {
 // See kyoceraRestrictSubPackages (mackyocera.go) for the one real caller
 // and why it's needed.
 func packagePPDEntriesFiltered(pkgPath string, restrict func(expandDir string) (allow map[string]bool, ok bool)) ([]ppdEntry, []subPackageResult, error) {
+	return packagePPDEntriesFilteredFallback(pkgPath, restrict, nil)
+}
+
+// packagePPDEntriesFilteredFallback is packagePPDEntriesFiltered, with a
+// second optional manufacturer-specific hook: ppdFallback, tried on a
+// sub-package only when the fast, extension-based cpio glob finds nothing
+// in it at all - see macSubPackagePPDFallback (macricoh.go) for the one real
+// caller and why Ricoh specifically needs one (its own real PPDs carry no
+// recognized extension at all, or - for one legacy bundle - a bare ".gz").
+func packagePPDEntriesFilteredFallback(pkgPath string, restrict func(expandDir string) (allow map[string]bool, ok bool), ppdFallback ppdExtractionFallback) ([]ppdEntry, []subPackageResult, error) {
 	tmpDir, err := os.MkdirTemp("", "pdt-ppdinspect-*")
 	if err != nil {
 		return nil, nil, err
@@ -146,7 +157,7 @@ func packagePPDEntriesFiltered(pkgPath string, restrict func(expandDir string) (
 	}
 
 	extractDir := filepath.Join(tmpDir, "ppds")
-	subs := extractPPDsFromExpandedPkgFiltered(expandDir, extractDir, allow)
+	subs := extractPPDsFromExpandedPkgFiltered(expandDir, extractDir, allow, ppdFallback)
 
 	var entries []ppdEntry
 	_ = filepath.WalkDir(extractDir, func(path string, d fs.DirEntry, err error) error {
@@ -154,7 +165,12 @@ func packagePPDEntriesFiltered(pkgPath string, restrict func(expandDir string) (
 			return nil
 		}
 		lower := strings.ToLower(path)
-		if !strings.HasSuffix(lower, ".ppd") && !strings.HasSuffix(lower, ".ppd.gz") {
+		hasRecognizedSuffix := strings.HasSuffix(lower, ".ppd") || strings.HasSuffix(lower, ".ppd.gz")
+		// A recognized suffix is trusted outright (the fast, common case -
+		// every real Canon/Kyocera PPD hits this); anything else (a fallback
+		// extraction's own output - see ppdExtractionFallback) only counts
+		// once its actual content is confirmed real, never by name alone.
+		if !hasRecognizedSuffix && !looksLikeRealPPD(path) {
 			return nil
 		}
 		if name, ok := ReadPPDNickName(path); ok {
@@ -163,6 +179,66 @@ func packagePPDEntriesFiltered(pkgPath string, restrict func(expandDir string) (
 		return nil
 	})
 	return entries, subs, nil
+}
+
+// looksLikeRealPPD reports whether path's own content starts with a real
+// PPD's own `*PPD-Adobe` header - transparently gzip-decompressing first
+// when path's own first two bytes are the gzip magic number, regardless of
+// what extension (if any) the file's own name carries. The content-based
+// fallback extractPPDsFromExpandedPkgFiltered falls back to once a
+// manufacturer's own real PPDs can't be recognized by extension at all
+// (confirmed against two real, different Ricoh shapes: modern "Web Build"-
+// style downloads name PPDs with no extension whatsoever, a legacy
+// Apple-distributed bundle names them "<model>.gz" with no ".ppd" anywhere) -
+// never trusted by name alone, exactly the discipline this codebase already
+// applies everywhere else a vendor's own naming can't be trusted.
+func looksLikeRealPPD(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	magic := make([]byte, 2)
+	if _, err := io.ReadFull(f, magic); err != nil {
+		return false
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return false
+	}
+
+	var r io.Reader = f
+	if magic[0] == 0x1f && magic[1] == 0x8b {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return false
+		}
+		defer gz.Close()
+		r = gz
+	}
+	head := make([]byte, 32)
+	n, _ := io.ReadFull(r, head)
+	return bytes.HasPrefix(head[:n], []byte("*PPD-Adobe"))
+}
+
+// removeNonPPDFiles deletes every regular file under root whose own content
+// doesn't pass looksLikeRealPPD - a content-based extraction fallback (see
+// ppdExtractionFallback) trusts a real signal (a declared install-location,
+// a matched path fragment) to decide *where* to look, never to decide that
+// everything found there is automatically real; this is the fallback's own
+// cleanup step so destDir never carries unverified content past its own
+// return, the same "verify, don't guess" discipline applied everywhere else
+// a vendor's own naming can't be trusted.
+func removeNonPPDFiles(root string) {
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if !looksLikeRealPPD(path) {
+			_ = os.Remove(path)
+		}
+		return nil
+	})
 }
 
 // extractPPDsFromExpandedPkg walks expandDir (a pkgutil --expand tree - one
@@ -182,20 +258,33 @@ func packagePPDEntriesFiltered(pkgPath string, restrict func(expandDir string) (
 // with nothing in it, which packagePPDEntries' own caller already treats as
 // "no PPDs found", not an error.
 func extractPPDsFromExpandedPkg(expandDir, destDir string) []subPackageResult {
-	return extractPPDsFromExpandedPkgFiltered(expandDir, destDir, nil)
+	return extractPPDsFromExpandedPkgFiltered(expandDir, destDir, nil, nil)
 }
 
-// extractPPDsFromExpandedPkgFiltered is extractPPDsFromExpandedPkg, with an
-// optional allow-list restricting which sub-package directory *names* get
-// walked at all - nil means every sub-package with a Payload, same as
+// ppdExtractionFallback is tried, for one sub-package, only once the fast
+// extension-based cpio glob below finds nothing in it at all - pkgDir is
+// that sub-package's own expanded directory (its PackageInfo lives there),
+// payloadPath its own Payload file, destDir where a real match should end up
+// (same directory the normal glob path would have used). Returns whether it
+// found and extracted anything. See macSubPackagePPDFallback (macricoh.go)
+// for the one real dispatcher and why only Ricoh needs one today - nil for
+// every other manufacturer, at zero extra cost (the fallback branch below is
+// simply never taken).
+type ppdExtractionFallback func(pkgDir, payloadPath, destDir string) bool
+
+// extractPPDsFromExpandedPkgFiltered is extractPPDsFromExpandedPkg, with two
+// optional extra hooks. allow restricts which sub-package directory *names*
+// get walked at all - nil means every sub-package with a Payload, same as
 // before (every manufacturer except Kyocera today). Kyocera's own real "Web
 // Build" package ships the identical PPD set duplicated across 3
 // sub-packages (a baseline installer plus two that only patch a default
 // value into an otherwise byte-identical copy afterward, confirmed live) -
 // without this, every model would get indexed 3 times over with completely
 // duplicate variants. See kyoceraRestrictSubPackages (mackyocera.go) for the
-// one real caller.
-func extractPPDsFromExpandedPkgFiltered(expandDir, destDir string, allow map[string]bool) []subPackageResult {
+// one real caller. ppdFallback is tried on a sub-package only when the fast
+// glob path finds nothing in it - see ppdExtractionFallback's own doc
+// comment.
+func extractPPDsFromExpandedPkgFiltered(expandDir, destDir string, allow map[string]bool, ppdFallback ppdExtractionFallback) []subPackageResult {
 	var subs []subPackageResult
 	_ = filepath.WalkDir(expandDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || d.Name() != "Payload" {
@@ -233,6 +322,10 @@ func extractPPDsFromExpandedPkgFiltered(expandDir, destDir string, allow map[str
 		cmd.Stdin = gz
 		_ = cmd.Run()
 
+		if !dirHasAnyFile(sub) && ppdFallback != nil {
+			ppdFallback(pkgDir, path, sub)
+		}
+
 		if dirHasAnyFile(sub) {
 			version, _ := readPackageInfoVersion(filepath.Join(pkgDir, "PackageInfo"))
 			subs = append(subs, subPackageResult{Name: name, Version: version})
@@ -240,6 +333,96 @@ func extractPPDsFromExpandedPkgFiltered(expandDir, destDir string, allow map[str
 		return nil
 	})
 	return subs
+}
+
+// extractAllFromPayload re-opens payloadPath fresh (whatever reader found
+// this sub-package's own fast glob came up empty already consumed the
+// stream) and cpio-extracts every entry into destDir, with no name
+// filtering at all - safe only when the whole Payload is already known
+// (from some other real signal, not a guess - see ppdExtractionFallback) to
+// contain nothing but real PPDs.
+func extractAllFromPayload(payloadPath, destDir string) {
+	f, err := os.Open(payloadPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return
+	}
+	defer gz.Close()
+	cmd := exec.Command("cpio", "-idm", "--quiet")
+	cmd.Dir = destDir
+	cmd.Stdin = gz
+	_ = cmd.Run()
+}
+
+// listPayloadEntries re-opens payloadPath fresh and lists every entry's own
+// path via `cpio -it` - decompresses the whole stream but never writes a
+// file to disk, far cheaper than a real extraction pass (the same
+// distinction packagePPDEntries' own doc comment already draws between
+// `--expand-full` and selective extraction).
+func listPayloadEntries(payloadPath string) []string {
+	f, err := os.Open(payloadPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil
+	}
+	defer gz.Close()
+	cmd := exec.Command("cpio", "-it", "--quiet")
+	cmd.Stdin = gz
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	entries := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if l = strings.TrimSpace(l); l != "" {
+			entries = append(entries, l)
+		}
+	}
+	return entries
+}
+
+// extractPathContainingFromPayload re-opens payloadPath fresh and
+// cpio-extracts only the entries whose own path contains fragment - found by
+// a first, cheap listPayloadEntries pass, then requested from cpio by exact
+// name (cpio accepts literal names, not just globs) rather than a blind
+// "extract everything," which would also pull down every unrelated file
+// sharing the same Payload (confirmed necessary against a real legacy Ricoh
+// bundle whose PPDs sit in the same Payload as hundreds of unrelated
+// driver-framework/PDE-plugin files - see macricoh.go).
+func extractPathContainingFromPayload(payloadPath, fragment, destDir string) {
+	var matches []string
+	for _, e := range listPayloadEntries(payloadPath) {
+		if strings.Contains(e, fragment) {
+			matches = append(matches, e)
+		}
+	}
+	if len(matches) == 0 {
+		return
+	}
+	f, err := os.Open(payloadPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return
+	}
+	defer gz.Close()
+	args := append([]string{"-idm", "--quiet"}, matches...)
+	cmd := exec.Command("cpio", args...)
+	cmd.Dir = destDir
+	cmd.Stdin = gz
+	_ = cmd.Run()
 }
 
 // dirHasAnyFile reports whether root (recursively) contains at least one
@@ -261,9 +444,14 @@ func dirHasAnyFile(root string) bool {
 // PackagePPDNickNames returns the *NickName of every PPD pkgPath's own
 // payload would install, without installing anything - lets deploy-time
 // model matching happen *before* deciding which of a manufacturer's several
-// packages (see ResolveMacFamily) to actually install.
-func PackagePPDNickNames(pkgPath string) ([]string, error) {
-	entries, _, err := packagePPDEntries(pkgPath)
+// packages (see ResolveMacFamily) to actually install. manufacturer selects
+// the same content-based extraction fallback BuildMacModelIndex's own
+// catalog build already applies (macSubPackagePPDFallback) - without it, a
+// manufacturer whose real PPDs need that fallback (Ricoh) would score every
+// one of its own packages as having no PPDs at all here, even though the
+// catalog-driven index (built the same way) finds them correctly.
+func PackagePPDNickNames(pkgPath, manufacturer string) ([]string, error) {
+	entries, _, err := packagePPDEntriesFilteredFallback(pkgPath, nil, macSubPackagePPDFallback(manufacturer))
 	if err != nil {
 		return nil, err
 	}
@@ -303,11 +491,11 @@ func CachePPDFile(srcPath, cacheDir, filename string) (string, error) {
 // NickName for logging. ok is false when the package has no PPD at all
 // (e.g. an installer that registers no classic PPD), model is empty, or
 // nothing inside scores a match.
-func PackageBestModelScore(pkgPath, model string) (nickName string, score int, ok bool) {
+func PackageBestModelScore(pkgPath, manufacturer, model string) (nickName string, score int, ok bool) {
 	if model == "" {
 		return "", -1, false
 	}
-	names, err := PackagePPDNickNames(pkgPath)
+	names, err := PackagePPDNickNames(pkgPath, manufacturer)
 	if err != nil {
 		return "", -1, false
 	}

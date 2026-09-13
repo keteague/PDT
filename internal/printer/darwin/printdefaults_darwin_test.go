@@ -46,12 +46,12 @@ func TestFindOption_MatchesCanonCNColorModeExactly(t *testing.T) {
 // instead and setting a nonsense value on it.
 func TestFindOption_DoesNotMatchOtherRealCanonColorOptions(t *testing.T) {
 	opts := []ppdOption{
-		{keyword: "CNColorSyncICC", choices: []string{"DefaultFile"}},
-		{keyword: "CNColorHalftone", choices: []string{"pattern6"}},
-		{keyword: "CNNumberOfColors", choices: []string{"FullColor"}},
-		{keyword: "CNColorToUseWithBlack", choices: []string{"Red"}},
-		{keyword: "CNXColorAdjustment", choices: []string{"6"}},
-		{keyword: "CNYColorAdjustment", choices: []string{"6"}},
+		{keyword: "CNColorSyncICC", choices: valueChoices("DefaultFile")},
+		{keyword: "CNColorHalftone", choices: valueChoices("pattern6")},
+		{keyword: "CNNumberOfColors", choices: valueChoices("FullColor")},
+		{keyword: "CNColorToUseWithBlack", choices: valueChoices("Red")},
+		{keyword: "CNXColorAdjustment", choices: valueChoices("6")},
+		{keyword: "CNYColorAdjustment", choices: valueChoices("6")},
 	}
 	if got, ok := findOption(opts, "colormodel", "cncolormode"); ok {
 		t.Errorf("findOption(colormodel, cncolormode) unexpectedly matched %+v, want no match among unrelated Canon color options", got)
@@ -72,8 +72,8 @@ func TestFindOption_DoesNotMatchOtherRealCanonColorOptions(t *testing.T) {
 // ordering.
 func TestFindOption_DoesNotMatchCNProcessColorModeInsteadOfCNColorMode(t *testing.T) {
 	opts := []ppdOption{
-		{keyword: "CNProcessColorMode", choices: []string{"False", "*True"}},
-		{keyword: "CNColorMode", choices: []string{"mono", "*color"}},
+		{keyword: "CNProcessColorMode", choices: valueChoices("False", "*True")},
+		{keyword: "CNColorMode", choices: valueChoices("mono", "*color")},
 	}
 	got, ok := findOption(opts, "colormodel", "cncolormode")
 	if !ok || got.keyword != "CNColorMode" {
@@ -121,7 +121,7 @@ func TestParsePPDOpenUIOptions_ParsesRealCanonDuplexBlock(t *testing.T) {
 		t.Fatalf("parsePPDOpenUIOptions = %+v, want one CNDuplex option", opts)
 	}
 	want := []string{"None", "DuplexFront", "Booklet"}
-	if strings.Join(opts[0].choices, ",") != strings.Join(want, ",") {
+	if strings.Join(choiceValues(opts[0].choices), ",") != strings.Join(want, ",") {
 		t.Errorf("choices = %v, want %v", opts[0].choices, want)
 	}
 }
@@ -132,7 +132,7 @@ func TestParsePPDOpenUIOptions_ParsesRealCanonColorModeBlock(t *testing.T) {
 		t.Fatalf("parsePPDOpenUIOptions = %+v, want one CNColorMode option", opts)
 	}
 	want := []string{"mono", "color"}
-	if strings.Join(opts[0].choices, ",") != strings.Join(want, ",") {
+	if strings.Join(choiceValues(opts[0].choices), ",") != strings.Join(want, ",") {
 		t.Errorf("choices = %v, want %v", opts[0].choices, want)
 	}
 }
@@ -178,13 +178,35 @@ func TestPickChoice_MonoAndColorFromRealCanonColorModeChoices(t *testing.T) {
 	}
 }
 
+// valueChoices builds []ppdChoice from bare values with no label - the
+// listPPDOptions (`lpoptions -l`) shape, where a per-choice label is never
+// available.
+func valueChoices(values ...string) []ppdChoice {
+	choices := make([]ppdChoice, len(values))
+	for i, v := range values {
+		choices[i] = ppdChoice{value: v}
+	}
+	return choices
+}
+
+// choiceValues extracts just the .value from each choice, for tests that
+// only care about values (most - .label only matters for the Sharp
+// abbreviated-code tests below).
+func choiceValues(choices []ppdChoice) []string {
+	values := make([]string, len(choices))
+	for i, c := range choices {
+		values[i] = c.value
+	}
+	return values
+}
+
 func parseOneLine(t *testing.T, line string) ppdOption {
 	t.Helper()
 	m := ppdOptionLineRe.FindStringSubmatch(line)
 	if m == nil {
 		t.Fatalf("ppdOptionLineRe did not match %q", line)
 	}
-	return ppdOption{keyword: m[1], choices: strings.Fields(m[2])}
+	return ppdOption{keyword: m[1], choices: valueChoices(strings.Fields(m[2])...)}
 }
 
 func TestPpdOptionLineRe_ParsesRealDuplexLine(t *testing.T) {
@@ -197,8 +219,8 @@ func TestPpdOptionLineRe_ParsesRealDuplexLine(t *testing.T) {
 		t.Fatalf("choices = %v, want %v", got.choices, want)
 	}
 	for i := range want {
-		if got.choices[i] != want[i] {
-			t.Errorf("choices[%d] = %q, want %q", i, got.choices[i], want[i])
+		if got.choices[i].value != want[i] {
+			t.Errorf("choices[%d] = %q, want %q", i, got.choices[i].value, want[i])
 		}
 	}
 }
@@ -302,6 +324,108 @@ func TestParsePPDOpenUIOptions_RealGenericPostScriptDuplexBlock(t *testing.T) {
 // path and fail, producing a confusing "could not read PPD options"
 // warning instead of the clean no-op the empty-ppdPath (-m everywhere) case
 // already gets.
+// realSharpARCModePPDBlock is copied verbatim (2026-09-13) from the real,
+// installed Sharp BP-20C20 PPD
+// (`gunzip -c "SHARP BP-20C20.PPD.gz"` from the real MX-C55c_2512a_MacPS.dmg
+// payload). This is the exact real bug that motivated splitting ppdChoice
+// into value+label: Sharp's own choice *values* are abbreviated, non-
+// self-describing codes ("CMAuto", "CMColor", "CMBW") - only the label after
+// the "/" ("Automatic", "Color", "Black and White") is human-readable. A
+// live 2-row deploy against this exact real driver confirmed the resulting
+// bug: "row %q's PPD declares no ColorModel option; leaving color mode
+// as-is" for a row whose Mono checkbox was checked, leaving the PPD's own
+// hardcoded default ("Automatic") in CUPS instead of the requested
+// Black & White.
+const realSharpARCModePPDBlock = `*OpenUI *ARCMode/Color Mode: PickOne
+*OrderDependency: 180 AnySetup *ARCMode
+*DefaultARCMode: CMAuto
+*ARCMode CMAuto/Automatic: "
+	userdict /ARCMode known not {userdict /ARCMode 0 put} if
+	0 setcolormode"
+*End
+*ARCMode CMColor/Color: "
+	userdict /ARCMode known not {userdict /ARCMode 1 put} if
+	1 setcolormode"
+*End
+*ARCMode CMBW/Black and White: "
+	userdict /ARCMode known not {userdict /ARCMode 2 put} if
+	2 setcolormode"
+*End
+*CloseUI: *ARCMode`
+
+// TestParsePPDOpenUIOptions_CapturesSharpARCModeLabels guards that
+// parsePPDOpenUIOptions keeps each choice's own label ("Black and White"),
+// not just its abbreviated value ("CMBW") - the label is the only place
+// Sharp's real PPD spells out what each abbreviated code actually means.
+func TestParsePPDOpenUIOptions_CapturesSharpARCModeLabels(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realSharpARCModePPDBlock)
+	if len(opts) != 1 || opts[0].keyword != "ARCMode" {
+		t.Fatalf("expected exactly one ARCMode option, got %+v", opts)
+	}
+	want := map[string]string{"CMAuto": "Automatic", "CMColor": "Color", "CMBW": "Black and White"}
+	if len(opts[0].choices) != len(want) {
+		t.Fatalf("choices = %+v, want %d entries", opts[0].choices, len(want))
+	}
+	for _, c := range opts[0].choices {
+		if want[c.value] != c.label {
+			t.Errorf("choice %q has label %q, want %q", c.value, c.label, want[c.value])
+		}
+	}
+}
+
+// TestFindOption_MatchesSharpARCMode guards the other half of the real bug:
+// findOption's own exact-keyword allowlist didn't recognize "ARCMode" as a
+// ColorModel-equivalent keyword at all, so decidePrintDefaults never even
+// reached pickChoice for a real Sharp PPD - confirmed live via the deploy
+// log's own "declares no ColorModel option" warning.
+func TestFindOption_MatchesSharpARCMode(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realSharpARCModePPDBlock)
+	got, ok := findOption(opts, "colormodel", "cncolormode", "arcmode")
+	if !ok || got.keyword != "ARCMode" {
+		t.Errorf("findOption(colormodel, cncolormode, arcmode) = %+v, %v, want ARCMode, true", got, ok)
+	}
+}
+
+// TestPickChoice_MonoPicksCMBWFromRealSharpARCModeChoicesByLabel is the
+// end-to-end regression: pickChoice must resolve mono=true against Sharp's
+// real ARCMode choices to "CMBW" (the value lpadmin actually needs), found
+// only by matching "black" against the choice's own LABEL ("Black and
+// White") - the value "CMBW" alone contains none of "gray"/"grey"/"mono"/
+// "black", so a value-only match (the pre-fix behavior) would report no
+// match at all here.
+func TestPickChoice_MonoPicksCMBWFromRealSharpARCModeChoicesByLabel(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realSharpARCModePPDBlock)
+	choice, ok := pickChoice(opts[0].choices, []string{"gray", "grey", "mono", "black"}, nil)
+	if !ok || choice != "CMBW" {
+		t.Errorf("pickChoice (mono) = %q, %v, want \"CMBW\", true", choice, ok)
+	}
+}
+
+// TestDecidePrintDefaults_SharpARCModeAppliesBlackAndWhiteWithNoWarning is
+// the full real-deploy-shaped regression: decidePrintDefaults against the
+// real Sharp PPD block, mono requested, must produce "ARCMode=CMBW" with no
+// warning - reproducing exactly what a real zCom Two-shaped deploy row
+// needs, confirmed live to be broken before both fixes above (findOption's
+// "arcmode" keyword, pickChoice's label matching) landed together.
+func TestDecidePrintDefaults_SharpARCModeAppliesBlackAndWhiteWithNoWarning(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realSharpARCModePPDBlock)
+	toSet, warnings := decidePrintDefaults(opts, true, true, `row "zCom Two"`)
+	found := false
+	for _, arg := range toSet {
+		if arg == "ARCMode=CMBW" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected ARCMode=CMBW in toSet, got %v", toSet)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "ColorModel") || strings.Contains(w, "ARCMode") {
+			t.Errorf("did not expect a color-related warning against this real PPD block, got %q", w)
+		}
+	}
+}
+
 func TestPrintDefaultsForNewQueue_GenericModelReferenceSkipsReading(t *testing.T) {
 	toSet, warnings := PrintDefaultsForNewQueue("Test Row", "drv:///sample.drv/generic.ppd", true, true)
 	if toSet != nil || warnings != nil {

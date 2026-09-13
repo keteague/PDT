@@ -18,11 +18,31 @@ import (
 // "ColorModel/Color mode: *CMYK Gray".
 var ppdOptionLineRe = regexp.MustCompile(`^(\S+?)/[^:]*:\s*(.+)$`)
 
+// ppdChoice is one option's own selectable value, alongside its human-
+// readable label when one is available. value is always what actually gets
+// sent to `lpadmin -o Key=Value` - never the label. label is populated only
+// when parsePPDOpenUIOptions reads a raw PPD file directly (it can see the
+// "/Label" part of a `*<Keyword> <Value>/<Label>: ...` line); listPPDOptions
+// (`lpoptions -l`, for a queue that already exists) has no way to recover a
+// per-choice label at all - CUPS's own `-l` output only ever lists bare
+// values - so label stays "" there. Confirmed live (2026-09-13) that this
+// split matters: a real Sharp PPD's own ColorModel-equivalent option
+// (*ARCMode) declares abbreviated, non-self-describing values ("CMAuto",
+// "CMColor", "CMBW") whose own label carries the only human-readable meaning
+// ("Automatic", "Color", "Black and White") - every other manufacturer's own
+// real PPDs inspected so far (Canon, Kyocera, Ricoh) happened to use
+// self-describing values instead (e.g. "DuplexNoTumble", "Gray"), which is
+// why this gap went unnoticed until now.
+type ppdChoice struct {
+	value string
+	label string
+}
+
 // ppdOption is one PPD-declared option's keyword and its available choices,
 // parsed from one line of `lpoptions -l` output.
 type ppdOption struct {
 	keyword string
-	choices []string
+	choices []ppdChoice
 }
 
 func listPPDOptions(ctx context.Context, queueName string) ([]ppdOption, error) {
@@ -36,7 +56,12 @@ func listPPDOptions(ctx context.Context, queueName string) ([]ppdOption, error) 
 		if m == nil {
 			continue
 		}
-		opts = append(opts, ppdOption{keyword: m[1], choices: strings.Fields(m[2])})
+		fields := strings.Fields(m[2])
+		choices := make([]ppdChoice, len(fields))
+		for i, f := range fields {
+			choices[i] = ppdChoice{value: f}
+		}
+		opts = append(opts, ppdOption{keyword: m[1], choices: choices})
 	}
 	return opts, nil
 }
@@ -127,12 +152,18 @@ func parsePPDOpenUIOptions(text string) []ppdOption {
 			continue
 		}
 		if rest, ok := strings.CutPrefix(line, "*"+building.keyword+" "); ok {
-			choice := rest
-			if idx := strings.IndexAny(choice, "/:"); idx >= 0 {
-				choice = choice[:idx]
+			value, label := rest, ""
+			if slash := strings.Index(value, "/"); slash >= 0 {
+				label = value[slash+1:]
+				value = value[:slash]
+				if colon := strings.Index(label, ":"); colon >= 0 {
+					label = label[:colon]
+				}
+			} else if colon := strings.Index(value, ":"); colon >= 0 {
+				value = value[:colon]
 			}
-			if choice = strings.TrimSpace(choice); choice != "" {
-				building.choices = append(building.choices, choice)
+			if value = strings.TrimSpace(value); value != "" {
+				building.choices = append(building.choices, ppdChoice{value: value, label: strings.TrimSpace(label)})
 			}
 		}
 	}
@@ -142,24 +173,36 @@ func parsePPDOpenUIOptions(text string) []ppdOption {
 	return result
 }
 
-// pickChoice returns the first choice (its "*"-default marker stripped)
-// whose lowercased text contains none of avoid, and - when want is non-empty -
-// also contains at least one of want. An empty want matches any choice not in
-// avoid (used to pick "whatever's left once the mono-ish choices are
-// excluded" for a color request, where there's no single positive keyword to
-// require). The same substring-based approach devmode_windows.go's own
-// driver-specific quirks already accept as unavoidable given how
-// inconsistently vendors name PPD options and choices; unlike Windows' fixed
-// DEVMODE fields, there is no single correct keyword/value pair to hardcode
-// here.
-func pickChoice(choices []string, want, avoid []string) (string, bool) {
+// pickChoice returns the first choice (its "*"-default marker stripped, own
+// value only - never the label) whose searchable text - value plus label
+// when one is available (see ppdChoice's own doc comment) - contains none of
+// avoid, and, when want is non-empty, also contains at least one of want. An
+// empty want matches any choice not in avoid (used to pick "whatever's left
+// once the mono-ish choices are excluded" for a color request, where there's
+// no single positive keyword to require). The same substring-based approach
+// devmode_windows.go's own driver-specific quirks already accept as
+// unavoidable given how inconsistently vendors name PPD options and choices;
+// unlike Windows' fixed DEVMODE fields, there is no single correct keyword/
+// value pair to hardcode here. Matching against the label alongside the
+// value (not the value alone) is what lets this recognize a real Sharp
+// *ARCMode choice like "CMBW" (value) / "Black and White" (label) as the
+// mono choice - the abbreviated value alone contains none of "gray"/"mono"/
+// "black" (confirmed live, 2026-09-13, a real bug: Sharp's own color default
+// silently never got applied, left at the PPD's own hardcoded "Automatic"),
+// while still matching every other manufacturer's self-describing values
+// exactly as before (an empty label never changes what a value-only match
+// already found).
+func pickChoice(choices []ppdChoice, want, avoid []string) (string, bool) {
 	for _, raw := range choices {
-		c := strings.TrimPrefix(raw, "*")
-		lower := strings.ToLower(c)
-		if containsAny(lower, avoid) {
+		c := strings.TrimPrefix(raw.value, "*")
+		searchable := strings.ToLower(c)
+		if raw.label != "" {
+			searchable += " " + strings.ToLower(raw.label)
+		}
+		if containsAny(searchable, avoid) {
 			continue
 		}
-		if len(want) == 0 || containsAny(lower, want) {
+		if len(want) == 0 || containsAny(searchable, want) {
 			return c, true
 		}
 	}
@@ -204,7 +247,7 @@ func decidePrintDefaults(opts []ppdOption, oneSided, mono bool, subject string) 
 		warnings = append(warnings, fmt.Sprintf("%s's PPD declares no Duplex option; leaving duplex as-is", subject))
 	}
 
-	if colorModel, ok := findOption(opts, "colormodel", "cncolormode"); ok {
+	if colorModel, ok := findOption(opts, "colormodel", "cncolormode", "arcmode"); ok {
 		if mono {
 			if choice, ok := pickChoice(colorModel.choices, []string{"gray", "grey", "mono", "black"}, nil); ok {
 				toSet = append(toSet, colorModel.keyword+"="+choice)
@@ -291,9 +334,12 @@ func PrintDefaultsForNewQueue(rowName, ppdPath string, oneSided, mono bool) (toS
 // settings to the wrong option while leaving the real CNColorMode untouched
 // - confirmed live: deployed with Mono checked, CUPS still showed color.
 // The known real-world spellings so far: the CUPS-standard "Duplex"/
-// "ColorModel", and Canon's own "CNDuplex"/"CNColorMode" - add a new exact
-// spelling here if a future vendor's PPD needs one, never widen this back to
-// a suffix/substring match.
+// "ColorModel", Canon's own "CNDuplex"/"CNColorMode", and Sharp's own
+// "ARCMode" (confirmed live, 2026-09-13, against a real Sharp PPD's own
+// `*OpenUI *ARCMode/Color Mode: PickOne` block - Sharp's own Duplex keyword
+// needed no addition, it already spells it the CUPS-standard way) - add a
+// new exact spelling here if a future vendor's PPD needs one, never widen
+// this back to a suffix/substring match.
 func findOption(opts []ppdOption, exactKeywordsLower ...string) (ppdOption, bool) {
 	for _, o := range opts {
 		lower := strings.ToLower(o.keyword)

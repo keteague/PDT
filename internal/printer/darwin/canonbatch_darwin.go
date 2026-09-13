@@ -62,7 +62,8 @@ type canonBatchRowPlan struct {
 // doc comment for the full rationale (getting down to one elevated prompt
 // for a whole multi-row deploy run instead of one, or several, per row).
 // Tries each manufacturer-specific planner in turn for every row
-// (planCanonBatchRow, planKyoceraBatchRow) - whichever recognizes the row's
+// (planCanonBatchRow, planKyoceraBatchRow, planRicohBatchRow,
+// planSharpBatchRow) - whichever recognizes the row's
 // actual package shape claims it; a row neither recognizes (a different
 // manufacturer entirely, the guess-based fallback with no catalog entry, a
 // loose-PPD no-installer family, or an existing queue to reuse) is left
@@ -141,6 +142,9 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 		}
 		if !handled {
 			plan, handled = planRicohBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+		}
+		if !handled {
+			plan, handled = planSharpBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
 			continue // not a recognized shape - not batched, falls back to the old per-row path
@@ -358,7 +362,7 @@ func planRicohBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 
 	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
 
-	ppdPath, cleanup, err := driver.RicohPPDPathForDefaults(pkgPath, variant.Filename)
+	ppdPath, cleanup, err := driver.PPDPathForDefaults("Ricoh", pkgPath, variant.Filename)
 	if err != nil {
 		return plan, true
 	}
@@ -375,6 +379,42 @@ func planRicohBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 		// earlier row's own full install already placed this row's own PPD
 		// too. Still need *some* command here: the caller always joins
 		// installScript and the queue-create command with " && ".
+		s.WriteString("true")
+	}
+	plan.installScript = s.String()
+	return plan, true
+}
+
+// planSharpBatchRow is PrepareBatch's own Sharp-specific planner - the same
+// "just fold a plain full install into the shared batching" shape as
+// planRicohBatchRow, for the same reason: Sharp's own real driver package
+// (see macfamily.go's own "Sharp" doc comment) is small enough (confirmed
+// live, 2026-09-13: a full `installer -pkg` run completes in well under 20s)
+// that no Canon/Kyocera-style selective extraction is worth building. Before
+// this existed, every Sharp row fell through to the old per-row path
+// entirely, each paying its own separate elevated prompt (confirmed live: a
+// real 2-row Sharp deploy triggered 3 separate prompts - one shared install,
+// plus one queue-create per row).
+func planSharpBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+	if row.Manufacturer != "Sharp" {
+		return canonBatchRowPlan{}, false
+	}
+
+	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
+
+	ppdPath, cleanup, err := driver.PPDPathForDefaults("Sharp", pkgPath, variant.Filename)
+	if err != nil {
+		return plan, true
+	}
+	*cleanups = append(*cleanups, cleanup)
+	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromPath(ppdPath, row.OneSided, row.Mono, row.Name)
+
+	var s strings.Builder
+	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
+		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		sharedQueuedThisBatch[variant.PackagePath] = true
+		plan.sharedInstalled = true
+	} else {
 		s.WriteString("true")
 	}
 	plan.installScript = s.String()

@@ -4,6 +4,39 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-13 (v0.9.6) - macOS: two real Sharp deploy bugs found live, both fixed
+
+Ken's own first real deploy against v0.9.5's Sharp support (2 rows, "zCom Two"/"zCom Three")
+found two real bugs immediately - exactly the "confirmed live, not just against synthetic
+fixtures" discipline this project's whole macOS effort has followed throughout.
+
+### Fixed
+- **3 elevated auth prompts for a 2-row deploy, should be 1.** Sharp had a real catalog-driven
+  model index (v0.9.5) but no batched-deploy planner - every row fell through to the old,
+  un-batched per-row path, each paying its own separate `osascript` prompt (1 shared install +
+  1 queue-create per row = 3 for 2 rows). Added `planSharpBatchRow` (`canonbatch_darwin.go`),
+  the same "just fold a plain full `installer -pkg` run into the shared batch" shape
+  `planRicohBatchRow` already uses (Sharp's own real package installs in well under 20s - no
+  Canon/Kyocera-style selective extraction needed). Generalized what was `RicohPPDPathForDefaults`
+  into a manufacturer-agnostic `driver.PPDPathForDefaults` (`macppd.go`) rather than duplicating
+  it a second time - Ricoh and Sharp now share the exact same extraction helper.
+- **zCom Two's Color Mode stayed "Automatic" instead of the requested Black & White** (zCom
+  Three's own PPD is genuinely monochrome-only - confirmed via `*ColorDevice: False`, no bug
+  there, matching Ken's own read of it). Root-caused to two layered bugs against Sharp's real
+  PPD's own `*OpenUI *ARCMode/Color Mode: PickOne` block:
+  1. `findOption`'s exact-keyword allowlist didn't recognize `ARCMode` as a ColorModel-equivalent
+     keyword at all (only "ColorModel"/"CNColorMode") - added `"arcmode"`.
+  2. Sharp's own real choice *values* are abbreviated, non-self-describing codes ("CMAuto",
+     "CMColor", "CMBW") - only each choice's own *label* ("Automatic", "Color", "Black and
+     White") is human-readable, and `pickChoice` only ever matched against the raw value.
+     Split `ppdOption`'s choices into a new `ppdChoice{value, label}` pair - `value` is still
+     exactly what gets sent to `lpadmin -o Key=Value`, but matching (`pickChoice`) now searches
+     value *and* label together, so "black" in "Black and White" correctly resolves to `CMBW`.
+     `listPPDOptions` (`lpoptions -l`, an already-existing queue) has no way to recover a label
+     at all - stays value-only there, same as every manufacturer inspected so far whose real
+     values were already self-describing (Canon, Kyocera, Ricoh - unaffected).
+  - New regression tests use the real `SHARP BP-20C20.PPD.gz` ARCMode block, copied verbatim.
+
 ## 2026-09-13 (v0.9.5) - macOS: real Sharp driver support (147 models)
 
 Ken: "Let's move on to Sharp" - the same "inspect real files first" investigation already applied

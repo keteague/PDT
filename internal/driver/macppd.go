@@ -510,3 +510,50 @@ func PackageBestModelScore(pkgPath, manufacturer, model string) (nickName string
 	}
 	return best, bestScore, true
 }
+
+// PPDPathForDefaults extracts just ppdFilename out of the real, already-
+// located driver package at pkgPath into a caller-owned temp directory
+// (removed via the returned cleanup once the caller is done reading it) - a
+// batched deploy plan (planRicohBatchRow/planSharpBatchRow,
+// canonbatch_darwin.go) needs this to compute print defaults ahead of its
+// one privileged call, for a manufacturer whose install is never selective:
+// a plain full `installer -pkg` run places every real PPD at once, so
+// there's no already-staged copy of just this one model to read defaults
+// from the way Canon/Kyocera's own selective extraction leaves behind as a
+// side effect. Reuses the exact same detection logic proven live in
+// BuildMacModelIndex (extractPPDsFromExpandedPkgFiltered plus manufacturer's
+// own content-based fallback, if any - macSubPackagePPDFallback) against a
+// temp dir this function owns outright, rather than one gone by the time
+// packagePPDEntriesFiltered's own caller sees it. Generalized (2026-09-13)
+// from what was originally Ricoh-only (RicohPPDPathForDefaults) once Sharp
+// needed the identical mechanism - manufacturer only matters for picking the
+// right macSubPackagePPDFallback, nil for both Ricoh and Sharp today.
+func PPDPathForDefaults(manufacturer, pkgPath, ppdFilename string) (ppdPath string, cleanup func(), err error) {
+	noop := func() {}
+	tmpDir, err := os.MkdirTemp("", "pdt-ppddefaults-*")
+	if err != nil {
+		return "", noop, err
+	}
+	cleanup = func() { os.RemoveAll(tmpDir) }
+
+	expandDir := filepath.Join(tmpDir, "expand")
+	if err := exec.Command("pkgutil", "--expand", pkgPath, expandDir).Run(); err != nil {
+		cleanup()
+		return "", noop, fmt.Errorf("expanding %s: %w", pkgPath, err)
+	}
+	extractDir := filepath.Join(tmpDir, "ppds")
+	extractPPDsFromExpandedPkgFiltered(expandDir, extractDir, nil, macSubPackagePPDFallback(manufacturer))
+
+	var found string
+	_ = filepath.WalkDir(extractDir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && filepath.Base(path) == ppdFilename {
+			found = path
+		}
+		return nil
+	})
+	if found == "" {
+		cleanup()
+		return "", noop, fmt.Errorf("could not find %q in %s's own real payload", ppdFilename, pkgPath)
+	}
+	return found, cleanup, nil
+}

@@ -18,6 +18,7 @@ import (
 // live: this made the test flaky on a fresh checkout.
 func testMacCatalog(t *testing.T) MacCatalog {
 	t.Helper()
+	disableOSVersionFiltering(t)
 	now := time.Now()
 	older := filepath.Join("testdata_mac", "macOS", "Canon", "15", "CanonDriverOlder.dmg")
 	newer := filepath.Join("testdata_mac", "macOS", "Canon", "26", "CanonDriverNewer.pkg")

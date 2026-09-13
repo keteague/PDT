@@ -261,12 +261,15 @@ func SetPrintDefaults(ctx context.Context, queueName string, oneSided, mono bool
 // queue needs only one elevated osascript prompt total for queue-creation-
 // plus-defaults, not a second one straight after (see readPPDFileOptions'
 // own doc comment for why that second prompt was a real, confirmed-live
-// problem). ppdPath == "" (the `-m everywhere`/IPP-Everywhere fallback, no
-// local PPD file to read at all) returns no args and no warnings - Deploy's
-// own caller falls back to SetPrintDefaults against the live queue instead
-// once it exists, the one case this can't handle.
+// problem). Returns no args and no warnings for either shape with no real
+// local PPD file to pre-read at all - ppdPath == "" (the `-m everywhere`/
+// IPP-Everywhere fallback) or a `-m drv:///...` reference (Apple's own
+// bundled Generic PostScript/PCL - isGenericModelReference,
+// driver.GenericDriverModelByLabel) - Deploy's own caller falls back to
+// SetPrintDefaults against the live queue instead once it exists, for
+// both.
 func PrintDefaultsForNewQueue(rowName, ppdPath string, oneSided, mono bool) (toSet, warnings []string) {
-	if ppdPath == "" {
+	if ppdPath == "" || isGenericModelReference(ppdPath) {
 		return nil, nil
 	}
 	opts, err := readPPDFileOptions(ppdPath)

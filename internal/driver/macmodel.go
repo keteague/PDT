@@ -452,11 +452,38 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 		for _, family := range tokens {
 			all := packagesInFamily(packages, tokens, family)
 			if len(all) == 0 {
-				// The !ok-continue gap tracked as issue #5 - a family whose
-				// last package disappeared entirely never gets pruned from
-				// cat.Models/cat.Provenance/cat.ExtraProvenance here.
-				// Deliberately not fixed as part of this change (#4) - see
-				// #5's own "blocked on #4" note.
+				// This family's last package(s) disappeared entirely -
+				// deleted, or moved to an Archive folder scanMacPackages
+				// already skips (issue #5, confirmed live: moving a real
+				// Ricoh package to Archive correctly dropped it from the
+				// live in-memory index, but its own entries sat in
+				// cat.Models forever, since nothing reached the pruning
+				// logic below when there was no package left to
+				// (re-)index at all). Reuses DiffModels against an empty
+				// "current" map - every model this family previously had
+				// reports as removed, the same diff mechanism a real
+				// content change already produces.
+				if _, hadPrevious := cat.Provenance[family]; hadPrevious {
+					if _, removed := DiffModels(cat, family, map[string][]MacCatalogVariant{}); len(removed) > 0 {
+						changes = append(changes, mfg+" "+languageDisplayName(family)+": "+formatModelDiff(nil, removed))
+					}
+					for model, vs := range cat.Models {
+						kept := vs[:0]
+						for _, v := range vs {
+							if v.Language != family {
+								kept = append(kept, v)
+							}
+						}
+						if len(kept) == 0 {
+							delete(cat.Models, model)
+						} else {
+							cat.Models[model] = kept
+						}
+					}
+					delete(cat.Provenance, family)
+					delete(cat.ExtraProvenance, family)
+					dirty = true
+				}
 				continue
 			}
 

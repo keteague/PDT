@@ -90,15 +90,28 @@ type QueueOptions struct {
 	ExtraOptionArgs []string
 }
 
+// isGenericModelReference reports whether ppdPath is actually a CUPS model
+// string (Apple's own bundled Generic PostScript/PCL driver - see
+// driver.GenericDriverModelByLabel, macgeneric.go) rather than a real PPD
+// file path - `lpadmin -m` takes a model name straight from `lpinfo -m`'s
+// own list, never a file path, and there's no PPD file on disk for either
+// to pre-read (CUPS generates one on demand as part of creating the queue).
+func isGenericModelReference(ppdPath string) bool {
+	return strings.HasPrefix(ppdPath, "drv:///")
+}
+
 // buildEnsureQueueArgv builds EnsureQueue's own lpadmin argv without running
 // it - shared with canonbatch_darwin.go's own PrepareBatch, which needs this
 // exact command as a fragment inside a larger combined script rather than
 // executed on its own.
 func buildEnsureQueueArgv(name, deviceURI, ppdPath string, opts QueueOptions) []string {
 	argv := []string{"lpadmin", "-p", name, "-E", "-v", deviceURI}
-	if ppdPath != "" {
+	switch {
+	case isGenericModelReference(ppdPath):
+		argv = append(argv, "-m", ppdPath)
+	case ppdPath != "":
 		argv = append(argv, "-P", ppdPath)
-	} else {
+	default:
 		argv = append(argv, "-m", "everywhere")
 	}
 	if opts.Description != "" {
@@ -113,9 +126,12 @@ func buildEnsureQueueArgv(name, deviceURI, ppdPath string, opts QueueOptions) []
 }
 
 // EnsureQueue creates or reconfigures the CUPS queue named name against
-// deviceURI. ppdPath is a specific PPD file to use (`-P`); when ppdPath is
-// empty, falls back to `-m everywhere` (IPP-Everywhere autoconfiguration) -
-// see EnsureDriverInstalled's own doc comment for when that fallback applies.
+// deviceURI. ppdPath is normally a specific PPD file to use (`-P`); a
+// `drv:///...` value instead names one of Apple's own bundled generic
+// models (`-m`, see isGenericModelReference/driver.GenericDriverModelByLabel);
+// when ppdPath is empty, falls back to `-m everywhere` (IPP-Everywhere
+// autoconfiguration) - see EnsureDriverInstalled's own doc comment for when
+// that fallback applies.
 func EnsureQueue(ctx context.Context, name, deviceURI, ppdPath string, opts QueueOptions) error {
 	argv := buildEnsureQueueArgv(name, deviceURI, ppdPath, opts)
 	if _, err := runPrivileged(ctx, argv); err != nil {

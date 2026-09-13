@@ -25,6 +25,7 @@ import (
 // LocateLoosePPDs both shell out to real macOS-only tools (pkgutil, hdiutil).
 func testModelCatalog(t *testing.T) MacCatalog {
 	t.Helper()
+	disableOSVersionFiltering(t)
 	if _, err := exec.LookPath("pkgutil"); err != nil {
 		t.Skip("pkgutil not on PATH (not running on macOS)")
 	}
@@ -257,6 +258,7 @@ func TestBuildMacModelIndex_SecondBuildReusesCatalogWithoutReinspecting(t *testi
 // mtime.
 func testMultiVersionCatalog(t *testing.T) MacCatalog {
 	t.Helper()
+	disableOSVersionFiltering(t)
 	if _, err := exec.LookPath("pkgutil"); err != nil {
 		t.Skip("pkgutil not on PATH (not running on macOS)")
 	}
@@ -481,6 +483,111 @@ func TestBuildMacModelIndex_PrunesOrphanedPackageNoLongerInCurrentSet(t *testing
 		if v.PackagePath == orphanPath {
 			t.Errorf("orphaned Models entry for %q survived on disk after a rebuild", orphanPath)
 		}
+	}
+}
+
+// TestBuildMacModelIndex_PrunesFamilyThatDisappearedEntirely guards issue
+// #5's own original real bug: moving a real Ricoh package into an Archive
+// folder (or deleting it outright) correctly dropped it from the live
+// in-memory index, but its own entries in cat.Models/cat.Provenance/
+// cat.ExtraProvenance were never touched at all, since packagesInFamily
+// returning zero packages for that family short-circuited straight past
+// the pruning logic entirely - the persisted catalog file accumulated
+// permanently dead entries for any archived/removed vendor package.
+func TestBuildMacModelIndex_PrunesFamilyThatDisappearedEntirely(t *testing.T) {
+	cat := testModelCatalog(t)
+	dir := t.TempDir()
+
+	first, _ := BuildMacModelIndex(cat, dir, dir, true)
+	if len(first["Canon"]) == 0 {
+		t.Fatal("expected the first build to actually index something")
+	}
+
+	// Simulate every real Canon package disappearing entirely (deleted, or
+	// moved to Archive) - an empty catalog, same persisted Drivers root.
+	empty := MacCatalog{Packages: map[string][]MacPackage{}, OpenPrintingPPDs: map[string][]string{}}
+	second, changes := BuildMacModelIndex(empty, dir, dir, true)
+
+	if len(second["Canon"]) != 0 {
+		t.Errorf("expected Canon to be completely absent from the live index once every package is gone, got %d model(s)", len(second["Canon"]))
+	}
+	if len(changes) == 0 {
+		t.Error("expected a 'models removed' change to be reported")
+	}
+
+	catalogPath := filepath.Join(dir, "Canon", MacCatalogFileName("Canon"))
+	persisted := LoadMacManufacturerCatalog(catalogPath)
+	if len(persisted.Models) != 0 {
+		t.Errorf("expected the persisted catalog to be pruned to zero models, got %d - stale entries survived", len(persisted.Models))
+	}
+	if len(persisted.Provenance) != 0 {
+		t.Errorf("expected Provenance to be pruned too, got %v", persisted.Provenance)
+	}
+	if len(persisted.ExtraProvenance) != 0 {
+		t.Errorf("expected ExtraProvenance to be pruned too, got %v", persisted.ExtraProvenance)
+	}
+}
+
+// TestMacVariantForDeploy_AutoSwitchesWhenSavedConfigMovesToADifferentOSVersion
+// answers Ken's own real question (2026-09-13): if a technician saves a
+// configuration on a laptop running one macOS release, then loads the same
+// saved config from a flash drive plugged into a client endpoint running an
+// older release, does the deployed driver automatically switch to whatever
+// that endpoint's own OS-appropriate version is, or does deploy try to use
+// the (now OS-incompatible) driver label the saved config file remembers?
+//
+// Confirmed: automatic, no manual reselection needed. MacVariantForDeploy's
+// own existing "exact label match, else fall back to family-preference
+// order" logic already handles this for free, since the model index itself
+// is rebuilt fresh (and OS-filtered - see macosversion.go) every time
+// BuildMacModelIndex runs, which happens on every app launch. A saved
+// driverLabel from a different OS simply won't exact-match anything in the
+// newly-rebuilt, differently-filtered index, so resolution falls through to
+// whichever variant *is* available on the current machine.
+func TestMacVariantForDeploy_AutoSwitchesWhenSavedConfigMovesToADifferentOSVersion(t *testing.T) {
+	t.Cleanup(func() { currentMacOSVersionPrefixFunc = detectCurrentMacOSVersionPrefix })
+	if _, err := exec.LookPath("pkgutil"); err != nil {
+		t.Skip("pkgutil not on PATH (not running on macOS)")
+	}
+
+	cat, err := BuildMacCatalog("testdata_mac_osswitch")
+	if err != nil {
+		t.Fatalf("BuildMacCatalog: %v", err)
+	}
+
+	// Simulate building/saving the configuration on a laptop running macOS
+	// 26 (Tahoe): the model index only sees the Tahoe-scoped package, and
+	// the technician's own committed Driver label reflects that.
+	currentMacOSVersionPrefixFunc = func() string { return "26" }
+	dir := t.TempDir()
+	tahoeIndex, _ := BuildMacModelIndex(cat, dir, dir, true)
+	tahoeVariant, ok := MacVariantForDeploy(tahoeIndex, "Canon", "TestVendor Model X", "")
+	if !ok {
+		t.Fatal("expected a match while building on Tahoe")
+	}
+	if !strings.Contains(tahoeVariant.PackagePath, "tahoe") {
+		t.Fatalf("expected the Tahoe-scoped package to win while building on Tahoe, got %q", tahoeVariant.PackagePath)
+	}
+	savedDriverLabel := tahoeVariant.Label // what actually gets written into the saved config's Driver field
+
+	// Now simulate the SAME saved config being opened on a flash drive
+	// plugged into a client endpoint still running macOS 10.15 (Catalina) -
+	// a fresh BuildMacModelIndex call (a new process launch, a new sw_vers
+	// query) sees a different current OS, and this endpoint has never
+	// indexed anything before (a fresh cache dir).
+	currentMacOSVersionPrefixFunc = func() string { return "10.15" }
+	dir2 := t.TempDir()
+	catalinaIndex, _ := BuildMacModelIndex(cat, dir2, dir2, true)
+
+	// Resolve using the *saved* (Tahoe-specific) driver label, exactly as
+	// deploy_darwin.go's own resolveDriver would with an already-committed
+	// row loaded from a saved configuration.
+	resolved, ok := MacVariantForDeploy(catalinaIndex, "Canon", "TestVendor Model X", savedDriverLabel)
+	if !ok {
+		t.Fatal("expected a match on the Catalina endpoint too")
+	}
+	if !strings.Contains(resolved.PackagePath, "catalina") {
+		t.Errorf("expected deploy on the Catalina endpoint to automatically switch to the Catalina-scoped package, got %q (the saved Tahoe label was %q)", resolved.PackagePath, savedDriverLabel)
 	}
 }
 

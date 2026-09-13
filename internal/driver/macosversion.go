@@ -1,0 +1,127 @@
+package driver
+
+import (
+	"os/exec"
+	"regexp"
+	"strings"
+	"sync"
+)
+
+// currentMacOSVersionPrefixFunc detects the macOS-version-folder prefix that
+// should match whichever machine this process is actually running on right
+// now - a plain var, not a bare function call, so tests can override it
+// deterministically instead of depending on whichever real macOS version
+// happens to be running the test. detectCurrentMacOSVersionPrefix is the
+// real implementation; production code never needs to touch this var
+// directly.
+//
+// This matters more than it might look: PDT is designed to travel on a
+// synced flash drive from a technician's own laptop to whichever client
+// endpoint it gets plugged into next (see README's "Write to Flash Drive"/
+// Sync) - Ken's own explicit scenario (2026-09-13): a technician configures
+// drivers on a laptop running the latest macOS, then runs PDT from the same
+// flash drive on a client endpoint that's still on an older release. The
+// right driver to use is always whichever matches the machine PDT is
+// *actually executing on at that moment*, queried live via `sw_vers` every
+// time - never cached across runs, never assumed to be the machine that
+// built the catalog.
+var currentMacOSVersionPrefixFunc = detectCurrentMacOSVersionPrefix
+
+var (
+	currentMacOSVersionOnce   sync.Once
+	currentMacOSVersionCached string
+)
+
+// detectCurrentMacOSVersionPrefix shells out to the real `sw_vers` once per
+// process (cheap, but not free - BuildMacModelIndex calls into this
+// indirectly once per family, across every manufacturer) and caches the
+// result. Returns "" when it can't be determined at all (not running on
+// macOS, sw_vers missing/failed) - every caller treats that as "can't apply
+// the filter, don't exclude anything" rather than a hard failure, the same
+// "best-effort, degrade gracefully" discipline this codebase applies
+// throughout.
+//
+// A legacy "10.x" release (Sierra through Catalina) is reported as
+// "10.<minor>" (e.g. "10.15"), matching this project's own established
+// Drivers/macOS/<Manufacturer>/10.15-Catalina/ folder-naming convention for
+// that era; 11+ ("Big Sur" onward) is reported as just the integer major
+// version ("26"), matching e.g. .../26-Tahoe/ - confirmed against Ken's own
+// real Drivers folder, which has both styles side by side.
+func detectCurrentMacOSVersionPrefix() string {
+	currentMacOSVersionOnce.Do(func() {
+		out, err := exec.Command("sw_vers", "-productVersion").Output()
+		if err != nil {
+			return
+		}
+		version := strings.TrimSpace(string(out))
+		parts := strings.Split(version, ".")
+		if len(parts) == 0 || parts[0] == "" {
+			return
+		}
+		if parts[0] == "10" && len(parts) >= 2 {
+			currentMacOSVersionCached = "10." + parts[1]
+			return
+		}
+		currentMacOSVersionCached = parts[0]
+	})
+	return currentMacOSVersionCached
+}
+
+// osVersionFolderPrefixRe matches this project's own established
+// <number>-<Codename> folder-naming convention ("26-Tahoe",
+// "10.15-Catalina") - also accepting a bare number with no codename at all
+// ("26"), the shape a couple of this package's own older test fixtures use.
+var osVersionFolderPrefixRe = regexp.MustCompile(`^(\d+(?:\.\d+)?)(?:-|$)`)
+
+// osVersionFolderPrefix extracts folderName's own leading version-number
+// prefix ("26-Tahoe" -> "26", "10.15-Catalina" -> "10.15", bare "26" ->
+// "26") - ok is false for a folder name that doesn't start with a
+// recognizable version number at all (an unrecognized/custom folder name),
+// which filterToCurrentOSVersionFolder treats the same as "can't tell,"
+// never as a confident exclusion.
+func osVersionFolderPrefix(folderName string) (string, bool) {
+	m := osVersionFolderPrefixRe.FindStringSubmatch(folderName)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+// filterToCurrentOSVersionFolder narrows packages down to just the ones
+// sitting in the OS-version folder matching the machine this process is
+// actually running on right now (see MacPackage.OSVersionFolder's own doc
+// comment for the real, live-confirmed bug this fixes). Falls back to the
+// full, unfiltered slice in exactly one case - the current OS version
+// couldn't be determined at all (no confident basis to exclude anything).
+// A package whose own OSVersionFolder doesn't match the recognized
+// <number>-<Codename> shape at all is always kept (never confidently
+// excluded), for the same "no confident basis to exclude it" reasoning.
+//
+// When the current OS *is* known but genuinely nothing matches, this
+// returns an empty slice rather than falling back to the unfiltered set -
+// a deliberate reversal of this function's own original v0.9.3 design
+// (Ken's own follow-up, 2026-09-13): installing a driver built for a
+// different macOS release carries real risk (an installer that refuses
+// outright on an OS-version check, or worse, one that "succeeds" but the
+// driver doesn't actually work correctly) that PDT has no way to detect
+// after the fact - "an OS-mismatched driver beats none" was the wrong
+// tradeoff. A confirmed-empty result here is exactly what lets the whole
+// resolution chain (ResolveMac, packagesInFamily/newestInFamily,
+// MacModelCandidates) correctly fall through to Apple's own bundled
+// Generic PostScript/PCL drivers (macgeneric.go) instead - a real, safe,
+// OS-version-proof option - rather than silently installing something
+// unverified.
+func filterToCurrentOSVersionFolder(packages []MacPackage) []MacPackage {
+	current := currentMacOSVersionPrefixFunc()
+	if current == "" {
+		return packages
+	}
+	var matched []MacPackage
+	for _, p := range packages {
+		prefix, ok := osVersionFolderPrefix(p.OSVersionFolder)
+		if !ok || prefix == current {
+			matched = append(matched, p)
+		}
+	}
+	return matched
+}

@@ -58,15 +58,36 @@ func classifyMacFamily(tokens []string, path string) string {
 	return ""
 }
 
+// familyCandidates narrows packages down to just the ones classifyMacFamily
+// assigns to family, then to just the ones compatible with whichever
+// machine this process is actually running on right now
+// (filterToCurrentOSVersionFolder) - the shared first step both
+// newestInFamily and packagesInFamily build on, so a package placed for a
+// different macOS release never gets picked, whether by the guess-based
+// fallback (ResolveMacFamily) or the catalog-driven multi-version index
+// (BuildMacModelIndex). Confirmed live as a real bug (2026-09-13): a
+// technician running PDT from a synced flash drive on a client endpoint
+// still on an older macOS release than the laptop that built the catalog
+// was seeing (and, before this existed, could have had installed) a driver
+// placed specifically for a *different* OS release entirely, with nothing
+// distinguishing it as incompatible.
+func familyCandidates(packages []MacPackage, tokens []string, family string) []MacPackage {
+	var out []MacPackage
+	for _, p := range packages {
+		if classifyMacFamily(tokens, p.Path) == family {
+			out = append(out, p)
+		}
+	}
+	return filterToCurrentOSVersionFolder(out)
+}
+
 // newestInFamily is ResolveMac's own newest-by-mtime pick, narrowed to just
-// the packages classifyMacFamily assigns to family.
+// the current machine's own compatible packages within family
+// (familyCandidates).
 func newestInFamily(packages []MacPackage, tokens []string, family string) (MacPackage, bool) {
 	var newest MacPackage
 	found := false
-	for _, p := range packages {
-		if classifyMacFamily(tokens, p.Path) != family {
-			continue
-		}
+	for _, p := range familyCandidates(packages, tokens, family) {
 		if !found || p.ModTime.After(newest.ModTime) {
 			newest, found = p, true
 		}
@@ -75,14 +96,11 @@ func newestInFamily(packages []MacPackage, tokens []string, family string) (MacP
 }
 
 // packagesInFamily is newestInFamily's own sibling, returning every
-// *distinct* package classifyMacFamily assigns to family rather than just
-// the newest - newest first by file modification time. Exists so more than
-// one compatible version of the same family can sit in the Drivers folder
-// at once and still each be individually indexed/selectable (see
-// MacModelIndex's own doc comment) - newestInFamily itself is left
-// unchanged, still the right choice for ResolveMacFamily's own guess-based
-// fallback path, which has no per-version UI to offer a choice through
-// anyway.
+// *distinct* compatible package within family rather than just the newest -
+// newest first by file modification time. Exists so more than one
+// compatible version of the same family can sit in the Drivers folder at
+// once and still each be individually indexed/selectable (see
+// MacModelIndex's own doc comment).
 //
 // Confirmed live against a real Drivers folder (2026-09-13) that this must
 // deduplicate by (basename, size), not just return every MacPackage match
@@ -99,10 +117,7 @@ func newestInFamily(packages []MacPackage, tokens []string, family string) (MacP
 // mtime copy among them is kept as that version's own representative.
 func packagesInFamily(packages []MacPackage, tokens []string, family string) []MacPackage {
 	byIdentity := map[string]MacPackage{}
-	for _, p := range packages {
-		if classifyMacFamily(tokens, p.Path) != family {
-			continue
-		}
+	for _, p := range familyCandidates(packages, tokens, family) {
 		key := filepath.Base(p.Path) + "|" + strconv.FormatInt(p.Size, 10)
 		if existing, ok := byIdentity[key]; !ok || p.ModTime.After(existing.ModTime) {
 			byIdentity[key] = p

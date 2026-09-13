@@ -234,3 +234,77 @@ func TestPickChoice_ColorAvoidsGrayFromRealColorModelChoices(t *testing.T) {
 		t.Errorf("pickChoice (color) = %q, %v, want \"CMYK\", true", choice, ok)
 	}
 }
+
+// realGenericPostScriptDuplexBlock is copied verbatim (2026-09-13) from the
+// real PPD `/usr/libexec/cups/daemon/cups-driverd cat
+// drv:///sample.drv/generic.ppd` actually generates on this machine -
+// confirmed unprivileged, no queue creation needed - the *exact* content
+// Apple's own bundled "Generic PostScript Printer" (macgeneric.go,
+// driver.GenericPostScriptModel) resolves to. Real, not synthetic: proves
+// this codebase's own PPD-option parsing handles Apple's generated PPD
+// structure correctly, not just vendor-authored ones. The "Generic PCL
+// Laser Printer" PPD (drv:///sample.drv/generpcl.ppd) declares the
+// identical *OpenUI *Duplex block - same CUPS PPD compiler, same sample.drv
+// source.
+const realGenericPostScriptDuplexBlock = `*OpenUI *Duplex/2-Sided Printing: PickOne
+*OrderDependency: 10 AnySetup *Duplex
+*DefaultDuplex: None
+*Duplex None/Off (1-Sided): "<</Duplex false>>setpagedevice"
+*Duplex DuplexNoTumble/Long-Edge (Portrait): "<</Duplex true/Tumble false>>setpagedevice"
+*Duplex DuplexTumble/Short-Edge (Landscape): "<</Duplex true/Tumble true>>setpagedevice"
+*CloseUI: *Duplex`
+
+// TestParsePPDOpenUIOptions_RealGenericPostScriptDuplexBlock guards that
+// Apple's own bundled Generic PostScript/PCL drivers (offered as a
+// last-resort Driver-dropdown fallback - see macgeneric.go) produce a real
+// PPD this codebase's existing Duplex-detection logic already handles
+// correctly, with no special-casing needed: standard "Duplex" keyword,
+// "None"/"DuplexNoTumble"/"DuplexTumble" choices - the exact shape
+// findOption/pickChoice were already built for.
+//
+// Confirmed live (2026-09-13) that neither generic PPD declares any
+// *OpenUI *ColorModel-shaped option at all - each is a static
+// *ColorDevice: True/False flag instead (PostScript: True, PCL: False),
+// with nothing selectable. A row's own Mono checkbox has no real color
+// option to act on for either generic driver - decidePrintDefaults already
+// warns "declares no ColorModel option" for exactly this shape (the same
+// treatment a genuinely monochrome-only vendor PPD already gets), not a
+// bug to fix, just an inherent limitation of Apple's own generic driver
+// definitions nothing in PDT can improve.
+func TestParsePPDOpenUIOptions_RealGenericPostScriptDuplexBlock(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realGenericPostScriptDuplexBlock)
+	if len(opts) != 1 || opts[0].keyword != "Duplex" {
+		t.Fatalf("expected exactly one Duplex option, got %+v", opts)
+	}
+	toSet, warnings := decidePrintDefaults(opts, false, false, "row \"Test\"")
+	found := false
+	for _, arg := range toSet {
+		if arg == "Duplex=DuplexNoTumble" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected Duplex=DuplexNoTumble (two-sided) in toSet, got %v", toSet)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "Duplex") {
+			t.Errorf("did not expect a Duplex-related warning against this real PPD block, got %q", w)
+		}
+	}
+}
+
+// TestPrintDefaultsForNewQueue_GenericModelReferenceSkipsReading guards a
+// real gap: Apple's own bundled Generic PostScript/PCL drivers (a
+// `-m drv:///...` reference, not a real PPD file - see
+// isGenericModelReference/driver.GenericDriverModelByLabel) have no PPD
+// file on disk to pre-read at all. Without this, readPPDFileOptions would
+// try to os.Open a literal "drv:///sample.drv/generic.ppd" string as a file
+// path and fail, producing a confusing "could not read PPD options"
+// warning instead of the clean no-op the empty-ppdPath (-m everywhere) case
+// already gets.
+func TestPrintDefaultsForNewQueue_GenericModelReferenceSkipsReading(t *testing.T) {
+	toSet, warnings := PrintDefaultsForNewQueue("Test Row", "drv:///sample.drv/generic.ppd", true, true)
+	if toSet != nil || warnings != nil {
+		t.Errorf("expected no args and no warnings for a generic model reference, got toSet=%v warnings=%v", toSet, warnings)
+	}
+}

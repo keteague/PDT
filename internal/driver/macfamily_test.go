@@ -16,6 +16,7 @@ import (
 // pkgutil binary.
 func testFamilyCatalog(t *testing.T) MacCatalog {
 	t.Helper()
+	disableOSVersionFiltering(t)
 	if _, err := exec.LookPath("pkgutil"); err != nil {
 		t.Skip("pkgutil not on PATH (not running on macOS)")
 	}

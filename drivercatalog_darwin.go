@@ -75,7 +75,18 @@ func (a *App) Models(manufacturer, filterText string) []string {
 // unaffected by model (nothing to narrow among one candidate); when there's
 // no package at all, falls back to every OpenPrinting PPD label for
 // manufacturer, narrowed/ranked by both model and filterText (see
-// OpenPrintingCandidates).
+// OpenPrintingCandidates). When *none* of those three sources has anything
+// at all - confirmed live as a real scenario, not hypothetical: a real
+// vendor package existed but got correctly excluded by
+// filterToCurrentOSVersionFolder (a driver built for a different macOS
+// release than this machine is actually running, see MacPackage's own doc
+// comment) - falls all the way back to Apple's own bundled Generic
+// PostScript/PCL drivers (macgeneric.go), the one genuinely OS-version-proof
+// choice. Ken's own explicit scoping (2026-09-13): these only ever show up
+// here, when nothing else is available at all - never offered alongside a
+// real candidate, and never auto-picked (see resolveDriver's own doc
+// comment) - a technician has to explicitly choose one, since PostScript
+// vs. PCL is a real choice this codebase has no way to guess.
 func (a *App) DriverCandidates(manufacturer, model, filterText string) []string {
 	<-a.ready
 	catalog, modelIndex, _ := a.macCatalogSnapshot()
@@ -88,7 +99,10 @@ func (a *App) DriverCandidates(manufacturer, model, filterText string) []string 
 		}
 		return []string{resolved.Label}
 	}
-	return driver.OpenPrintingCandidates(catalog, manufacturer, model, filterText)
+	if candidates := driver.OpenPrintingCandidates(catalog, manufacturer, model, filterText); len(candidates) > 0 {
+		return candidates
+	}
+	return driver.GenericDriverCandidates(filterText)
 }
 
 // DefaultDriverFor is the Defaults panel's pre-selected Driver value for

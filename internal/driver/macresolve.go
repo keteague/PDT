@@ -17,17 +17,22 @@ type ResolvedMacPackage struct {
 }
 
 // ResolveMac picks the installer package to use for manufacturer: the one
-// with the newest file modification time among everything BuildMacCatalog
-// found under Drivers/macOS/<manufacturer>/. Ordering by mtime rather than by
-// any version parsed out of the package itself is deliberate - see
-// PackageLabel's doc comment for why a macOS installer package doesn't carry
-// a reliable, comparable product-version field the way a Windows .inf's
-// DriverVer= line does; the file's own mtime (when it was actually placed
-// under Drivers/macOS - normally when it was downloaded) is the honest signal
-// available here. Returns (nil, nil) - not an error - when manufacturer has
-// no local package, matching Resolve's own not-found convention.
+// with the newest file modification time among the current machine's own
+// compatible packages found under Drivers/macOS/<manufacturer>/
+// (filterToCurrentOSVersionFolder - see MacPackage.OSVersionFolder's own doc
+// comment for why: PDT travels on a synced flash drive from a technician's
+// own laptop to whichever client endpoint it gets plugged into next, which
+// may well be on an older macOS release than the one that built the
+// catalog). Ordering by mtime rather than by any version parsed out of the
+// package itself is deliberate - see PackageLabel's doc comment for why a
+// macOS installer package doesn't carry a reliable, comparable product-
+// version field the way a Windows .inf's DriverVer= line does; the file's
+// own mtime (when it was actually placed under Drivers/macOS - normally when
+// it was downloaded) is the honest signal available here. Returns (nil, nil)
+// - not an error - when manufacturer has no local package, matching
+// Resolve's own not-found convention.
 func ResolveMac(catalog MacCatalog, manufacturer string) *ResolvedMacPackage {
-	packages := catalog.Packages[manufacturer]
+	packages := filterToCurrentOSVersionFolder(catalog.Packages[manufacturer])
 	if len(packages) == 0 {
 		return nil
 	}

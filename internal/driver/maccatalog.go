@@ -35,6 +35,20 @@ type MacPackage struct {
 	// cheap identity MacCatalogDB's own staleness check compares against,
 	// with no mounting/re-inspection needed to get it.
 	Size int64
+	// OSVersionFolder is the name of the immediate subfolder of
+	// Drivers/macOS/<Manufacturer>/ this package was found under (e.g.
+	// "26-Tahoe", "10.15-Catalina") - this project's own established
+	// convention (see README's "Drivers folder layout"), always a real,
+	// technician-placed folder name, never invented by PDT itself (see
+	// driversfolder.go's own ensureMacDriversScaffold doc comment for why
+	// there's no hardcoded version list to generate one from). Used by
+	// filterToCurrentOSVersionFolder to prefer a package actually meant for
+	// whichever machine PDT is running on right now - confirmed live as a
+	// real, previously-invisible bug: a driver placed specifically for an
+	// older macOS release was showing up as a selectable "version" on a
+	// current-release machine with nothing distinguishing it as OS-
+	// incompatible at all.
+	OSVersionFolder string
 }
 
 // MacCatalog is the macOS analog of Catalog: Manufacturer -> installer
@@ -155,7 +169,13 @@ func scanMacPackages(catalog MacCatalog, mfg, mfgPath string) {
 			modTime = info.ModTime()
 			size = info.Size()
 		}
-		catalog.Packages[mfg] = append(catalog.Packages[mfg], MacPackage{Path: path, Kind: kind, ModTime: modTime, Size: size})
+		osVersionFolder := ""
+		if rel, err := filepath.Rel(mfgPath, path); err == nil {
+			if parts := strings.SplitN(rel, string(filepath.Separator), 2); len(parts) > 0 {
+				osVersionFolder = parts[0]
+			}
+		}
+		catalog.Packages[mfg] = append(catalog.Packages[mfg], MacPackage{Path: path, Kind: kind, ModTime: modTime, Size: size, OSVersionFolder: osVersionFolder})
 		return nil
 	})
 }

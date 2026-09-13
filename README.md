@@ -421,7 +421,7 @@ per-row path unaffected. **Confirmed live**: a 2-row same-package Kyocera deploy
 + `TASKalfa 6052ci`) completed both rows' install+queue-create within the same second after a
 single wait for the one auth prompt.
 
-### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.1)
+### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.4)
 
 Ricoh's own real macOS shape turned out different again from both Canon and Kyocera: many
 small, independent downloads side by side (10 real files), each covering its own small,
@@ -480,6 +480,64 @@ prunes any entry/provenance for a package no longer part of a family's current s
 family's own current packages have all been processed. Both bugs have dedicated regression
 tests and were confirmed live against Ken's own real, previously-broken catalog files -
 restored to 460 (Kyocera) and 354 (Ricoh) models with zero duplicates.
+
+**v0.9.2 - `catalog.<mfg>.json` now prunes a fully-removed/archived package too.** Moving a
+real vendor package into an `Archive` folder (or deleting it outright) always correctly
+dropped it from the *live* in-memory model index, but left the *persisted* catalog file
+completely untouched - `BuildMacModelIndex`'s own `len(all) == 0` branch (a family with zero
+real packages left at all) `continue`d straight past the pruning logic every time, never
+reaching it; in the worst case (a whole manufacturer's Drivers folder removed at once) the
+entire catalog file would have survived on disk forever, fully stale. Fixed by giving that
+branch the same treatment a real content change already gets - `DiffModels` against an empty
+map correctly reports every model the family previously had as removed, `cat.Models`'s own
+entries for that family get dropped, and both `cat.Provenance[family]`/
+`cat.ExtraProvenance[family]` are deleted outright. Confirmed live by replaying the original
+bug's own exact reproduction (archiving a real Ricoh package) - `catalog.ricoh.json` now
+correctly drops from 354 to 351 models and removes its own stale provenance entry.
+
+**v0.9.3 - driver resolution now filters by the current machine's own OS version.** Ken's
+first real test of v0.9.1 found a UFR II version placed specifically for macOS 10.15
+(Catalina) listed as a selectable "coexisting version" on a real macOS 26 (Tahoe) machine,
+with nothing distinguishing it as OS-incompatible. Investigated first: confirmed this
+filtering never existed anywhere, on either platform - Windows merges every version folder
+deliberately, and macOS's own `MacPackage` never recorded which OS-version folder a package
+came from at all; v0.9.0's dropdown just made a pre-existing, always-latent gap visible for
+the first time. Ken's own follow-up made clear this isn't a dropdown cosmetic fix either:
+PDT travels on a synced flash drive to whichever client endpoint it gets plugged into next,
+which may be on an older macOS release than the laptop that built the catalog - the right
+driver is always whichever matches the machine PDT is *actually running on at that moment*.
+`filterToCurrentOSVersionFolder` (`macosversion.go`) queries the real running machine's own
+macOS version live via `sw_vers` (never persisted, never assumed from a different machine)
+and parses only the *leading version number* out of a folder name ("26-Tahoe" -> "26",
+"10.15-Catalina" -> "10.15") - deliberately not a hardcoded codename table, since Apple ships
+a new one yearly and this project's own scaffold code already rejected that approach for
+exactly this reason. Falls back to the full, unfiltered set whenever filtering can't be done
+with real confidence (OS undetermined, filtering would leave nothing, or an unrecognized
+folder name) - never a hard failure. Applied to both real resolution paths, not just the
+dropdown: `packagesInFamily`/`newestInFamily` and the plain guess-based `ResolveMac` all
+share the same filtering step now. Confirmed live: rebuilding the real Canon catalog on this
+machine (26/Tahoe) now shows only the 26-Tahoe-appropriate versions, correctly excluding
+every older-OS-specific one Ken's own real Drivers folder had never placed a Tahoe copy of.
+
+**v0.9.4 - Apple's own Generic PostScript/PCL drivers as a real fallback.** A direct
+follow-on from v0.9.3: Ken asked whether an OS-mismatched vendor driver could actually fail
+on the older endpoint (yes - a real installer OS-version check can refuse outright, or worse,
+a driver that "installs successfully" might not actually work), then proposed offering
+Apple's own generic drivers instead of either risking that or a dead-end "unavailable" state.
+Scoped explicitly: only ever offered when no real driver candidate exists at all - never
+alongside a real option, never auto-picked. `driver.GenericDriverCandidates`/
+`GenericDriverModelByLabel` (`macgeneric.go`) wrap the two real, CUPS-bundled model strings
+confirmed live via `lpinfo -m` - `drv:///sample.drv/generic.ppd` ("Generic PostScript
+Printer") and `drv:///sample.drv/generpcl.ppd` ("Generic PCL Laser Printer") - part of the OS
+itself, not a vendor download, so genuinely OS-version-proof. `DriverCandidates` falls
+through to these only once the catalog-driven, guess-based, *and* OpenPrinting sources are
+all empty; `resolveDriver` recognizes an explicit selection and skips straight to queue
+creation with a new `-m <model>` mode (`buildEnsureQueueArgv`'s third mode alongside the
+existing `-P <path>`/`-m everywhere`) - nothing to install, CUPS already has it built in.
+Required reversing `filterToCurrentOSVersionFolder`'s own v0.9.3 fallback: when the current
+OS is known but nothing matches, it now returns empty instead of the unfiltered set - a
+confirmed-empty result is exactly what lets this new fallback trigger instead of silently
+risking a wrong-OS install.
 
 ### `cmd/pdtdebugmac`
 

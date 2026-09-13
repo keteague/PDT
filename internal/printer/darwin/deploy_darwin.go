@@ -196,7 +196,14 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 			return fatal(err)
 		}
 		log.OK("Configured queue %q (%s).", queueName, deviceURI)
-		if ppdPath == "" {
+		if ppdPath == "" || isGenericModelReference(ppdPath) {
+			// Nothing to pre-read for either shape: "" is the -m everywhere
+			// case (no real PPD until IPP-Everywhere autoconfiguration
+			// finishes), and a `-m drv:///...` reference (Apple's own
+			// bundled Generic PostScript/PCL - see resolveDriver's own doc
+			// comment) has no real PPD file on disk at all until lpadmin
+			// itself generates one as part of creating the queue. Both read
+			// the real, now-materialized queue's own options live instead.
 			defaultsWarnings = SetPrintDefaults(ctx, queueName, row.OneSided, row.Mono)
 		}
 		for _, w := range defaultsWarnings {
@@ -281,7 +288,20 @@ func sanitizeCUPSQueueName(name string) string {
 // (plus extra password prompts - macOS's own authorization cache is only a
 // few minutes, so back-to-back multi-minute installs routinely outlast it)
 // before ensureInstalledOnce existed.
+//
+// row.Driver is checked against Apple's own bundled Generic PostScript/PCL
+// drivers (driver.GenericDriverModelByLabel) before anything else - an
+// explicit technician selection always wins outright (DriverCandidates only
+// ever offers these when nothing else was available at all, see that
+// function's own doc comment), and there's nothing to install for either:
+// CUPS already has them built in, this returns straight to EnsureQueue with
+// a `-m drv:///...` model string instead of a real PPD file path
+// (buildEnsureQueueArgv).
 func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, log *printer.Logger) (ppdPath string, err error) {
+	if model, ok := driver.GenericDriverModelByLabel(row.Driver); ok {
+		log.Info("Using %s - built into macOS, no install needed.", row.Driver)
+		return model, nil
+	}
 	if variant, ok := driver.MacVariantForDeploy(d.ModelIndex, row.Manufacturer, row.Model, row.Driver); ok {
 		return d.installVariant(ctx, variant, row, log)
 	}

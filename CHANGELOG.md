@@ -37,6 +37,11 @@ fixtures" discipline this project's whole macOS effort has followed throughout.
      values were already self-describing (Canon, Kyocera, Ricoh - unaffected).
   - New regression tests use the real `SHARP BP-20C20.PPD.gz` ARCMode block, copied verbatim.
 
+**Confirmed live**: Ken re-ran a real 2-row Sharp deploy ("zFoo Boo"/"zGah Boo") against the
+rebuilt app - exactly 1 elevated prompt for both rows (19s total, both queues configured
+immediately after with no further prompts), no ColorModel warning on either row. Both fixes
+hold under a real deploy, not just the unit tests.
+
 ## 2026-09-13 (v0.9.5) - macOS: real Sharp driver support (147 models)
 
 Ken: "Let's move on to Sharp" - the same "inspect real files first" investigation already applied

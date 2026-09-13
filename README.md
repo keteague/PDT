@@ -580,7 +580,8 @@ what gets sent to `lpadmin -o Key=Value`, but matching now searches value *and* 
 so "black" in "Black and White" correctly resolves to `CMBW`. `listPPDOptions` (an already-
 existing queue, via `lpoptions -l`) has no way to recover a label at all, so it stays value-
 only there - unaffected for Canon/Kyocera/Ricoh, whose real values were already self-
-describing.
+describing. **Confirmed live**: Ken re-ran a real 2-row Sharp deploy against the rebuilt app -
+exactly 1 elevated prompt for both rows, no ColorModel warning on either.
 
 ### `cmd/pdtdebugmac`
 

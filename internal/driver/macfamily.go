@@ -70,6 +70,40 @@ var macFamilyPreference = map[string][]string{
 	// classification token (confirmed none do, so it's permanently an empty,
 	// harmless second family).
 	"Sharp": {"MacPS", "PPD"},
+
+	// Xerox ships exactly one real driver package, periodically superseded -
+	// confirmed live (2026-09-13) against real files across 8 real OS-version
+	// folders: "XeroxDrivers_5.6.0_2187.dmg" through "..._5.19.3_2562.dmg",
+	// same "one driver line" shape as Kyocera, not Canon's genuinely distinct
+	// UFRII/PS/PPD split or Ricoh's many-small-disjoint-downloads one. Like
+	// Kyocera, the manufacturer's own name is always in the real filename, so
+	// a single "Xerox" token trivially classifies it - this unlocks the
+	// catalog-driven model index (BuildMacModelIndex), not a real
+	// multi-family preference list. The real package's own single sub-package
+	// (identifier "com.xerox.drivers.pkg", install-location "/") holds 178
+	// real Xerox PPDs alongside ~6,371 unrelated files (frameworks, print
+	// filters, PDE plugins, a config-utility app) sharing the very same
+	// Payload - every real PPD named "Xerox <model>.gz", no ".ppd" anywhere
+	// (confirmed via *NickName content, not extension) - see
+	// macSubPackagePPDFallback (macppd.go) for the shared, Ricoh-and-Xerox
+	// content-based extraction fallback this needs. No Japan-market-only
+	// convention found in Xerox's real data. One real, confirmed-but-dormant
+	// quirk: unlike every other manufacturer here, Xerox's own *NickName
+	// bakes its driver's own version string directly into the name itself
+	// (e.g. "Xerox C300 Color Printer, 5.19.3") - if a technician ever keeps
+	// two different Xerox driver versions side by side in the same
+	// OS-version folder (the real multi-version-coexistence feature every
+	// other manufacturer already supports), the same physical model from
+	// each version would register as two *different* friendly model names
+	// rather than two coexisting variants of one model, since
+	// decorateMultiVersionLabels/BuildMacModelIndex both key on the friendly
+	// model name verbatim. Not fixed here - no real file demonstrating this
+	// combination exists yet (today's real Drivers folder has exactly one
+	// Xerox download per OS-version folder), and stripping a
+	// vendor-specific ", <version>" suffix speculatively risks the same
+	// wrong-guess-without-real-data mistake Sharp's own investigation this
+	// cycle was careful to avoid.
+	"Xerox": {"Xerox"},
 }
 
 // classifyMacFamily returns which of tokens appears in path's own basename

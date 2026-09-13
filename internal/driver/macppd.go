@@ -134,9 +134,9 @@ func packagePPDEntriesFiltered(pkgPath string, restrict func(expandDir string) (
 // packagePPDEntriesFilteredFallback is packagePPDEntriesFiltered, with a
 // second optional manufacturer-specific hook: ppdFallback, tried on a
 // sub-package only when the fast, extension-based cpio glob finds nothing
-// in it at all - see macSubPackagePPDFallback (macricoh.go) for the one real
-// caller and why Ricoh specifically needs one (its own real PPDs carry no
-// recognized extension at all, or - for one legacy bundle - a bare ".gz").
+// in it at all - see macSubPackagePPDFallback for the callers and why Ricoh
+// and Xerox specifically need one (their own real PPDs carry no recognized
+// extension at all, or - for Ricoh's one legacy bundle - a bare ".gz").
 func packagePPDEntriesFilteredFallback(pkgPath string, restrict func(expandDir string) (allow map[string]bool, ok bool), ppdFallback ppdExtractionFallback) ([]ppdEntry, []subPackageResult, error) {
 	tmpDir, err := os.MkdirTemp("", "pdt-ppdinspect-*")
 	if err != nil {
@@ -556,4 +556,79 @@ func PPDPathForDefaults(manufacturer, pkgPath, ppdFilename string) (ppdPath stri
 		return "", noop, fmt.Errorf("could not find %q in %s's own real payload", ppdFilename, pkgPath)
 	}
 	return found, cleanup, nil
+}
+
+// ppdResourcesOnlyInstallLocation is the exact install-location a sub-
+// package whose own Payload contains nothing BUT real PPDs declares -
+// confirmed against all 9 real modern Ricoh "Web Build"-style downloads
+// (identifier "com.RICOH.print.<model-group>.ppds.pkg" every time) - the
+// cheap, manufacturer-agnostic signal pathFragmentPPDExtractionFallback uses
+// to recognize "safe to extract this whole Payload verbatim" without
+// needing to hard-code any one manufacturer's own sub-package naming
+// convention. Real PPDs found this way carry no file extension whatsoever
+// (confirmed live via `file`: genuine "PPD file, version 4.3" content under
+// names like "RICOH IM C3000") - the fast, extension-based cpio glob every
+// other manufacturer's real PPDs already match can never find them.
+const ppdResourcesOnlyInstallLocation = "/Library/Printers/PPDs/Contents/Resources/"
+
+// ppdResourcesPathFragment is the path fragment a real PPD lives under
+// inside a package whose own PackageInfo declares a different (or no)
+// install-location - the Payload bakes the real destination into each
+// entry's own relative path instead (e.g.
+// "./Library/Printers/PPDs/Contents/Resources/RICOH Aficio 3224C.gz",
+// confirmed live for Ricoh's legacy "RicohPrinterDrivers.pkg" bundle, and
+// "./Library/Printers/PPDs/Contents/Resources/Xerox C300 Color Printer.gz"
+// for Xerox's own current, single, whole-driver package - install-location
+// "/", not the PPD-only one above, since it also installs frameworks/
+// filters/PDE plugins/a config utility app alongside the PPDs in the same
+// Payload). pathFragmentPPDExtractionFallback falls back to finding PPDs by
+// path instead of by declared destination whenever
+// ppdResourcesOnlyInstallLocation doesn't match.
+const ppdResourcesPathFragment = "/PPDs/Contents/Resources/"
+
+// macSubPackagePPDFallback returns indexFamilyPackage's own content-based
+// PPD-extraction fallback for a manufacturer, or nil for every manufacturer
+// whose real PPDs are already found correctly by the fast, extension-based
+// glob (everyone except Ricoh and Xerox today - both real, independently
+// confirmed cases of a manufacturer naming its own real PPDs with no ".ppd"
+// anywhere at all) - see ppdExtractionFallback's own doc comment for the
+// exact contract.
+func macSubPackagePPDFallback(manufacturer string) ppdExtractionFallback {
+	switch manufacturer {
+	case "Ricoh", "Xerox":
+		return pathFragmentPPDExtractionFallback
+	default:
+		return nil
+	}
+}
+
+// pathFragmentPPDExtractionFallback is tried only once the fast, extension-
+// based cpio glob finds nothing in a given sub-package's own Payload. Two
+// real shapes, confirmed live against both Ricoh and Xerox's own real
+// packages: a sub-package whose own PackageInfo declares
+// ppdResourcesOnlyInstallLocation itself (extract its whole Payload -
+// already known, from that declaration, to contain nothing but real PPDs);
+// anything else (a different or no declared install-location - e.g.
+// Xerox's own current whole-driver package, install-location "/", or
+// Ricoh's legacy bundle, no install-location declared at all) falls back to
+// finding PPDs by path instead, extracting only the matched entries - never
+// the whole Payload, which would also pull down hundreds (thousands, for
+// Xerox's own current package - 6549 total payload entries, 178 real PPDs)
+// of unrelated driver-framework/PDE-plugin/config-utility files sharing the
+// very same Payload. Either way, nothing extracted here is trusted by name
+// alone - packagePPDEntriesFilteredFallback's own caller content-sniffs
+// every non-suffix-matched file (looksLikeRealPPD) before accepting it; a
+// real, confirmed-live bonus for Xerox's own package specifically: the
+// macOS `cpio` binary silently never writes out the AppleDouble resource-
+// fork sidecar entries ("._Xerox <model>.gz") that share the very same
+// path fragment as the real PPDs, so this fallback's own extraction never
+// even sees them, not just filters them out afterward.
+func pathFragmentPPDExtractionFallback(pkgDir, payloadPath, destDir string) bool {
+	if loc, ok := readPackageInfoInstallLocation(filepath.Join(pkgDir, "PackageInfo")); ok && loc == ppdResourcesOnlyInstallLocation {
+		extractAllFromPayload(payloadPath, destDir)
+	} else {
+		extractPathContainingFromPayload(payloadPath, ppdResourcesPathFragment, destDir)
+	}
+	removeNonPPDFiles(destDir)
+	return dirHasAnyFile(destDir)
 }

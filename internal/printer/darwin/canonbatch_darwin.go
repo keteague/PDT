@@ -63,7 +63,7 @@ type canonBatchRowPlan struct {
 // for a whole multi-row deploy run instead of one, or several, per row).
 // Tries each manufacturer-specific planner in turn for every row
 // (planCanonBatchRow, planKyoceraBatchRow, planRicohBatchRow,
-// planSharpBatchRow) - whichever recognizes the row's
+// planSharpBatchRow, planXeroxBatchRow) - whichever recognizes the row's
 // actual package shape claims it; a row neither recognizes (a different
 // manufacturer entirely, the guess-based fallback with no catalog entry, a
 // loose-PPD no-installer family, or an existing queue to reuse) is left
@@ -145,6 +145,9 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 		}
 		if !handled {
 			plan, handled = planSharpBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+		}
+		if !handled {
+			plan, handled = planXeroxBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
 			continue // not a recognized shape - not batched, falls back to the old per-row path
@@ -403,6 +406,51 @@ func planSharpBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
 
 	ppdPath, cleanup, err := driver.PPDPathForDefaults("Sharp", pkgPath, variant.Filename)
+	if err != nil {
+		return plan, true
+	}
+	*cleanups = append(*cleanups, cleanup)
+	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromPath(ppdPath, row.OneSided, row.Mono, row.Name)
+
+	var s strings.Builder
+	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
+		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		sharedQueuedThisBatch[variant.PackagePath] = true
+		plan.sharedInstalled = true
+	} else {
+		s.WriteString("true")
+	}
+	plan.installScript = s.String()
+	return plan, true
+}
+
+// planXeroxBatchRow is PrepareBatch's own Xerox-specific planner - the same
+// "just fold a plain full install into the shared batching" shape as
+// planRicohBatchRow/planSharpBatchRow. Unlike those two, Xerox's own real
+// package has no live-confirmed install timing yet (no real Xerox deploy
+// has run at all as of 2026-09-13) - its own whole-driver .pkg is
+// meaningfully bigger than either (60MB Payload, 6549 total files, vs.
+// Sharp's much smaller one), closer in scale to Canon's own UFR II package
+// that specifically needed selective install to stay fast. Also unlike
+// Canon/Kyocera, Xerox's own installer Distribution has exactly one
+// selectable choice ("driver") with nothing to select down - there is no
+// selective-install lever available here even if a full install does turn
+// out too slow; the only way to keep this fast, if it ever needs to be,
+// would be a Ricoh-style "extract just this one model's own PPD directly,
+// skip the installer entirely" approach instead. Added anyway: batching
+// still strictly reduces the auth-prompt count regardless of how long the
+// underlying install itself takes, and every other manufacturer's own
+// batching support only got its real timing confirmed after a live deploy,
+// not before. Watch the first real Xerox deploy's own log for how long the
+// install actually takes.
+func planXeroxBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+	if row.Manufacturer != "Xerox" {
+		return canonBatchRowPlan{}, false
+	}
+
+	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
+
+	ppdPath, cleanup, err := driver.PPDPathForDefaults("Xerox", pkgPath, variant.Filename)
 	if err != nil {
 		return plan, true
 	}

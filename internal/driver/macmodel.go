@@ -23,6 +23,7 @@ var macLanguageDisplayNames = map[string]string{
 	"PPD":     "Generic PPD",
 	"Kyocera": "Driver",
 	"MacPS":   "Driver",
+	"Xerox":   "Driver",
 }
 
 func init() {

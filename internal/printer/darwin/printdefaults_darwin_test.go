@@ -426,6 +426,70 @@ func TestDecidePrintDefaults_SharpARCModeAppliesBlackAndWhiteWithNoWarning(t *te
 	}
 }
 
+// realXeroxOutputColorPPDBlock is copied verbatim (2026-09-13) from the
+// real, installed Xerox AltaLink C8230 Color MFP PPD (`gunzip -c
+// "Xerox AltaLink C8230 Color MFP.gz"` from the real
+// XeroxDrivers_5.19.3_2562.dmg payload). Unlike Sharp's own ARCMode, Xerox's
+// own choice values are already self-describing ("PrintAsGrayscale"/
+// "PrintAsColor") - this guards findOption recognizing the "XROutputColor"
+// keyword at all (it isn't "ColorModel"/"CNColorMode"/"ARCMode"), not a
+// label-matching gap.
+const realXeroxOutputColorPPDBlock = `*OpenUI *XROutputColor/Xerox Black and White: PickOne
+*OrderDependency: 10 AnySetup *XROutputColor
+*DefaultXROutputColor: PrintAsColor
+*XROutputColor PrintAsColor/Off (Use Document Color): ""
+*XROutputColor PrintAsGrayscale/On: ""
+*CloseUI: *XROutputColor`
+
+// TestFindOption_MatchesXeroxXROutputColor guards findOption's own
+// exact-keyword allowlist recognizing Xerox's real ColorModel-equivalent
+// keyword.
+func TestFindOption_MatchesXeroxXROutputColor(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realXeroxOutputColorPPDBlock)
+	got, ok := findOption(opts, "colormodel", "cncolormode", "arcmode", "xroutputcolor")
+	if !ok || got.keyword != "XROutputColor" {
+		t.Errorf("findOption(..., xroutputcolor) = %+v, %v, want XROutputColor, true", got, ok)
+	}
+}
+
+// TestDecidePrintDefaults_XeroxOutputColorAppliesGrayscaleAndColorCorrectly
+// is the full real-deploy-shaped regression for both directions: mono=true
+// must pick "PrintAsGrayscale" (value alone contains "gray", no label
+// needed), mono=false must pick "PrintAsColor" (the first choice that
+// avoids every mono/gray/black keyword) - both with no warning.
+func TestDecidePrintDefaults_XeroxOutputColorAppliesGrayscaleAndColorCorrectly(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realXeroxOutputColorPPDBlock)
+
+	toSet, warnings := decidePrintDefaults(opts, true, true, `row "Test"`)
+	if !containsSetting(toSet, "XROutputColor=PrintAsGrayscale") {
+		t.Errorf("expected XROutputColor=PrintAsGrayscale in toSet, got %v", toSet)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "ColorModel") || strings.Contains(w, "XROutputColor") {
+			t.Errorf("did not expect a color-related warning (mono), got %q", w)
+		}
+	}
+
+	toSet, warnings = decidePrintDefaults(opts, true, false, `row "Test"`)
+	if !containsSetting(toSet, "XROutputColor=PrintAsColor") {
+		t.Errorf("expected XROutputColor=PrintAsColor in toSet, got %v", toSet)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "ColorModel") || strings.Contains(w, "XROutputColor") {
+			t.Errorf("did not expect a color-related warning (color), got %q", w)
+		}
+	}
+}
+
+func containsSetting(toSet []string, want string) bool {
+	for _, s := range toSet {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPrintDefaultsForNewQueue_GenericModelReferenceSkipsReading(t *testing.T) {
 	toSet, warnings := PrintDefaultsForNewQueue("Test Row", "drv:///sample.drv/generic.ppd", true, true)
 	if toSet != nil || warnings != nil {

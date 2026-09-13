@@ -247,7 +247,7 @@ func decidePrintDefaults(opts []ppdOption, oneSided, mono bool, subject string) 
 		warnings = append(warnings, fmt.Sprintf("%s's PPD declares no Duplex option; leaving duplex as-is", subject))
 	}
 
-	if colorModel, ok := findOption(opts, "colormodel", "cncolormode", "arcmode"); ok {
+	if colorModel, ok := findOption(opts, "colormodel", "cncolormode", "arcmode", "xroutputcolor"); ok {
 		if mono {
 			if choice, ok := pickChoice(colorModel.choices, []string{"gray", "grey", "mono", "black"}, nil); ok {
 				toSet = append(toSet, colorModel.keyword+"="+choice)
@@ -337,9 +337,14 @@ func PrintDefaultsForNewQueue(rowName, ppdPath string, oneSided, mono bool) (toS
 // "ColorModel", Canon's own "CNDuplex"/"CNColorMode", and Sharp's own
 // "ARCMode" (confirmed live, 2026-09-13, against a real Sharp PPD's own
 // `*OpenUI *ARCMode/Color Mode: PickOne` block - Sharp's own Duplex keyword
-// needed no addition, it already spells it the CUPS-standard way) - add a
-// new exact spelling here if a future vendor's PPD needs one, never widen
-// this back to a suffix/substring match.
+// needed no addition, it already spells it the CUPS-standard way), and
+// Xerox's own "XROutputColor" (confirmed live, 2026-09-13, against a real
+// Xerox PPD's own `*OpenUI *XROutputColor/Xerox Black and White: PickOne`
+// block - unlike Sharp's ARCMode, Xerox's own choice values are already
+// self-describing, "PrintAsGrayscale"/"PrintAsColor", so no label-matching
+// was needed to recognize this one; Xerox's own Duplex keyword also needed
+// no addition) - add a new exact spelling here if a future vendor's PPD
+// needs one, never widen this back to a suffix/substring match.
 func findOption(opts []ppdOption, exactKeywordsLower ...string) (ppdOption, bool) {
 	for _, o := range opts {
 		lower := strings.ToLower(o.keyword)

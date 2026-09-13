@@ -4,7 +4,53 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
-## 2026-09-13 (v0.9.6) - macOS: two real Sharp deploy bugs found live, both fixed
+## 2026-09-13 (v0.9.7) - macOS: real Xerox driver support (178 models)
+
+Ken: "Let's work on Xerox" - the Drivers/macOS/Xerox folder was completely empty at first
+(confirmed: `ensureMacDriversScaffold` already correctly creates the bare manufacturer folder
+for every entry in `driver.Manufacturers`, but deliberately never invents an OS-version
+subfolder itself - there's no one macOS version safe to hardcode). Created the same 11
+OS-version subfolders Canon already has (10.12-Sierra through 27-GoldenGate) for both Xerox
+and Toshiba, each seeded with its own Archive/README.txt, so Ken could drop real downloads in.
+Real Xerox files landed across 8 of them.
+
+### Added
+- `macFamilyPreference["Xerox"] = {"Xerox"}` (`macfamily.go`) - confirmed live against real
+  files across all 8 populated OS-version folders that Xerox ships exactly one real driver
+  line, periodically superseded ("XeroxDrivers_5.6.0_2187.dmg" through "..._5.19.3_2562.dmg") -
+  the same one-driver-line shape as Kyocera, not Canon's genuinely distinct UFRII/PS/PPD split
+  or Ricoh's many-small-disjoint-downloads. Like Kyocera, the manufacturer's own name is always
+  in the real filename, so a single "Xerox" token unlocks the catalog-driven model index.
+- Xerox's real driver package (identifier `com.xerox.drivers.pkg`, install-location `/`) holds
+  178 real PPDs (confirmed via `*NickName`) alongside ~6,371 unrelated files (frameworks, print
+  filters, PDE plugins, a config-utility app) sharing the same Payload - every real PPD named
+  `Xerox <model>.gz`, no `.ppd` anywhere, the same real gotcha Ricoh's legacy bundle had.
+  Generalized what was Ricoh-only (`ricohPPDExtractionFallback`) into a manufacturer-agnostic
+  `pathFragmentPPDExtractionFallback` (`macppd.go`) rather than duplicating it - Ricoh and
+  Xerox now share the same content-based extraction fallback. A real, confirmed-live bonus:
+  macOS's own `cpio` silently never writes out the AppleDouble resource-fork sidecar entries
+  (`._Xerox <model>.gz`) sharing the same path fragment as the real PPDs, so no extra filtering
+  was even needed for those.
+- `findOption` (`printdefaults_darwin.go`) now recognizes Xerox's own real ColorModel-equivalent
+  keyword, `XROutputColor` (`*OpenUI *XROutputColor/Xerox Black and White: PickOne`) - unlike
+  Sharp's own ARCMode, Xerox's own choice values are already self-describing
+  ("PrintAsGrayscale"/"PrintAsColor"), so no label-matching gap this time, just the missing
+  keyword.
+- `planXeroxBatchRow` (`canonbatch_darwin.go`) folds Xerox's own full `installer -pkg` run into
+  the same shared 1-auth-prompt batching Ricoh/Sharp already get. Flagged honestly rather than
+  claimed as confirmed: unlike Ricoh/Sharp, no real Xerox deploy has run yet, and its own
+  package is meaningfully bigger (60MB Payload, 6549 files) than either - closer in scale to
+  Canon's own UFR II package that specifically needed selective install to stay fast. Xerox's
+  own installer also has no selectable choices to select down even if it does turn out slow
+  (unlike Canon/Kyocera) - worth watching the first real deploy's own timing.
+- One real, confirmed-but-dormant quirk, documented but not fixed: Xerox's own `*NickName`
+  bakes its driver's own version string directly into the name (`"Xerox C300 Color Printer,
+  5.19.3"`) - if a technician ever keeps two different Xerox driver versions side by side in
+  the same OS-version folder, the same physical model would register as two different friendly
+  model names rather than two coexisting variants of one model. No real file demonstrating this
+  combination exists yet, so left alone rather than guessed at.
+
+
 
 Ken's own first real deploy against v0.9.5's Sharp support (2 rows, "zCom Two"/"zCom Three")
 found two real bugs immediately - exactly the "confirmed live, not just against synthetic

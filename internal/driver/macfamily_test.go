@@ -151,3 +151,45 @@ func TestStripLanguageSuffix_SharpStripsGenericPPDSuffix(t *testing.T) {
 		t.Errorf(`expected languageDisplayName("MacPS") == "Driver", got %q`, got)
 	}
 }
+
+// TestClassifyMacFamily_XeroxTokenMatchesRealDriverFilenames locks in the
+// real finding (2026-09-13) that, like Kyocera, Xerox's own real driver
+// filename always contains the manufacturer's own name
+// ("XeroxDrivers_5.19.3_2562.dmg" and 7 other real versioned downloads
+// across every real OS-version folder inspected) - a single "Xerox" token
+// trivially classifies every one of them, unlocking the catalog-driven model
+// index rather than the guess-based fallback.
+func TestClassifyMacFamily_XeroxTokenMatchesRealDriverFilenames(t *testing.T) {
+	tokens := macFamilyPreference["Xerox"]
+	for _, name := range []string{
+		"XeroxDrivers_5.6.0_2187.dmg",
+		"XeroxDrivers_5.19.3_2562.dmg",
+	} {
+		if got := classifyMacFamily(tokens, name); got != "Xerox" {
+			t.Errorf("expected %q to classify as %q, got %q", name, "Xerox", got)
+		}
+	}
+	if got := languageDisplayName("Xerox"); got != "Driver" {
+		t.Errorf(`expected languageDisplayName("Xerox") == "Driver", got %q`, got)
+	}
+}
+
+// TestMacSubPackagePPDFallback_RicohAndXeroxShareTheSameFallback guards that
+// the extraction fallback generalized (2026-09-13) from Ricoh-only
+// (RicohPPDPathForDefaults/ricohPPDExtractionFallback) into
+// pathFragmentPPDExtractionFallback actually covers Xerox too - both real
+// manufacturers whose own real PPDs carry no ".ppd" anywhere in their own
+// filename (a bare ".gz" for both, confirmed live independently for each),
+// so both need the same content-based, path-fragment fallback the fast
+// extension-based cpio glob alone can never satisfy.
+func TestMacSubPackagePPDFallback_RicohAndXeroxShareTheSameFallback(t *testing.T) {
+	if macSubPackagePPDFallback("Ricoh") == nil {
+		t.Error("expected Ricoh to have a non-nil PPD extraction fallback")
+	}
+	if macSubPackagePPDFallback("Xerox") == nil {
+		t.Error("expected Xerox to have a non-nil PPD extraction fallback")
+	}
+	if macSubPackagePPDFallback("Canon") != nil {
+		t.Error("expected Canon to have no PPD extraction fallback - its real PPDs are found by the fast extension-based glob")
+	}
+}

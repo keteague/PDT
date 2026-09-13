@@ -93,20 +93,61 @@ func TestResolveMacFamily_BlankModelFallsBackWithNote(t *testing.T) {
 
 func TestResolveMacFamily_ManufacturerWithNoFamilyTableBehavesLikeResolveMac(t *testing.T) {
 	cat := testMacCatalog(t) // the plain (non-family) fixture from macresolve_test.go
-	// "Sharp", not "Kyocera" or "Ricoh" - both of those got their own real
-	// macFamilyPreference entries once each got a real model index built
-	// (see macfamily.go's own doc comment), so neither is a valid example of
-	// "a manufacturer with no family table at all" anymore. Sharp has no
-	// installer-package fixture and no macFamilyPreference entry, so both
-	// calls below should agree there's nothing to resolve - both nil, no
-	// note - purely from ResolveMacFamily's own len(tokens)==0
-	// short-circuit, never reaching the family-matching logic at all.
-	resolved, note := ResolveMacFamily(cat, "Sharp", "anything")
+	// "HP", not "Sharp" - Sharp got its own real macFamilyPreference entry
+	// once it got a real model index built (see macfamily.go's own doc
+	// comment: "MacPS"/"PPD"), so it's no longer a valid example of "a
+	// manufacturer with no family table at all". HP has no installer-package
+	// fixture and no macFamilyPreference entry, so both calls below should
+	// agree there's nothing to resolve - both nil, no note - purely from
+	// ResolveMacFamily's own len(tokens)==0 short-circuit, never reaching the
+	// family-matching logic at all.
+	resolved, note := ResolveMacFamily(cat, "HP", "anything")
 	if note != "" {
 		t.Errorf("expected no note for a manufacturer with no family table, got %q", note)
 	}
-	plain := ResolveMac(cat, "Sharp")
+	plain := ResolveMac(cat, "HP")
 	if resolved != nil || plain != nil {
 		t.Errorf("expected both ResolveMacFamily and ResolveMac to return nil for a manufacturer with no installer package at all: got %v vs %v", resolved, plain)
+	}
+}
+
+// TestClassifyMacFamily_SharpMacPSTokenMatchesRealDriverNotTheDecoy locks in
+// the real, live-verified finding (2026-09-13) behind macFamilyPreference's
+// own "Sharp" entry: unlike Kyocera, Sharp's real driver filename
+// ("MX-C55c_2512a_MacPS.dmg") never contains the manufacturer's own name, so
+// "MacPS" is the token that actually does the job - and it must never match
+// "Generic_GUC_PrinterSoftware_11202025.dmg", the real, zero-PPD Lexmark-
+// licensed decoy file that was wrongly winning ResolveMac's plain
+// newest-by-mtime fallback before this table existed.
+func TestClassifyMacFamily_SharpMacPSTokenMatchesRealDriverNotTheDecoy(t *testing.T) {
+	tokens := macFamilyPreference["Sharp"]
+	if got := classifyMacFamily(tokens, "MX-C55c_2512a_MacPS.dmg"); got != "MacPS" {
+		t.Errorf("expected the real Sharp driver filename to classify as %q, got %q", "MacPS", got)
+	}
+	if got := classifyMacFamily(tokens, "Generic_GUC_PrinterSoftware_11202025.dmg"); got != "" {
+		t.Errorf("expected the zero-PPD Lexmark decoy filename to never classify into any Sharp family, got %q", got)
+	}
+}
+
+// TestStripLanguageSuffix_SharpStripsGenericPPDSuffix locks in the real
+// finding that every one of Sharp's own 147 real PPDs (confirmed live,
+// 2026-09-13, via the real MX-C55c_2512a_MacPS.dmg payload) carries a
+// generic, non-language "*NickName" suffix of " PPD" - not a distinguishing
+// driver family the way Canon's own PS/PPD/UFRII suffixes are, since Sharp
+// ships only one real driver. "PPD" is listed second in Sharp's own
+// macFamilyPreference entry purely so this strips cleanly (the same trick
+// Canon's own real "PPD" family already relies on), leaving a friendly model
+// name with no redundant "PPD" in it.
+func TestStripLanguageSuffix_SharpStripsGenericPPDSuffix(t *testing.T) {
+	tokens := macFamilyPreference["Sharp"]
+	model, matched := stripLanguageSuffix(`SHARP MX-3071S PPD`, tokens)
+	if model != "SHARP MX-3071S" {
+		t.Errorf("expected the generic PPD suffix stripped, got model=%q", model)
+	}
+	if matched != "PPD" {
+		t.Errorf("expected the PPD token to be reported as the match, got %q", matched)
+	}
+	if got := languageDisplayName("MacPS"); got != "Driver" {
+		t.Errorf(`expected languageDisplayName("MacPS") == "Driver", got %q`, got)
 	}
 }

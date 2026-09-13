@@ -41,6 +41,35 @@ var macFamilyPreference = map[string][]string{
 	// (macricoh.go) own doc comment for the full story and why each token
 	// is a real, verified-collision-free filename fragment.
 	"Ricoh": ricohFamilyTokens,
+
+	// Sharp ships exactly one real driver package, but unlike Kyocera its
+	// own filename doesn't contain the manufacturer's own name at all -
+	// confirmed live (2026-09-13) against every real file across all 8
+	// OS-version folders in the actual Drivers folder that only two distinct
+	// filenames ever appear: "MX-C55c_2512a_MacPS.dmg" (the real driver -
+	// its own jp.co.sharp.document.mx-c55_1015-.pkg sub-package holds 147
+	// real Sharp PPDs, confirmed via *NickName, covering nearly Sharp's
+	// whole current BP-/MX- lineup) and
+	// "Generic_GUC_PrinterSoftware_11202025.dmg" (a Lexmark-licensed,
+	// white-labeled generic print-dialog-enhancement package - its own
+	// PackageInfo bundle list references com.lexmark.ColorSeriesProductConfig
+	// - confirmed to hold zero real PPDs at all, and the exact file the
+	// guess-based ResolveMac newest-by-mtime fallback was wrongly
+	// auto-populating into the Driver field before this table existed).
+	// "MacPS" is a real, collision-free substring of the real driver's own
+	// filename that never appears in the decoy's - the same classifyMacFamily
+	// mechanism every other manufacturer's tokens already use, just with a
+	// token drawn from the driver's own filename shape instead of the
+	// manufacturer's name. Every one of Sharp's own real PPDs' *NickName
+	// carries a generic, non-language " PPD" suffix (e.g.
+	// "SHARP MX-3071S PPD") that isn't a distinguishing family the way
+	// Canon's PS/PPD/UFRII suffixes are - "PPD" is listed second purely so
+	// stripLanguageSuffix strips it from the friendly model name (the same
+	// suffix-stripping trick Canon's own real "PPD" family already relies
+	// on), not because any real Sharp filename ever matches it as a
+	// classification token (confirmed none do, so it's permanently an empty,
+	// harmless second family).
+	"Sharp": {"MacPS", "PPD"},
 }
 
 // classifyMacFamily returns which of tokens appears in path's own basename

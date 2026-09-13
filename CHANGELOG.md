@@ -4,6 +4,47 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-13 (v0.9.5) - macOS: real Sharp driver support (147 models)
+
+Ken: "Let's move on to Sharp" - the same "inspect real files first" investigation already applied
+to Canon/Kyocera/Ricoh this cycle, extended to Sharp's own real macOS downloads.
+
+### Added
+- `macFamilyPreference["Sharp"] = {"MacPS", "PPD"}` (`macfamily.go`) gives Sharp a real
+  catalog-driven model index, the same as Kyocera/Ricoh - confirmed live against every real file
+  across all 8 OS-version folders in the actual Drivers folder that only two distinct filenames
+  ever appear: `MX-C55c_2512a_MacPS.dmg` (the real driver - its own
+  `jp.co.sharp.document.mx-c55_1015-.pkg` sub-package holds 147 real Sharp PPDs, confirmed via
+  `*NickName`, covering nearly Sharp's whole current BP-/MX- lineup) and
+  `Generic_GUC_PrinterSoftware_11202025.dmg` (a Lexmark-licensed, white-labeled generic
+  print-dialog-enhancement package - its own `PackageInfo` bundle list references
+  `com.lexmark.ColorSeriesProductConfig` - confirmed to hold zero real PPDs, and the exact file
+  the old guess-based `ResolveMac` newest-by-mtime fallback was wrongly auto-populating into the
+  Driver field, matching Ken's own earlier bug-report screenshot).
+  - Unlike Kyocera, Sharp's real driver filename never contains the manufacturer's own name, so
+    the established single-token "manufacturer name in filename" trick doesn't apply as-is -
+    `"MacPS"` is a real, collision-free substring of the driver's own filename instead, verified
+    to never match the decoy's filename.
+  - Every one of Sharp's 147 real PPDs' `*NickName` carries a generic, non-language `" PPD"`
+    suffix (e.g. `"SHARP MX-3071S PPD"`) rather than a distinguishing driver family - `"PPD"` is
+    listed second purely so `stripLanguageSuffix` strips it from the friendly model name (the
+    same trick Canon's own real "PPD" family already relies on), giving a clean
+    `"SHARP MX-3071S (Driver)"` label instead of a redundant `"SHARP MX-3071S PPD (Driver)"` one.
+  - No Japan-market-only convention found in Sharp's real data (unlike Canon's `" JP"` or Ricoh's
+    `" JPN "`/glued-`J`) - checked, none present.
+  - No custom PPD-extraction fallback or sub-package restrictor needed (unlike Ricoh's
+    extensionless PPDs or Kyocera's duplicate sub-packages) - Sharp's real PPDs are consistently
+    `.PPD.gz`, found correctly by the existing extension-based `cpio` glob.
+- Live-verified: `pdtdebugmac models` against the real Drivers folder correctly indexes all 147
+  Sharp models, every variant sourced from `MX-C55c_2512a_MacPS.dmg`, with the decoy package
+  never appearing anywhere in the output.
+
+### Fixed
+- `TestResolveMacFamily_ManufacturerWithNoFamilyTableBehavesLikeResolveMac` and
+  `TestBuildMacModelIndex_ManufacturerWithNoFamilyTableIsAbsent` used "Sharp" as their own example
+  of "a manufacturer with no family table at all" - no longer valid now that Sharp has one both
+  switched to "HP" instead.
+
 ## 2026-09-13 (v0.9.4) - macOS: Apple's own Generic PostScript/PCL drivers as a real fallback
 
 Follows directly from v0.9.3: Ken asked whether an OS-mismatched vendor driver could actually

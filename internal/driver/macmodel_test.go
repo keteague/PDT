@@ -122,11 +122,11 @@ func TestBuildMacModelIndex_ManufacturerWithNoFamilyTableIsAbsent(t *testing.T) 
 	cat := testModelCatalog(t)
 	dir := t.TempDir()
 	index, _ := BuildMacModelIndex(cat, dir, dir, true)
-	// "Sharp", not "Kyocera" or "Ricoh" - both of those got their own real
+	// "HP", not "Kyocera", "Ricoh" or "Sharp" - all three got their own real
 	// macFamilyPreference entries (see macfamily.go's own doc comment) once
-	// each got a real model index built, so neither is a valid example of "a
-	// manufacturer with no family table at all" anymore.
-	if _, ok := index["Sharp"]; ok {
+	// each got a real model index built, so none of them is a valid example
+	// of "a manufacturer with no family table at all" anymore.
+	if _, ok := index["HP"]; ok {
 		t.Error("expected no model index entry at all for a manufacturer with no macFamilyPreference table")
 	}
 }

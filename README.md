@@ -421,7 +421,7 @@ per-row path unaffected. **Confirmed live**: a 2-row same-package Kyocera deploy
 + `TASKalfa 6052ci`) completed both rows' install+queue-create within the same second after a
 single wait for the one auth prompt.
 
-### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.8)
+### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.9)
 
 Ricoh's own real macOS shape turned out different again from both Canon and Kyocera: many
 small, independent downloads side by side (10 real files), each covering its own small,
@@ -651,6 +651,29 @@ so far - no separate monochrome-line driver exists in the Drivers folder yet. **
 live**: Ken ran a real 4-row Toshiba deploy (one row per real PDL variant - ColorMFP, -CN, -S2,
 -X7) against the rebuilt app - exactly 1 elevated prompt for all 4 rows (the shared install
 completed in ~32s under that one prompt), no ColorModel warning on any row.
+
+**v0.9.9 - real Toshiba model numbers (136 models), not just 4 generic PDL variants.** Ken added
+`TOSHIBA_MonoMFP.dmg.gz` and asked whether the Color PPDs could be used on a B&W MFD - answering
+that meant inspecting each PPD's own `*Product` lines for the first time, which turned up real
+per-model data v0.9.8 never looked for (it only checked `*NickName`, generic per file, e.g.
+"TOSHIBA ColorMFP-X7"). Each of Toshiba's 8 real files actually declares 9 to 29 `*Product`
+lines (128 total) naming every specific e-STUDIO model it covers (e.g.
+`*Product: "(TOSHIBA e-STUDIO6570C)"`) - confirmed live that Color models always end
+"C"/"AC"/"CS" and Mono models never do, matching the color/mono question that started this. Ken
+then asked to rebuild Toshiba's catalog support around it. `toshibaExpandProductEntries`/
+`toshibaCanonicalModelName` (`mactoshiba.go`, new file) expand each generic file-level entry
+into one entry per real model instead, so the Model dropdown now shows 136 real e-STUDIO
+numbers - the same convention every other manufacturer's own dropdown already uses. Real dedup
+needed: the same physical model can appear as more than one differently-spelled raw `*Product`
+line (underscore/space and an inconsistent "TOSHIBA " prefix) - `toshibaCanonicalModelName`
+normalizes and dedupes these down to one real model entry. `packagePPDEntriesFilteredFallback`/
+`indexFamilyPackage` gained a third optional hook (`expand`) for this - and a real,
+confirmed-live bug along the way: the first version ran this hook in the *caller*
+(`indexFamilyPackage`), after `packagePPDEntriesFilteredFallback` had already returned, by which
+point its own `defer os.RemoveAll(tmpDir)` had already deleted every extracted PPD file, so
+`ReadPPDProducts` always failed and silently fell back to the unexpanded generic entry every
+time (Toshiba's own model count came back as 8, not ~136, until this was caught). Fixed by
+running the hook inside `packagePPDEntriesFilteredFallback` itself, before its own cleanup.
 
 ### `cmd/pdtdebugmac`
 

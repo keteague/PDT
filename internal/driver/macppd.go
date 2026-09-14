@@ -30,16 +30,16 @@ var ppdNickNameRe = regexp.MustCompile(`(?m)^\*NickName:\s*"([^"]*)"`)
 // convention, just a different PPD keyword some manufacturers prefer.
 var ppdModelNameRe = regexp.MustCompile(`(?m)^\*ModelName:\s*"([^"]*)"`)
 
-// ReadPPDNickName reads ppdPath's own *NickName (falling back to
-// *ModelName) - transparently gzip-decompressing if the path ends in
-// ".gz", the form every PPD under /Library/Printers/PPDs/Contents/Resources
-// - and returns ("", false) for anything unreadable or lacking both fields,
-// rather than erroring: a PPD this can't identify by name is still usable,
-// just not something model-matching can use as positive evidence.
-func ReadPPDNickName(ppdPath string) (string, bool) {
+// readPPDTextBytes reads ppdPath's own raw content, transparently gzip-
+// decompressing if the path ends in ".gz" - the shared "open, maybe
+// decompress, read with a sane cap" step ReadPPDNickName/ReadPPDProducts
+// both need. PPDs are small plain-text files (confirmed against real Canon/
+// Kyocera PPDs: well under 500KB even uncompressed) - capped defensively
+// rather than trusting an arbitrary file's declared size.
+func readPPDTextBytes(ppdPath string) ([]byte, bool) {
 	f, err := os.Open(ppdPath)
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 	defer f.Close()
 
@@ -47,17 +47,28 @@ func ReadPPDNickName(ppdPath string) (string, bool) {
 	if strings.HasSuffix(strings.ToLower(ppdPath), ".gz") {
 		gz, err := gzip.NewReader(f)
 		if err != nil {
-			return "", false
+			return nil, false
 		}
 		defer gz.Close()
 		r = gz
 	}
 
-	// PPDs are small plain-text files (confirmed against real Canon/Kyocera
-	// PPDs: well under 500KB even uncompressed) - capped defensively rather
-	// than trusting an arbitrary file's declared size.
 	data, err := io.ReadAll(io.LimitReader(r, 4<<20))
 	if err != nil {
+		return nil, false
+	}
+	return data, true
+}
+
+// ReadPPDNickName reads ppdPath's own *NickName (falling back to
+// *ModelName) - transparently gzip-decompressing if the path ends in
+// ".gz", the form every PPD under /Library/Printers/PPDs/Contents/Resources
+// - and returns ("", false) for anything unreadable or lacking both fields,
+// rather than erroring: a PPD this can't identify by name is still usable,
+// just not something model-matching can use as positive evidence.
+func ReadPPDNickName(ppdPath string) (string, bool) {
+	data, ok := readPPDTextBytes(ppdPath)
+	if !ok {
 		return "", false
 	}
 	if m := ppdNickNameRe.FindSubmatch(data); m != nil {
@@ -67,6 +78,38 @@ func ReadPPDNickName(ppdPath string) (string, bool) {
 		return string(m[1]), true
 	}
 	return "", false
+}
+
+// ppdProductRe matches every one of a PPD's own `*Product: "(...)"` lines -
+// unlike *NickName (one per file, and for Toshiba's own generic PDL-variant
+// PPDs, not a real model name at all - see mactoshiba.go), a real PPD can
+// declare many *Product lines, one per specific physical model that PPD's
+// own PDE/PDL actually covers. Confirmed live (2026-09-13) against Toshiba's
+// own real "TOSHIBA_ColorMFP_X7.gz": 22 distinct *Product lines, e.g.
+// `*Product: "(TOSHIBA e-STUDIO6570C)"`, each naming a real e-STUDIO model
+// this one generic PPD serves.
+var ppdProductRe = regexp.MustCompile(`(?m)^\*Product:\s*"\(([^)]*)\)"`)
+
+// ReadPPDProducts returns every real model name a PPD's own *Product lines
+// declare, in file order, duplicates included (ReadPPDProducts' own callers
+// decide whether/how to deduplicate - see toshibaCanonicalModelName). nil,
+// false for anything unreadable or declaring no *Product line at all (most
+// manufacturers' real PPDs here don't - *NickName alone already names the
+// model for them).
+func ReadPPDProducts(ppdPath string) ([]string, bool) {
+	data, ok := readPPDTextBytes(ppdPath)
+	if !ok {
+		return nil, false
+	}
+	matches := ppdProductRe.FindAllSubmatch(data, -1)
+	if len(matches) == 0 {
+		return nil, false
+	}
+	products := make([]string, len(matches))
+	for i, m := range matches {
+		products[i] = string(m[1])
+	}
+	return products, true
 }
 
 // ppdEntry is one PPD found inside an expanded package payload - its own
@@ -128,16 +171,25 @@ func packagePPDEntries(pkgPath string) ([]ppdEntry, []subPackageResult, error) {
 // See kyoceraRestrictSubPackages (mackyocera.go) for the one real caller
 // and why it's needed.
 func packagePPDEntriesFiltered(pkgPath string, restrict func(expandDir string) (allow map[string]bool, ok bool)) ([]ppdEntry, []subPackageResult, error) {
-	return packagePPDEntriesFilteredFallback(pkgPath, restrict, nil)
+	return packagePPDEntriesFilteredFallback(pkgPath, restrict, nil, nil)
 }
 
-// packagePPDEntriesFilteredFallback is packagePPDEntriesFiltered, with a
-// second optional manufacturer-specific hook: ppdFallback, tried on a
+// packagePPDEntriesFilteredFallback is packagePPDEntriesFiltered, with two
+// more optional manufacturer-specific hooks. ppdFallback is tried on a
 // sub-package only when the fast, extension-based cpio glob finds nothing
 // in it at all - see macSubPackagePPDFallback for the callers and why Ricoh
 // and Xerox specifically need one (their own real PPDs carry no recognized
 // extension at all, or - for Ricoh's one legacy bundle - a bare ".gz").
-func packagePPDEntriesFilteredFallback(pkgPath string, restrict func(expandDir string) (allow map[string]bool, ok bool), ppdFallback ppdExtractionFallback) ([]ppdEntry, []subPackageResult, error) {
+// expand, when non-nil, runs on the fully-assembled entries slice before
+// this function's own tmpDir is removed - it MUST run here, not in a
+// caller, since every entry's own Path points inside tmpDir and is gone the
+// instant this function returns (confirmed live, 2026-09-13, as a real bug:
+// running Toshiba's own expansion in the caller instead silently produced
+// zero expanded entries every time, since ReadPPDProducts' own os.Open
+// always failed against an already-deleted path, falling through to the
+// unexpanded original). See macPPDEntryExpander/toshibaExpandProductEntries
+// for the one real caller.
+func packagePPDEntriesFilteredFallback(pkgPath string, restrict func(expandDir string) (allow map[string]bool, ok bool), ppdFallback ppdExtractionFallback, expand func([]ppdEntry) []ppdEntry) ([]ppdEntry, []subPackageResult, error) {
 	tmpDir, err := os.MkdirTemp("", "pdt-ppdinspect-*")
 	if err != nil {
 		return nil, nil, err
@@ -178,6 +230,9 @@ func packagePPDEntriesFilteredFallback(pkgPath string, restrict func(expandDir s
 		}
 		return nil
 	})
+	if expand != nil {
+		entries = expand(entries)
+	}
 	return entries, subs, nil
 }
 
@@ -449,9 +504,14 @@ func dirHasAnyFile(root string) bool {
 // catalog build already applies (macSubPackagePPDFallback) - without it, a
 // manufacturer whose real PPDs need that fallback (Ricoh) would score every
 // one of its own packages as having no PPDs at all here, even though the
-// catalog-driven index (built the same way) finds them correctly.
+// catalog-driven index (built the same way) finds them correctly. Also
+// applies the same real-model-number expansion (macPPDEntryExpander) the
+// catalog-driven index uses - without it, this guess-based fallback path
+// would only ever see Toshiba's own 4 generic PDL-variant names per
+// package, never the real e-STUDIO model numbers PackageBestModelScore
+// needs to match a technician-typed model against.
 func PackagePPDNickNames(pkgPath, manufacturer string) ([]string, error) {
-	entries, _, err := packagePPDEntriesFilteredFallback(pkgPath, nil, macSubPackagePPDFallback(manufacturer))
+	entries, _, err := packagePPDEntriesFilteredFallback(pkgPath, nil, macSubPackagePPDFallback(manufacturer), macPPDEntryExpander(manufacturer))
 	if err != nil {
 		return nil, err
 	}

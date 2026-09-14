@@ -200,14 +200,26 @@ func macSubPackageRestrictor(manufacturer string) func(expandDir string) (map[st
 	return nil
 }
 
-func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir string, restrict func(expandDir string) (map[string]bool, bool), ppdFallback ppdExtractionFallback) (map[string][]MacPPDVariant, MacFamilyProvenance) {
+func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir string, restrict func(expandDir string) (map[string]bool, bool), ppdFallback ppdExtractionFallback, expand func([]ppdEntry) []ppdEntry) (map[string][]MacPPDVariant, MacFamilyProvenance) {
 	out := map[string][]MacPPDVariant{}
 	outerRef := MacPackageRef{Path: pkg.Path, ModTime: pkg.ModTime, Size: pkg.Size}
 
 	pkgPath, chain, pkgCleanup, pkgErr := LocatePkgWithChain(pkg.Path)
 	if pkgErr == nil {
 		defer pkgCleanup()
-		entries, subs, err := packagePPDEntriesFilteredFallback(pkgPath, restrict, ppdFallback)
+		// expand (Toshiba only today - see macPPDEntryExpander/
+		// toshibaExpandProductEntries) turns each file-level entry (one per
+		// generic PDL-variant PPD, *NickName staying just as generic) into
+		// one entry per real model its own *Product lines declare - MUST
+		// happen inside packagePPDEntriesFilteredFallback itself, before its
+		// own tmpDir is removed (confirmed live, 2026-09-13, as a real bug:
+		// expanding here instead, after that function already returned,
+		// always found zero *Product lines, since every entry's own Path
+		// pointed at an already-deleted temp file by then). Everything
+		// downstream (Japan-market filtering, model-map keying, provenance)
+		// treats the expanded entries exactly like any other manufacturer's
+		// own real per-model PPDs.
+		entries, subs, err := packagePPDEntriesFilteredFallback(pkgPath, restrict, ppdFallback, expand)
 		if err != nil {
 			return out, MacFamilyProvenance{}
 		}
@@ -533,7 +545,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 					// version reachable.
 					famCacheDir = filepath.Join(ppdCacheDir, mfg, family, packageCacheKey(pkg.Path))
 				}
-				variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir, macSubPackageRestrictor(mfg), macSubPackagePPDFallback(mfg))
+				variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir, macSubPackageRestrictor(mfg), macSubPackagePPDFallback(mfg), macPPDEntryExpander(mfg))
 				if len(variants) == 0 {
 					continue
 				}

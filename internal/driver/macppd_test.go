@@ -184,3 +184,42 @@ func TestExtractPPDsFromExpandedPkg_RicohLegacyPathFragmentFallback(t *testing.T
 		t.Errorf("an unrelated plugin file was extracted, want only the real PPD pulled from this Payload")
 	}
 }
+
+// TestPackagePPDEntriesFilteredFallback_ExpandRunsWhileFilesStillExist
+// guards a real, confirmed-live bug (2026-09-13): an earlier version of
+// this function's own caller (indexFamilyPackage) ran its expand hook
+// *after* packagePPDEntriesFilteredFallback had already returned - by which
+// point this function's own `defer os.RemoveAll(tmpDir)` had already fired,
+// so every entry's own Path pointed at an already-deleted file.
+// toshibaExpandProductEntries' own os.Open silently failed every time as a
+// result, always falling back to the unexpanded generic entry - Toshiba's
+// real model count came back as 8 (the generic PDL-variant count) instead
+// of the real ~136 e-STUDIO model numbers, discovered only by comparing
+// against the real *Product line count found live in each PPD. Uses the
+// same real (if tiny) UFRII_test_fixture.pkg already checked in for the
+// family tests - skips on non-macOS, same reasoning as
+// macresolve_test.go's own pkgutil-dependent tests.
+func TestPackagePPDEntriesFilteredFallback_ExpandRunsWhileFilesStillExist(t *testing.T) {
+	if _, err := exec.LookPath("pkgutil"); err != nil {
+		t.Skip("pkgutil not on PATH (not running on macOS)")
+	}
+	pkgPath := filepath.Join("testdata_mac_family", "macOS", "Canon", "26-Tahoe", "UFRII_test_fixture.pkg")
+
+	var sawEntry bool
+	expand := func(entries []ppdEntry) []ppdEntry {
+		for _, e := range entries {
+			sawEntry = true
+			if _, err := os.Stat(e.Path); err != nil {
+				t.Errorf("expand hook ran against a Path that no longer exists on disk (%q): %v - the temp dir was cleaned up too early", e.Path, err)
+			}
+		}
+		return entries
+	}
+
+	if _, _, err := packagePPDEntriesFilteredFallback(pkgPath, nil, nil, expand); err != nil {
+		t.Fatalf("packagePPDEntriesFilteredFallback: %v", err)
+	}
+	if !sawEntry {
+		t.Fatal("expand hook was never called with any entries - fixture produced nothing to check")
+	}
+}

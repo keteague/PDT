@@ -4,6 +4,43 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-13 (v0.9.9) - macOS: real Toshiba model numbers (136 models), not just 4 generic PDL variants
+
+Ken added `TOSHIBA_MonoMFP.dmg.gz` and asked whether the Color PPDs could be used on a B&W MFD -
+answering that question meant inspecting each PPD's own `*Product` lines for the first time,
+which turned up real per-model data v0.9.8 never looked for. Ken then asked to rebuild Toshiba's
+catalog support around it.
+
+### Changed
+- v0.9.8 surfaced Toshiba's 4 (now 8, with Mono) generic PDL/controller-generation PPD names
+  directly as the selectable "models," since inspecting only `*NickName` (generic per file, e.g.
+  "TOSHIBA ColorMFP-X7") found no real model number anywhere. Each of those 8 real files
+  actually declares 9 to 29 `*Product` lines (128 total) naming every specific e-STUDIO model it
+  covers (e.g. `*Product: "(TOSHIBA e-STUDIO6570C)"`) - confirmed live that Color models always
+  end "C"/"AC"/"CS" and Mono models never do, matching the color/mono question that started this.
+  `toshibaExpandProductEntries`/`toshibaCanonicalModelName` (`mactoshiba.go`, new file) expand
+  each generic file-level entry into one entry per real model instead, so the Model dropdown now
+  shows 136 real e-STUDIO numbers - the same convention every other manufacturer's own dropdown
+  already uses - instead of 8 generic names a technician needed Toshiba's own documentation to
+  map to their hardware.
+  - Real dedup needed: the same physical model can appear as more than one differently-spelled
+    raw `*Product` line (e.g. "TOSHIBA e-STUDIO5008LP_Loops-LP50" vs "...5008LP Loops-LP50" vs
+    "e-STUDIO5008LP_Loops-LP50" - underscore/space and an inconsistent "TOSHIBA " prefix) -
+    `toshibaCanonicalModelName` normalizes and dedupes these down to one real model entry.
+- `ReadPPDProducts` (`macppd.go`, new) reads every `*Product` line a PPD declares - the same
+  transparently-gzip-decompressing read `ReadPPDNickName` already does, factored into a shared
+  `readPPDTextBytes` helper both now call.
+- `packagePPDEntriesFilteredFallback`/`indexFamilyPackage` gained a third optional hook
+  (`expand func([]ppdEntry) []ppdEntry`) for this - and a real, confirmed-live bug along the
+  way: the first version ran this hook in the *caller* (`indexFamilyPackage`), after
+  `packagePPDEntriesFilteredFallback` had already returned - by which point its own
+  `defer os.RemoveAll(tmpDir)` had already deleted every extracted PPD file, so
+  `ReadPPDProducts` always failed and silently fell back to the unexpanded generic entry every
+  time (Toshiba's own model count came back as 8, not ~136, until this was caught). Fixed by
+  running the hook inside `packagePPDEntriesFilteredFallback` itself, before its own cleanup.
+  `PackagePPDNickNames` (the guess-based fallback's own pre-install model check) now applies the
+  same expansion too, for consistency.
+
 ## 2026-09-13 (v0.9.8) - macOS: real Toshiba driver support (4 generic PDL variants) + a genuine mounting gap fixed
 
 Ken: "Let's work on Toshiba" - the single real download placed
@@ -36,13 +73,11 @@ cataloging the file as a package at all. Both needed real fixes before Toshiba c
 - Genuinely different real shape from every other manufacturer here: Toshiba's own sub-package
   (identifier `com.toshiba.pde.x7.colormfp`, install-location `/`) holds only 4 real PPDs total
   - "TOSHIBA ColorMFP", "-X7", "-S2", "-CN" - generic PDL/controller-generation variants
-  covering Toshiba's whole e-STUDIO Color MFP line, not one PPD per specific model number.
-  Asked Ken how the Model/Driver dropdown should handle this (no way to resolve a real e-STUDIO
-  model number against these generic names automatically) - his choice: surface all 4 as
-  selectable "models" directly, same as every other manufacturer's own dropdown, rather than
-  guess a mapping. Every real PPD named `TOSHIBA_ColorMFP<suffix>.gz`, no `.ppd` anywhere - the
-  same real gotcha Ricoh/Xerox already had; `macSubPackagePPDFallback` extended to cover Toshiba
-  with the same shared `pathFragmentPPDExtractionFallback`.
+  covering Toshiba's whole e-STUDIO Color MFP line, not one PPD per specific model number the
+  way every other manufacturer here works (see v0.9.9 above - this got real per-model data soon
+  after). Every real PPD named `TOSHIBA_ColorMFP<suffix>.gz`, no `.ppd` anywhere - the same real
+  gotcha Ricoh/Xerox already had; `macSubPackagePPDFallback` extended to cover Toshiba with the
+  same shared `pathFragmentPPDExtractionFallback`.
 - `findOption` (`printdefaults_darwin.go`) now recognizes Toshiba's own real ColorModel-
   equivalent keyword, `ColorType` (`*OpenUI *ColorType/Color Type: PickOne`, choices
   Auto/Color/Mono/Black&Red) - "Mono" is already self-describing, so no label-matching gap.

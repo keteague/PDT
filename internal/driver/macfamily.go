@@ -105,38 +105,46 @@ var macFamilyPreference = map[string][]string{
 	// cycle was careful to avoid.
 	"Xerox": {"Xerox"},
 
-	// Toshiba ships exactly one real driver download - "TOSHIBA_ColorMFP.dmg.gz"
-	// (confirmed live, 2026-09-13, across every one of the 6 populated
-	// OS-version folders in the real Drivers folder) - the manufacturer's own
-	// name is always in the filename, so a single "Toshiba" token unlocks
-	// the catalog-driven model index the same trivial way Kyocera's/Xerox's
-	// own single tokens do. Genuinely different shape from every other
-	// manufacturer here, though: its real sub-package (identifier
-	// "com.toshiba.pde.x7.colormfp", install-location "/") holds only 4 real
-	// PPDs total - "TOSHIBA ColorMFP", "-X7", "-S2", "-CN" - generic
-	// PDL/controller-generation variants covering Toshiba's whole e-STUDIO
-	// Color MFP line, not one PPD per specific model number the way every
-	// other manufacturer here works. A technician needs Toshiba's own
-	// compatibility documentation to know which of the 4 generic variants
-	// matches their physical e-STUDIO model - Ken's own explicit choice
-	// (2026-09-13) was to surface all 4 as selectable "models" rather than
-	// try to guess a mapping from a real model number PDT has no way to
-	// resolve on its own. Every real PPD named "TOSHIBA_ColorMFP<suffix>.gz",
-	// no ".ppd" anywhere (confirmed via *NickName content, not extension) -
+	// Toshiba ships two real driver downloads - "TOSHIBA_ColorMFP.dmg.gz" and
+	// "TOSHIBA_MonoMFP.dmg.gz" (confirmed live, 2026-09-13, across every
+	// populated OS-version folder in the real Drivers folder) - the
+	// manufacturer's own name is always in the filename, so a single
+	// "Toshiba" token unlocks the catalog-driven model index the same
+	// trivial way Kyocera's/Xerox's own single tokens do, and correctly
+	// classifies both downloads into the one family (real model numbers
+	// never collide between the two - see below). Genuinely different real
+	// PPD shape from every other manufacturer here, though: each download's
+	// own sub-package (identifiers "com.toshiba.pde.x7.colormfp"/
+	// "...monomfp", install-location "/") holds only 4 real PPD files total
+	// each - "TOSHIBA ColorMFP"/"MonoMFP", "-X7", "-S2", "-CN" - generic
+	// PDL/controller-generation variants, each one's own *NickName staying
+	// just as generic regardless of which real e-STUDIO model it's serving.
+	// First inspected without checking *Product (2026-09-13), which led to
+	// surfacing those 8 generic names as the only selectable "models" - Ken
+	// then asked whether a real e-STUDIO model number appears anywhere in
+	// these PPDs at all, which led to finding the real answer: yes, each
+	// file's own *Product lines (9 to 29 per file, 128 total across all 8
+	// real files) name every specific e-STUDIO model that one generic PDL
+	// file actually covers (e.g. e-STUDIO6570C, e-STUDIO2040C for
+	// ColorMFP-X7). `toshibaExpandProductEntries` (mactoshiba.go) expands
+	// each generic file-level entry into one entry per real *Product model
+	// instead, so the Model dropdown now shows real e-STUDIO numbers the
+	// same way every other manufacturer's own dropdown already does -
+	// confirmed live that Color models always end "C"/"AC"/"CS" and Mono
+	// models never do, so the two downloads' real model numbers never
+	// collide even though both classify into this one shared family. Every
+	// real PPD named "TOSHIBA_<Color|Mono>MFP<suffix>.gz", no ".ppd"
+	// anywhere (confirmed via *NickName/*Product content, not extension) -
 	// see macSubPackagePPDFallback (macppd.go) for the shared, Ricoh/Xerox/
-	// Toshiba content-based extraction fallback this needs. The real
-	// download's own outer file is itself gzip-compressed on top of being a
-	// UDIF .dmg ("TOSHIBA_ColorMFP.dmg.gz", not a plain ".dmg") - a real
-	// shape none of Canon/Kyocera/Ricoh/Sharp/Xerox's own downloads have -
-	// `hdiutil attach` doesn't auto-detect a plain gzip wrapper on its own
-	// ("image not recognized"), so this needed real changes to the shared
-	// mounting/cataloging code itself (isDmgLikePath/mountDmg, macmount.go;
-	// the extension-detection fallback, maccatalog.go), not just this table.
-	// No Japan-market-only convention found (only 4 generic entries to check
-	// in the first place). Only Color MFP models are covered by this one
-	// real download - no separate monochrome-line driver has been placed in
-	// the Drivers folder yet, so a technician deploying to a mono-only
-	// e-STUDIO would currently have nothing real to select at all.
+	// Toshiba content-based extraction fallback this needs. Both real
+	// downloads are themselves gzip-compressed on top of being a UDIF .dmg
+	// (".dmg.gz", not a plain ".dmg") - a real shape none of
+	// Canon/Kyocera/Ricoh/Sharp/Xerox's own downloads have - `hdiutil
+	// attach` doesn't auto-detect a plain gzip wrapper on its own ("image
+	// not recognized"), so this needed real changes to the shared mounting/
+	// cataloging code itself (isDmgLikePath/mountDmg, macmount.go; the
+	// extension-detection fallback, maccatalog.go), not just this table.
+	// No Japan-market-only convention found in any real *Product line.
 	"Toshiba": {"Toshiba"},
 }
 

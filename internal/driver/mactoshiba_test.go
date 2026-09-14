@@ -45,22 +45,29 @@ func TestToshibaDriverHintFromFilename(t *testing.T) {
 	}
 }
 
-// TestLabelSuffix_ToshibaUsesRealDriverFilenameNotGenericFiller is the
-// end-to-end regression at the shared labelSuffix level (used by both the
-// fresh-index path and the cached-catalog-reload path, so a Label reads the
-// same either way) - reproduces Ken's own exact example.
-func TestLabelSuffix_ToshibaUsesRealDriverFilenameNotGenericFiller(t *testing.T) {
-	if got := labelSuffix("Toshiba", "TOSHIBA_ColorMFP_S2.gz"); got != "ColorMFP-S2" {
-		t.Errorf(`labelSuffix("Toshiba", "TOSHIBA_ColorMFP_S2.gz") = %q, want "ColorMFP-S2"`, got)
+// TestMacVariantLabel_ToshibaShowsTheRealDriverNameAlone is the end-to-end
+// regression at the shared macVariantLabel level (used by the fresh-index
+// path, the cached-catalog-reload path, and the multi-version-decoration
+// path, so a Label reads the same everywhere) - reproduces Ken's own exact
+// ask (2026-09-14): the Driver field should show exactly what macOS's own
+// Printer Details shows for that queue - the real PPD's own *NickName alone
+// ("TOSHIBA ColorMFP-S2"), never combined with the model name at all.
+func TestMacVariantLabel_ToshibaShowsTheRealDriverNameAlone(t *testing.T) {
+	if got := macVariantLabel("TOSHIBA e-STUDIO2525AC", "Toshiba", "TOSHIBA_ColorMFP_S2.gz", ""); got != "TOSHIBA ColorMFP-S2" {
+		t.Errorf(`macVariantLabel(model, "Toshiba", "TOSHIBA_ColorMFP_S2.gz", "") = %q, want "TOSHIBA ColorMFP-S2" (model name must NOT appear)`, got)
+	}
+	// With a version tag (decorateMultiVersionLabels' own caller shape).
+	if got := macVariantLabel("TOSHIBA e-STUDIO2525AC", "Toshiba", "TOSHIBA_ColorMFP_S2.gz", "2026-01-15"); got != "TOSHIBA ColorMFP-S2 (2026-01-15)" {
+		t.Errorf(`macVariantLabel(..., "2026-01-15") = %q, want "TOSHIBA ColorMFP-S2 (2026-01-15)"`, got)
 	}
 	// Every other manufacturer (single-token family, e.g. Kyocera/Xerox) is
-	// unaffected - still the generic "Driver" filler, filename ignored.
-	if got := labelSuffix("Kyocera", "some_kyocera_ppd.PPD.gz"); got != "Driver" {
-		t.Errorf(`labelSuffix("Kyocera", ...) = %q, want "Driver" (unaffected by the Toshiba-only fix)`, got)
+	// unaffected - still "<model> (<generic filler>)".
+	if got := macVariantLabel("Kyocera ECOSYS M3655idn", "Kyocera", "some_kyocera_ppd.PPD.gz", ""); got != "Kyocera ECOSYS M3655idn (Driver)" {
+		t.Errorf(`macVariantLabel(..., "Kyocera", ...) = %q, want "Kyocera ECOSYS M3655idn (Driver)" (unaffected by the Toshiba-only fix)`, got)
 	}
 	// Canon's own real, genuinely distinct families keep their real names.
-	if got := labelSuffix("UFRII", "CNPZUIRAC5840ZU.ppd.gz"); got != "UFR II" {
-		t.Errorf(`labelSuffix("UFRII", ...) = %q, want "UFR II" (unaffected by the Toshiba-only fix)`, got)
+	if got := macVariantLabel("Canon iR-ADV C5840/5850", "UFRII", "CNPZUIRAC5840ZU.ppd.gz", ""); got != "Canon iR-ADV C5840/5850 (UFR II)" {
+		t.Errorf(`macVariantLabel(..., "UFRII", ...) = %q, want "Canon iR-ADV C5840/5850 (UFR II)" (unaffected by the Toshiba-only fix)`, got)
 	}
 }
 

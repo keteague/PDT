@@ -421,7 +421,7 @@ per-row path unaffected. **Confirmed live**: a 2-row same-package Kyocera deploy
 + `TASKalfa 6052ci`) completed both rows' install+queue-create within the same second after a
 single wait for the one auth prompt.
 
-### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.10)
+### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.11)
 
 Ricoh's own real macOS shape turned out different again from both Canon and Kyocera: many
 small, independent downloads side by side (10 real files), each covering its own small,
@@ -692,6 +692,23 @@ Label gets built) rather than threading a new field through
 identically whether a variant comes from a fresh index build, a cached catalog reload, or the
 multi-version-coexistence label path (which would otherwise have silently reverted to the
 generic filler the moment two Toshiba package versions ever sit side by side).
+
+**v0.9.11 - Toshiba's Driver field now shows exactly what macOS itself shows, no model name at
+all.** Ken: v0.9.10's own fix still composed the Driver field as "<model> (<real driver>)" -
+e.g. "TOSHIBA e-STUDIO2525AC (ColorMFP-S2)". He asked for it to stop mimicking the model at all
+and just show the driver exactly as it appears in macOS's own Printers & Scanners > Printer
+Details for that queue - the real PPD's own `*NickName` alone, "TOSHIBA ColorMFP-S2", nothing
+else appended (the model is already shown in its own separate Model field/column).
+`macVariantLabel` (`macmodel.go`) replaces v0.9.10's `labelSuffix` - instead of only computing
+the parenthetical half of `"<model> (<suffix>)"`, it now builds a variant's own whole Label. For
+Toshiba specifically, that whole Label is just `"TOSHIBA " + toshibaDriverHintFromFilename(filename)`
+(unchanged from v0.9.10) - the model name never appears in it at all. Every other manufacturer
+keeps the existing `"<model> (<family>)"` shape. Confirmed live that this reconstructs the real
+PPD's own `*NickName` byte-for-byte for all 8 real Toshiba files. `decorateMultiVersionLabels`
+now takes an optional version-tag parameter, appended after the real driver name for Toshiba
+rather than after the model name - still dormant (no real multi-version Toshiba data exists
+yet), but consistent with the new shape. `MacVariantForDeploy`'s own deploy-time matching is
+unaffected - it matches purely by exact `Label` string equality.
 
 ### `cmd/pdtdebugmac`
 

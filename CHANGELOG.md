@@ -4,6 +4,30 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-13 (v0.9.11) - macOS: Toshiba's Driver field now shows exactly what macOS itself shows, no model name at all
+
+Ken: v0.9.10's own fix still composed the Driver field as "<model> (<real driver>)" - e.g.
+"TOSHIBA e-STUDIO2525AC (ColorMFP-S2)". He asked for it to stop mimicking the model at all and
+just show the driver exactly as it appears in macOS's own Printers & Scanners > Printer Details
+for that queue - i.e. the real PPD's own `*NickName` alone, "TOSHIBA ColorMFP-S2", with nothing
+else appended (the model is already shown in its own separate Model field/column).
+
+### Changed
+- `macVariantLabel` (`macmodel.go`) replaces v0.9.10's `labelSuffix` - instead of only computing
+  the parenthetical half of `"<model> (<suffix>)"`, it now builds a variant's own whole Label.
+  For Toshiba specifically, that whole Label is just `"TOSHIBA " + toshibaDriverHintFromFilename(filename)`
+  (`mactoshiba.go`, unchanged from v0.9.10) - the model name never appears in it at all. Every
+  other manufacturer keeps the existing `"<model> (<family>)"` shape unchanged. Confirmed live
+  that this reconstructs the real PPD's own `*NickName` byte-for-byte for all 8 real Toshiba
+  files ("TOSHIBA_ColorMFP_S2.gz" -> "TOSHIBA ColorMFP-S2", "TOSHIBA_ColorMFP.gz" -> "TOSHIBA
+  ColorMFP", etc.) - exactly what macOS's own Printer Details already shows for that queue.
+  `decorateMultiVersionLabels`'s own multi-version-coexistence path takes an optional
+  `versionTag` parameter now, appended in parens after the real driver name for Toshiba
+  ("TOSHIBA ColorMFP-S2 (2026-01-15)") rather than after the model name - still dormant (no
+  real Toshiba multi-version data exists yet), but consistent with the new shape.
+  `MacVariantForDeploy`'s own deploy-time matching is unaffected - it matches purely by exact
+  `Label` string equality, never assuming any particular shape.
+
 ## 2026-09-13 (v0.9.10) - macOS: Toshiba's Driver field now shows the real PDL-variant name, not a repeat of the model
 
 Ken: selecting "TOSHIBA e-STUDIO2525AC" (v0.9.9's own real model numbers) populated the Driver

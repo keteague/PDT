@@ -1,6 +1,9 @@
 package driver
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // isKonicaMinoltaA4RegionDir reports whether name is one of Konica
 // Minolta's own real A4-paper-region variant folder names ("A4", "WW_A4" -
@@ -26,34 +29,51 @@ func isKonicaMinoltaA4RegionDir(name string) bool {
 
 // konicaMinoltaPSSuffixRe matches the generic, non-distinguishing " PS"
 // trailing language tag every real Konica Minolta PPD's own *NickName
-// carries (e.g. "KONICA MINOLTA C751i PS", "KONICA MINOLTA C3321i PS (S)") -
-// confirmed live, 2026-09-13, across all 60 real PPDs inspected (both real
-// sub-packages of the current WW_Letter download) that "PS" is universal:
-// Konica Minolta ships no non-PostScript language variant at all here,
-// unlike Canon's genuine UFR II/PS/PPD split, so it's never a real
-// distinguishing choice, just vendor boilerplate worth stripping for a
-// clean friendly model name. The trailing "(S)" qualifier some models also
-// carry is deliberately preserved, not stripped along with it: it names a
-// real, separately-installable driver variant (that package's own second,
-// non-default installer Choice1/sub-package, "..._1.pkg" - confirmed live
-// via the real Distribution script - covering a genuinely different,
-// non-overlapping set of model suffixes from the first, default
-// sub-package) rather than a cosmetic naming difference; collapsing it away
-// would silently merge two real driver variants under the same friendly
-// model name. Matches " PS" either at the very end, or immediately before a
-// trailing " (S)".
-var konicaMinoltaPSSuffixRe = regexp.MustCompile(` PS( \(S\))?$`)
+// carries (e.g. "KONICA MINOLTA C751i PS") - confirmed live, 2026-09-13,
+// across all 60 real PPDs inspected (both real sub-packages of the current
+// WW_Letter download) that "PS" is universal: Konica Minolta ships no
+// non-PostScript language variant at all here, unlike Canon's genuine UFR
+// II/PS/PPD split, so it's never a real distinguishing choice, just vendor
+// boilerplate worth stripping for a clean friendly model name.
+var konicaMinoltaPSSuffixRe = regexp.MustCompile(` PS$`)
+
+// konicaMinoltaIsSimplexDefaultVariant reports whether nickName names one of
+// Konica Minolta's own real "(S)" PPDs - the package's own second,
+// non-default installer choice/sub-package ("..._1.pkg", localized title
+// "Print (1-Sided) Driver Default" - confirmed live, 2026-09-13, straight
+// from the package's own Resources/en.lproj/Localizable.strings: "TITLE" =
+// "Print (2-Sided) Driver Default", "TITLE_S" = "Print (1-Sided) Driver
+// Default"). Confirmed live against the real PPD content too: for the exact
+// same physical model (C751i), the plain PPD's own *DefaultKMDuplex is
+// "Double" and the "(S)" PPD's is "Single" - nothing else differs (same 30
+// real model numbers appear in both sub-packages one-to-one, same
+// underlying PDE/framework bundles per the real Distribution script) -
+// "(S)" is purely a different factory-default Duplex value baked into an
+// otherwise-identical PPD, not a different physical model or feature set.
+// Ken's own explicit choice (2026-09-13): skip these entirely rather than
+// index them as separate models - PDT already sets its own explicit Duplex
+// default on every queue it creates (PrintDefaultsForNewQueue/
+// SetPrintDefaults) regardless of which PPD variant installs, so the "(S)"
+// copy is pure dropdown clutter with no real capability the plain PPD
+// doesn't already offer under PDT's own control.
+func konicaMinoltaIsSimplexDefaultVariant(nickName string) bool {
+	return strings.HasSuffix(nickName, " PS (S)")
+}
 
 // konicaMinoltaCleanNickNames is indexFamilyPackage's own Konica
-// Minolta-specific entry-transformation hook (see macPPDEntryExpander) -
-// unlike Toshiba's own one-to-many expansion, Konica Minolta's real PPDs
-// already name their own model directly (one PPD per real model, confirmed
-// live), so this keeps the entry count 1:1 and only rewrites each entry's
-// own NickName to strip the generic " PS" suffix (konicaMinoltaPSSuffixRe).
+// Minolta-specific entry-transformation hook (see macPPDEntryExpander).
+// Drops every "(S)" simplex-default duplicate entirely
+// (konicaMinoltaIsSimplexDefaultVariant) - unlike Toshiba's own one-to-many
+// expansion, this can only ever shrink the entry count, never grow it.
+// Every entry that survives gets its own generic " PS" suffix stripped
+// (konicaMinoltaPSSuffixRe) for a clean friendly model name.
 func konicaMinoltaCleanNickNames(entries []ppdEntry) []ppdEntry {
-	out := make([]ppdEntry, len(entries))
-	for i, e := range entries {
-		out[i] = ppdEntry{Path: e.Path, NickName: konicaMinoltaPSSuffixRe.ReplaceAllString(e.NickName, "$1")}
+	out := make([]ppdEntry, 0, len(entries))
+	for _, e := range entries {
+		if konicaMinoltaIsSimplexDefaultVariant(e.NickName) {
+			continue
+		}
+		out = append(out, ppdEntry{Path: e.Path, NickName: konicaMinoltaPSSuffixRe.ReplaceAllString(e.NickName, "")})
 	}
 	return out
 }

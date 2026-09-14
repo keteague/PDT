@@ -169,12 +169,22 @@ var macFamilyPreference = map[string][]string{
 	// Xerox's/Toshiba's own single tokens do, just keyed on file shape
 	// instead of manufacturer name. See konicaMinoltaCleanNickNames
 	// (mackonicaminolta.go) for the real, needed NickName cleanup this
-	// still requires (stripping a generic, non-distinguishing " PS" suffix
-	// every real PPD carries) and macSubPackagePPDFallback (macppd.go) for
-	// the shared, Ricoh/Xerox/Toshiba/Konica-Minolta content-based
-	// extraction fallback this needs (every real PPD named
-	// "KONICAMINOLTA<model>.gz", no ".ppd" anywhere). No Japan-market-only
-	// convention found across the 60 real PPDs inspected.
+	// still requires: stripping a generic, non-distinguishing " PS" suffix
+	// every real PPD carries, and dropping every "(S)" PPD entirely (Ken's
+	// own explicit choice, 2026-09-13) - confirmed live via the real
+	// package's own Localizable.strings that "(S)" means nothing more than
+	// "Print (1-Sided) Driver Default" vs. the plain PPD's own "Print
+	// (2-Sided) Driver Default", the exact same 30 physical models either
+	// way, just a different *DefaultKMDuplex baked in - pure clutter once
+	// PDT already sets its own explicit Duplex default on every queue it
+	// creates regardless of which PPD variant installs. Halves the real
+	// model count from 60 raw PPDs (30 plain + 30 "(S)") down to the 30
+	// real, meaningfully distinct models actually worth showing. See
+	// macSubPackagePPDFallback (macppd.go) for the shared, Ricoh/Xerox/
+	// Toshiba/Konica-Minolta content-based extraction fallback this needs
+	// (every real PPD named "KONICAMINOLTA<model>.gz", no ".ppd"
+	// anywhere). No Japan-market-only convention found across the 60 raw
+	// PPDs inspected.
 	"Konica Minolta": {".pkg"},
 }
 

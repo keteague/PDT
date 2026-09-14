@@ -21,34 +21,47 @@ func TestIsKonicaMinoltaA4RegionDir(t *testing.T) {
 	}
 }
 
-// TestKonicaMinoltaCleanNickNames_StripsGenericPSSuffixButKeepsRealSVariant
+// TestKonicaMinoltaCleanNickNames_StripsGenericPSSuffixAndDropsSimplexVariant
 // locks in the real finding (2026-09-13) against Konica Minolta's own 60
-// real PPDs: every one carries a generic, non-distinguishing " PS" suffix
+// raw PPDs: every one carries a generic, non-distinguishing " PS" suffix
 // (Konica Minolta ships no non-PostScript language variant at all) which
-// should be stripped for a clean model name, but a trailing "(S)" qualifier
-// some models also carry names a real, separately-installable driver
-// variant (that package's own second, non-default sub-package) and must
-// survive - collapsing it away would silently merge two real driver
-// variants under the same friendly model name.
-func TestKonicaMinoltaCleanNickNames_StripsGenericPSSuffixButKeepsRealSVariant(t *testing.T) {
+// gets stripped for a clean model name, and every "(S)" PPD gets dropped
+// entirely - confirmed live via the real package's own Localizable.strings
+// that "(S)" means nothing more than "Print (1-Sided) Driver Default" vs.
+// the plain PPD's own "Print (2-Sided) Driver Default" (the exact same
+// physical model either way, just a different *DefaultKMDuplex baked in) -
+// pure clutter once PDT already sets its own explicit Duplex default on
+// every queue it creates, Ken's own explicit choice.
+func TestKonicaMinoltaCleanNickNames_StripsGenericPSSuffixAndDropsSimplexVariant(t *testing.T) {
 	entries := []ppdEntry{
 		{Path: "/x/KONICAMINOLTAC751i.gz", NickName: "KONICA MINOLTA C751i PS"},
 		{Path: "/x/KONICAMINOLTAC3321iS.gz", NickName: "KONICA MINOLTA C3321i PS (S)"},
 	}
 	got := konicaMinoltaCleanNickNames(entries)
-	if len(got) != 2 {
-		t.Fatalf("got %d entries, want 2: %+v", len(got), got)
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1 (the (S) entry must be dropped entirely): %+v", len(got), got)
 	}
 	if got[0].NickName != "KONICA MINOLTA C751i" {
 		t.Errorf("got[0].NickName = %q, want %q", got[0].NickName, "KONICA MINOLTA C751i")
 	}
-	if got[1].NickName != "KONICA MINOLTA C3321i (S)" {
-		t.Errorf("got[1].NickName = %q, want %q (the real (S) variant must survive)", got[1].NickName, "KONICA MINOLTA C3321i (S)")
-	}
-	// Path must be untouched - both entries still point at their own real
-	// underlying PPD file, nothing shared/renamed.
-	if got[0].Path != entries[0].Path || got[1].Path != entries[1].Path {
+	if got[0].Path != entries[0].Path {
 		t.Errorf("Path must be preserved unchanged, got %+v", got)
+	}
+}
+
+func TestKonicaMinoltaIsSimplexDefaultVariant(t *testing.T) {
+	cases := []struct {
+		nickName string
+		want     bool
+	}{
+		{"KONICA MINOLTA C751i PS (S)", true},
+		{"KONICA MINOLTA C751i PS", false},
+		{"KONICA MINOLTA C751i", false},
+	}
+	for _, c := range cases {
+		if got := konicaMinoltaIsSimplexDefaultVariant(c.nickName); got != c.want {
+			t.Errorf("konicaMinoltaIsSimplexDefaultVariant(%q) = %v, want %v", c.nickName, got, c.want)
+		}
 	}
 }
 

@@ -4,6 +4,25 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-13 (v0.9.13) - macOS: Konica Minolta's "(S)" duplicate models dropped entirely (60 -> 30)
+
+Ken asked what the real "(S)" PPD variant meant - answering it meant checking the real
+package's own `Resources/en.lproj/Localizable.strings`, which spells it out directly: "TITLE" =
+"Print (2-Sided) Driver Default", "TITLE_S" = "Print (1-Sided) Driver Default". Confirmed
+against the real PPD content too - for the exact same physical model, the plain PPD's own
+`*DefaultKMDuplex` is "Double" and the "(S)" PPD's is "Single", nothing else differs (same 30
+real model numbers in both sub-packages, one-to-one, same underlying PDE/framework bundles).
+Ken's own conclusion: since PDT always sets its own explicit Duplex default on every queue it
+creates anyway, the "(S)" copy offers no real capability PDT doesn't already control - drop it
+from the Model dropdown entirely rather than surface it as a second, misleading "model."
+
+### Changed
+- `konicaMinoltaIsSimplexDefaultVariant`/`konicaMinoltaCleanNickNames` (`mackonicaminolta.go`)
+  now drop every "(S)" PPD outright during indexing, rather than keeping it as a separately
+  selectable model (v0.9.12's own original design, made before the real meaning of "(S)" was
+  known). Halves Konica Minolta's own real model count from 60 down to the 30 physical models
+  that actually exist - confirmed live via `pdtdebugmac models`.
+
 ## 2026-09-13 (v0.9.12) - macOS: real Konica Minolta driver support (60 models) - and a real PPD-parsing bug found along the way
 
 Ken: "Let's do Konica Minolta" - the last unexplored manufacturer. Real files needed real fixes
@@ -69,7 +88,7 @@ at every layer before any catalog work could even begin.
   than Ricoh/Sharp/Toshiba's much smaller ones.
 - No Japan-market-only convention found across the 60 real PPDs inspected.
 
-
+## 2026-09-13 (v0.9.11) - macOS: Toshiba's Driver field now shows exactly what macOS itself shows, no model name at all
 
 Ken: v0.9.10's own fix still composed the Driver field as "<model> (<real driver>)" - e.g.
 "TOSHIBA e-STUDIO2525AC (ColorMFP-S2)". He asked for it to stop mimicking the model at all and
@@ -97,35 +116,6 @@ else appended (the model is already shown in its own separate Model field/column
 one row each for the base ColorMFP, -X7, and -CN PDL variants) against the rebuilt app - each
 resolved to and installed from its own correct real PPD file, exactly 1 elevated prompt for all
 3 rows (the shared install completed in ~22s under that one prompt).
-
-## 2026-09-13 (v0.9.11) - macOS: Toshiba's Driver field now shows exactly what macOS itself shows, no model name at all
-
-Ken: v0.9.10's own fix still composed the Driver field as "<model> (<real driver>)" - e.g.
-"TOSHIBA e-STUDIO2525AC (ColorMFP-S2)". He asked for it to stop mimicking the model at all and
-just show the driver exactly as it appears in macOS's own Printers & Scanners > Printer Details
-for that queue - i.e. the real PPD's own `*NickName` alone, "TOSHIBA ColorMFP-S2", with nothing
-else appended (the model is already shown in its own separate Model field/column).
-
-### Changed
-- `macVariantLabel` (`macmodel.go`) replaces v0.9.10's `labelSuffix` - instead of only computing
-  the parenthetical half of `"<model> (<suffix>)"`, it now builds a variant's own whole Label.
-  For Toshiba specifically, that whole Label is just `"TOSHIBA " + toshibaDriverHintFromFilename(filename)`
-  (`mactoshiba.go`, unchanged from v0.9.10) - the model name never appears in it at all. Every
-  other manufacturer keeps the existing `"<model> (<family>)"` shape unchanged. Confirmed live
-  that this reconstructs the real PPD's own `*NickName` byte-for-byte for all 8 real Toshiba
-  files ("TOSHIBA_ColorMFP_S2.gz" -> "TOSHIBA ColorMFP-S2", "TOSHIBA_ColorMFP.gz" -> "TOSHIBA
-  ColorMFP", etc.) - exactly what macOS's own Printer Details already shows for that queue.
-  `decorateMultiVersionLabels`'s own multi-version-coexistence path takes an optional
-  `versionTag` parameter now, appended in parens after the real driver name for Toshiba
-  ("TOSHIBA ColorMFP-S2 (2026-01-15)") rather than after the model name - still dormant (no
-  real Toshiba multi-version data exists yet), but consistent with the new shape.
-  `MacVariantForDeploy`'s own deploy-time matching is unaffected - it matches purely by exact
-  `Label` string equality, never assuming any particular shape.
-
-**Confirmed live**: Ken deployed 3 real Toshiba models (one row each for the base ColorMFP, -X7,
-and -CN PDL variants) against the rebuilt app - each resolved to and installed from its own
-correct real PPD file, exactly 1 elevated prompt for all 3 rows (the shared install completed in
-~22s under that one prompt).
 
 ## 2026-09-13 (v0.9.10) - macOS: Toshiba's Driver field now shows the real PDL-variant name, not a repeat of the model
 

@@ -421,7 +421,7 @@ per-row path unaffected. **Confirmed live**: a 2-row same-package Kyocera deploy
 + `TASKalfa 6052ci`) completed both rows' install+queue-create within the same second after a
 single wait for the one auth prompt.
 
-### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.12)
+### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.13)
 
 Ricoh's own real macOS shape turned out different again from both Canon and Kyocera: many
 small, independent downloads side by side (10 real files), each covering its own small,
@@ -749,6 +749,20 @@ every real PPD carries while deliberately preserving a real `"(S)"` qualifier so
 `planKonicaMinoltaBatchRow` folds its install into the same shared batching - timing not
 live-confirmed yet, flagged honestly since its own real package (59214 KB) is closer to Xerox's
 scale than Ricoh/Sharp/Toshiba's.
+
+**v0.9.13 - Konica Minolta's "(S)" duplicate models dropped entirely (60 -> 30).** Ken asked
+what the real "(S)" PPD variant meant - answering it meant checking the real package's own
+`Resources/en.lproj/Localizable.strings`, which spells it out directly: "TITLE" = "Print
+(2-Sided) Driver Default", "TITLE_S" = "Print (1-Sided) Driver Default". Confirmed against the
+real PPD content too - for the exact same physical model, the plain PPD's own `*DefaultKMDuplex`
+is "Double" and the "(S)" PPD's is "Single", nothing else differs (same 30 real model numbers in
+both sub-packages, one-to-one, same underlying PDE/framework bundles). Ken's own conclusion:
+since PDT always sets its own explicit Duplex default on every queue it creates anyway, the
+"(S)" copy offers no real capability PDT doesn't already control - `konicaMinoltaCleanNickNames`
+now drops every "(S)" PPD outright during indexing (v0.9.12's own original design kept it as a
+separately selectable model, made before the real meaning of "(S)" was known), halving Konica
+Minolta's own real model count from 60 down to the 30 physical models that actually exist -
+confirmed live via `pdtdebugmac models`.
 
 ### `cmd/pdtdebugmac`
 

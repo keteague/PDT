@@ -28,6 +28,11 @@ else appended (the model is already shown in its own separate Model field/column
   `MacVariantForDeploy`'s own deploy-time matching is unaffected - it matches purely by exact
   `Label` string equality, never assuming any particular shape.
 
+**Confirmed live**: Ken deployed 3 real Toshiba models ("zKid Rock"/"zSalt Pepper"/"zSee Fit" -
+one row each for the base ColorMFP, -X7, and -CN PDL variants) against the rebuilt app - each
+resolved to and installed from its own correct real PPD file, exactly 1 elevated prompt for all
+3 rows (the shared install completed in ~22s under that one prompt).
+
 ## 2026-09-13 (v0.9.10) - macOS: Toshiba's Driver field now shows the real PDL-variant name, not a repeat of the model
 
 Ken: selecting "TOSHIBA e-STUDIO2525AC" (v0.9.9's own real model numbers) populated the Driver

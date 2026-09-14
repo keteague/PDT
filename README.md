@@ -708,7 +708,11 @@ PPD's own `*NickName` byte-for-byte for all 8 real Toshiba files. `decorateMulti
 now takes an optional version-tag parameter, appended after the real driver name for Toshiba
 rather than after the model name - still dormant (no real multi-version Toshiba data exists
 yet), but consistent with the new shape. `MacVariantForDeploy`'s own deploy-time matching is
-unaffected - it matches purely by exact `Label` string equality.
+unaffected - it matches purely by exact `Label` string equality. **Confirmed live**: Ken
+deployed 3 real Toshiba models (one row each for the base ColorMFP, -X7, and -CN PDL variants)
+against the rebuilt app - each resolved to and installed from its own correct real PPD file,
+exactly 1 elevated prompt for all 3 rows (the shared install completed in ~22s under that one
+prompt).
 
 ### `cmd/pdtdebugmac`
 

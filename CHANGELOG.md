@@ -4,7 +4,55 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
-## 2026-09-13 (v0.9.7) - macOS: real Xerox driver support (178 models)
+## 2026-09-13 (v0.9.8) - macOS: real Toshiba driver support (4 generic PDL variants) + a genuine mounting gap fixed
+
+Ken: "Let's work on Toshiba" - the single real download placed
+("TOSHIBA_ColorMFP.dmg.gz") turned out to be a plain gzip-compressed UDIF image, a shape none
+of Canon/Kyocera/Ricoh/Sharp/Xerox's own real downloads have - `hdiutil attach` doesn't
+auto-detect a bare gzip wrapper on its own ("image not recognized"), and the catalog scanner's
+own extension check (`filepath.Ext`) only ever saw the trailing ".gz", silently never
+cataloging the file as a package at all. Both needed real fixes before Toshiba could work.
+
+### Fixed
+- `isDmgLikePath`/`mountDmg` (`macmount.go`) now transparently gunzip-decompress a ".dmg.gz"
+  path to a temp file before calling `hdiutil attach` - the decompressed copy's own cleanup is
+  folded into the mount's `detach` func, since the mounted volume needs it to keep existing for
+  as long as it stays mounted. `LocatePkgWithChain`/`LocateLoosePPDs`'s own gates switched from
+  a bare `filepath.Ext(path) == ".dmg"` check to `isDmgLikePath`.
+- `scanMacPackages` (`maccatalog.go`) now recognizes a ".dmg.gz" suffix too, not just the
+  single-extension `macPackageExts` map lookup - a real package would otherwise be silently
+  invisible to the whole catalog, never even reaching a "not a package" log line.
+- `PackageLabel`'s own filename fallback only stripped the trailing ".gz" off a compound
+  ".dmg.gz" name via a single `filepath.Ext`-based trim, leaving ".dmg" in the displayed label
+  ("TOSHIBA_ColorMFP.dmg" instead of "TOSHIBA_ColorMFP"). Fixed with a second, narrowly-scoped
+  strip specific to the ".dmg.gz" shape - deliberately not a second blind Ext-based strip, which
+  would wrongly mangle a real filename with a legitimate dot in its own version number (e.g.
+  Xerox's own "XeroxDrivers_5.19.3_2562.dmg").
+
+### Added
+- `macFamilyPreference["Toshiba"] = {"Toshiba"}` - the manufacturer's own name is always in the
+  real filename, so a single token unlocks the catalog-driven model index the same trivial way
+  Kyocera's/Xerox's own single tokens do.
+- Genuinely different real shape from every other manufacturer here: Toshiba's own sub-package
+  (identifier `com.toshiba.pde.x7.colormfp`, install-location `/`) holds only 4 real PPDs total
+  - "TOSHIBA ColorMFP", "-X7", "-S2", "-CN" - generic PDL/controller-generation variants
+  covering Toshiba's whole e-STUDIO Color MFP line, not one PPD per specific model number.
+  Asked Ken how the Model/Driver dropdown should handle this (no way to resolve a real e-STUDIO
+  model number against these generic names automatically) - his choice: surface all 4 as
+  selectable "models" directly, same as every other manufacturer's own dropdown, rather than
+  guess a mapping. Every real PPD named `TOSHIBA_ColorMFP<suffix>.gz`, no `.ppd` anywhere - the
+  same real gotcha Ricoh/Xerox already had; `macSubPackagePPDFallback` extended to cover Toshiba
+  with the same shared `pathFragmentPPDExtractionFallback`.
+- `findOption` (`printdefaults_darwin.go`) now recognizes Toshiba's own real ColorModel-
+  equivalent keyword, `ColorType` (`*OpenUI *ColorType/Color Type: PickOne`, choices
+  Auto/Color/Mono/Black&Red) - "Mono" is already self-describing, so no label-matching gap.
+- `planToshibaBatchRow` (`canonbatch_darwin.go`) folds Toshiba's own full `installer -pkg` run
+  into the same shared 1-auth-prompt batching - by far the smallest real package of any
+  manufacturer here (6649 KB installed), so unlikely to be a speed concern, though (like Xerox)
+  no real Toshiba deploy has actually timed it live yet.
+- Only Color MFP models are covered by the one real download placed so far - no separate
+  monochrome-line driver exists in the Drivers folder yet.
+
 
 Ken: "Let's work on Xerox" - the Drivers/macOS/Xerox folder was completely empty at first
 (confirmed: `ensureMacDriversScaffold` already correctly creates the bare manufacturer folder

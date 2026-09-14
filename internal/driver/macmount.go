@@ -1,7 +1,9 @@
 package driver
 
 import (
+	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,22 +19,82 @@ import (
 // plist parser for this one field.
 var mountPointRe = regexp.MustCompile(`(?s)<key>mount-point</key>\s*<string>(.*?)</string>`)
 
+// isDmgLikePath reports whether path is a plain .dmg, or a gzip-compressed
+// .dmg.gz - the real shape Toshiba's own current download ships as
+// (confirmed live, 2026-09-13: `hdiutil attach` does NOT auto-detect a plain
+// gzip wrapper on its own - "image not recognized" - unlike the already-
+// handled nested-.dmg-inside-a-.dmg case, which is a real UDIF image at
+// every level). Checked by suffix, not filepath.Ext (which would only ever
+// see the trailing ".gz" on a compound ".dmg.gz" name).
+func isDmgLikePath(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.HasSuffix(lower, ".dmg") || strings.HasSuffix(lower, ".dmg.gz")
+}
+
+// decompressGzipToTemp gunzip-decompresses path into a caller-owned temp
+// file, returning its path plus a cleanup that removes it - mountDmg's own
+// helper for a ".dmg.gz" input, since `hdiutil attach` needs a real,
+// already-decompressed UDIF image on disk to open at all.
+func decompressGzipToTemp(path string) (tmpPath string, cleanup func(), err error) {
+	noop := func() {}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", noop, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", noop, err
+	}
+	defer gz.Close()
+
+	tmp, err := os.CreateTemp("", "pdt-mac-dmg-*.dmg")
+	if err != nil {
+		return "", noop, err
+	}
+	defer tmp.Close()
+	if _, err := io.Copy(tmp, gz); err != nil {
+		os.Remove(tmp.Name())
+		return "", noop, err
+	}
+	return tmp.Name(), func() { os.Remove(tmp.Name()) }, nil
+}
+
 // mountDmg attaches path read-only and not in the Finder (-nobrowse), and
 // returns its mount point plus a detach func that unmounts it - always call
 // detach once done, even on a later error, so a failed driver install
-// doesn't leave a mounted volume behind.
+// doesn't leave a mounted volume behind. Transparently decompresses a
+// ".dmg.gz" path to a temp file first (see decompressGzipToTemp) - the
+// mounted volume still needs that decompressed copy to exist on disk for as
+// long as it stays mounted, so its own cleanup is folded into detach, not
+// run immediately after attaching.
 func mountDmg(path string) (mountPoint string, detach func() error, err error) {
-	out, err := exec.Command("hdiutil", "attach", "-nobrowse", "-readonly", "-plist", path).Output()
+	attachPath := path
+	tmpCleanup := func() {}
+	if strings.HasSuffix(strings.ToLower(path), ".dmg.gz") {
+		decompressed, cleanup, derr := decompressGzipToTemp(path)
+		if derr != nil {
+			return "", nil, fmt.Errorf("decompressing %s: %w", path, derr)
+		}
+		attachPath = decompressed
+		tmpCleanup = cleanup
+	}
+
+	out, err := exec.Command("hdiutil", "attach", "-nobrowse", "-readonly", "-plist", attachPath).Output()
 	if err != nil {
+		tmpCleanup()
 		return "", nil, fmt.Errorf("mounting %s: %w", path, err)
 	}
 	m := mountPointRe.FindSubmatch(out)
 	if m == nil {
+		tmpCleanup()
 		return "", nil, fmt.Errorf("mounting %s: no mountable volume found in hdiutil output", path)
 	}
 	mountPoint = string(m[1])
 	detach = func() error {
-		return exec.Command("hdiutil", "detach", mountPoint, "-quiet").Run()
+		err := exec.Command("hdiutil", "detach", mountPoint, "-quiet").Run()
+		tmpCleanup()
+		return err
 	}
 	return mountPoint, detach, nil
 }
@@ -104,7 +166,7 @@ func collectByExt(root string, exts ...string) []string {
 // nested .dmg. cleanup unmounts everything this call mounted; always call
 // it, even after an error.
 func LocateLoosePPDs(path string) (ppdPaths []string, cleanup func(), err error) {
-	if !strings.EqualFold(filepath.Ext(path), ".dmg") {
+	if !isDmgLikePath(path) {
 		return nil, func() {}, fmt.Errorf("%s is not a .dmg", path)
 	}
 
@@ -165,7 +227,7 @@ func LocatePkgWithChain(path string) (pkgPath string, chain []string, cleanup fu
 	if strings.EqualFold(filepath.Ext(path), ".pkg") {
 		return path, []string{path}, func() {}, nil
 	}
-	if !strings.EqualFold(filepath.Ext(path), ".dmg") {
+	if !isDmgLikePath(path) {
 		return "", nil, func() {}, fmt.Errorf("%s is neither a .pkg nor a .dmg", path)
 	}
 
@@ -229,7 +291,20 @@ func PackageLabel(pkgPath string) string {
 		}
 	}
 	base := filepath.Base(pkgPath)
-	return strings.TrimSuffix(base, filepath.Ext(base))
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	// A ".dmg.gz" name (Toshiba's own real shape - see isDmgLikePath) only
+	// has its trailing ".gz" stripped by the plain Ext-based trim above,
+	// leaving ".dmg" in the label ("TOSHIBA_ColorMFP.dmg") - strip the
+	// second suffix too, but only for this specific compound shape, never a
+	// second blind Ext-based strip: a real vendor filename can carry
+	// legitimate dots in its own version number (e.g.
+	// "XeroxDrivers_5.19.3_2562.dmg", where filepath.Ext of the
+	// single-.dmg-stripped result would wrongly find ".3_2562" as an
+	// "extension" and mangle the label).
+	if strings.HasSuffix(strings.ToLower(filepath.Base(pkgPath)), ".dmg.gz") {
+		base = strings.TrimSuffix(base, ".dmg")
+	}
+	return base
 }
 
 // Requires a literal space before `version="` (not just \b) so this matches

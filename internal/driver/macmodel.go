@@ -24,6 +24,7 @@ var macLanguageDisplayNames = map[string]string{
 	"Kyocera": "Driver",
 	"MacPS":   "Driver",
 	"Xerox":   "Driver",
+	"Toshiba": "Driver",
 }
 
 func init() {

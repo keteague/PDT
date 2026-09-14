@@ -160,7 +160,17 @@ func scanMacPackages(catalog MacCatalog, mfg, mfgPath string) {
 		}
 		kind, ok := macPackageExts[strings.ToLower(filepath.Ext(path))]
 		if !ok {
-			return nil
+			// filepath.Ext only ever sees the trailing ".gz" on a compound
+			// ".dmg.gz" name (Toshiba's own real download shape, confirmed
+			// live 2026-09-13 - a plain gzip-wrapped UDIF image, not
+			// recognized by hdiutil's own format autodetection without
+			// decompressing first - see isDmgLikePath/mountDmg) - checked by
+			// suffix here too, not added to macPackageExts itself, which is
+			// keyed by a single bare extension.
+			if !isDmgLikePath(path) {
+				return nil
+			}
+			kind = MacPackageDmg
 		}
 		info, err := d.Info()
 		modTime := time.Time{}

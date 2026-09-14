@@ -490,6 +490,51 @@ func containsSetting(toSet []string, want string) bool {
 	return false
 }
 
+// realToshibaColorTypePPDBlock is copied verbatim (2026-09-13) from the
+// real, installed Toshiba ColorMFP-X7 PPD (`gunzip -c
+// "TOSHIBA_ColorMFP_X7.gz"` from the real TOSHIBA_ColorMFP.dmg.gz payload -
+// itself a plain gzip-compressed UDIF image, a shape none of Canon/Kyocera/
+// Ricoh/Sharp/Xerox's own real downloads have). Like Xerox's own choices,
+// "Mono" is already self-describing, so this guards findOption recognizing
+// the "ColorType" keyword itself, not a label-matching gap.
+const realToshibaColorTypePPDBlock = `*OpenUI *ColorType/Color Type: PickOne
+*OrderDependency: 50 AnySetup *ColorType
+*DefaultColorType: Color
+*ColorType Auto/Auto: "<</TSBPrivate (DSSC PRINT RENDERMODE=AUTO) >> setpagedevice "
+*ColorType Color/Color: "<</TSBPrivate (DSSC PRINT RENDERMODE=COLOR) >> setpagedevice "
+*ColorType Mono/Mono: "<</ProcessColorModel /DeviceGray >> setpagedevice <</TSBPrivate (DSSC PRINT RENDERMODE=GRAYSCALE) >> setpagedevice "
+*ColorType Black&Red/Black and Red: "<</TSBPrivate (DSSC PRINT RENDERMODE=2KR) >> setpagedevice "
+*CloseUI: *ColorType`
+
+func TestFindOption_MatchesToshibaColorType(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realToshibaColorTypePPDBlock)
+	got, ok := findOption(opts, "colormodel", "cncolormode", "arcmode", "xroutputcolor", "colortype")
+	if !ok || got.keyword != "ColorType" {
+		t.Errorf("findOption(..., colortype) = %+v, %v, want ColorType, true", got, ok)
+	}
+}
+
+// TestDecidePrintDefaults_ToshibaColorTypeAppliesMonoCorrectly is the
+// end-to-end regression: mono=true must pick "Mono" (self-describing value,
+// no label needed), with no warning. Deliberately doesn't assert on the
+// mono=false pick - "Auto" is the first choice that avoids every mono/gray/
+// black keyword (listed before the PPD's own literal "Color" choice), a
+// reasonable real answer for "don't force monochrome," same as Xerox's own
+// "PrintAsColor"/"Off (Use Document Color)" already being the accepted
+// non-mono pick for that manufacturer.
+func TestDecidePrintDefaults_ToshibaColorTypeAppliesMonoCorrectly(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realToshibaColorTypePPDBlock)
+	toSet, warnings := decidePrintDefaults(opts, true, true, `row "Test"`)
+	if !containsSetting(toSet, "ColorType=Mono") {
+		t.Errorf("expected ColorType=Mono in toSet, got %v", toSet)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "ColorModel") || strings.Contains(w, "ColorType") {
+			t.Errorf("did not expect a color-related warning (mono), got %q", w)
+		}
+	}
+}
+
 func TestPrintDefaultsForNewQueue_GenericModelReferenceSkipsReading(t *testing.T) {
 	toSet, warnings := PrintDefaultsForNewQueue("Test Row", "drv:///sample.drv/generic.ppd", true, true)
 	if toSet != nil || warnings != nil {

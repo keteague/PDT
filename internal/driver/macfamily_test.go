@@ -189,7 +189,25 @@ func TestMacSubPackagePPDFallback_RicohAndXeroxShareTheSameFallback(t *testing.T
 	if macSubPackagePPDFallback("Xerox") == nil {
 		t.Error("expected Xerox to have a non-nil PPD extraction fallback")
 	}
+	if macSubPackagePPDFallback("Toshiba") == nil {
+		t.Error("expected Toshiba to have a non-nil PPD extraction fallback")
+	}
 	if macSubPackagePPDFallback("Canon") != nil {
 		t.Error("expected Canon to have no PPD extraction fallback - its real PPDs are found by the fast extension-based glob")
+	}
+}
+
+// TestClassifyMacFamily_ToshibaTokenMatchesRealDriverFilename locks in the
+// real finding (2026-09-13) that, like Kyocera/Xerox, Toshiba's own real
+// driver filename ("TOSHIBA_ColorMFP.dmg.gz") always contains the
+// manufacturer's own name - a single "Toshiba" token trivially classifies
+// it, unlocking the catalog-driven model index the same way.
+func TestClassifyMacFamily_ToshibaTokenMatchesRealDriverFilename(t *testing.T) {
+	tokens := macFamilyPreference["Toshiba"]
+	if got := classifyMacFamily(tokens, "TOSHIBA_ColorMFP.dmg.gz"); got != "Toshiba" {
+		t.Errorf("expected %q to classify as %q, got %q", "TOSHIBA_ColorMFP.dmg.gz", "Toshiba", got)
+	}
+	if got := languageDisplayName("Toshiba"); got != "Driver" {
+		t.Errorf(`expected languageDisplayName("Toshiba") == "Driver", got %q`, got)
 	}
 }

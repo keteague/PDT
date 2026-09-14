@@ -63,8 +63,8 @@ type canonBatchRowPlan struct {
 // for a whole multi-row deploy run instead of one, or several, per row).
 // Tries each manufacturer-specific planner in turn for every row
 // (planCanonBatchRow, planKyoceraBatchRow, planRicohBatchRow,
-// planSharpBatchRow, planXeroxBatchRow) - whichever recognizes the row's
-// actual package shape claims it; a row neither recognizes (a different
+// planSharpBatchRow, planXeroxBatchRow, planToshibaBatchRow) - whichever
+// recognizes the row's actual package shape claims it; a row neither recognizes (a different
 // manufacturer entirely, the guess-based fallback with no catalog entry, a
 // loose-PPD no-installer family, or an existing queue to reuse) is left
 // alone completely, falling back to the old per-row path with its own
@@ -148,6 +148,9 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 		}
 		if !handled {
 			plan, handled = planXeroxBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+		}
+		if !handled {
+			plan, handled = planToshibaBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
 			continue // not a recognized shape - not batched, falls back to the old per-row path
@@ -451,6 +454,38 @@ func planXeroxBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
 
 	ppdPath, cleanup, err := driver.PPDPathForDefaults("Xerox", pkgPath, variant.Filename)
+	if err != nil {
+		return plan, true
+	}
+	*cleanups = append(*cleanups, cleanup)
+	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromPath(ppdPath, row.OneSided, row.Mono, row.Name)
+
+	var s strings.Builder
+	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
+		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		sharedQueuedThisBatch[variant.PackagePath] = true
+		plan.sharedInstalled = true
+	} else {
+		s.WriteString("true")
+	}
+	plan.installScript = s.String()
+	return plan, true
+}
+
+// planToshibaBatchRow is PrepareBatch's own Toshiba-specific planner - the
+// same "just fold a plain full install into the shared batching" shape as
+// planRicohBatchRow/planSharpBatchRow. Toshiba's own real package is by far
+// the smallest of any manufacturer here (6649 KB installed, well under even
+// Sharp's own already-confirmed-fast package), so no selective-install
+// concern at all, unlike Xerox's own still-unconfirmed timing.
+func planToshibaBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+	if row.Manufacturer != "Toshiba" {
+		return canonBatchRowPlan{}, false
+	}
+
+	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
+
+	ppdPath, cleanup, err := driver.PPDPathForDefaults("Toshiba", pkgPath, variant.Filename)
 	if err != nil {
 		return plan, true
 	}

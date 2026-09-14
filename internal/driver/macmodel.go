@@ -46,6 +46,25 @@ func languageDisplayName(token string) string {
 	return token
 }
 
+// labelSuffix computes a variant's own Label parenthetical - normally just
+// languageDisplayName(family) (Canon's real "UFR II"/"PostScript"/"Generic
+// PPD", or a generic "Driver" filler for a single-token family with no real
+// distinction to show). Toshiba is the one exception (see
+// toshibaDriverHintFromFilename's own doc comment): once its own generic
+// file-level entries are expanded into one entry per real *Product model
+// (toshibaExpandProductEntries), a model's own friendly name already IS the
+// real model number, so the generic "Driver" filler would silently hide
+// which of Toshiba's several real PDL-variant files it actually installs
+// from - filename carries that real distinction instead. Shared by both
+// indexFamilyPackage (fresh index) and toMacPPDVariant (cached catalog
+// reload) so a Toshiba variant's own Label reads the same either way.
+func labelSuffix(family, filename string) string {
+	if family == "Toshiba" {
+		return toshibaDriverHintFromFilename(filename)
+	}
+	return languageDisplayName(family)
+}
+
 // MacPPDVariant is one specific PPD available for one specific friendly
 // model name, on one specific printer-language package -
 // macFamilyPreference's per-manufacturer family tokens (Canon: UFR II/
@@ -228,11 +247,12 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 				continue
 			}
 			model, _ := stripLanguageSuffix(e.NickName, tokens)
+			filename := filepath.Base(e.Path)
 			out[model] = append(out[model], MacPPDVariant{
 				Language:          family,
-				Label:             model + " (" + languageDisplayName(family) + ")",
+				Label:             model + " (" + labelSuffix(family, filename) + ")",
 				NickName:          e.NickName,
-				Filename:          filepath.Base(e.Path),
+				Filename:          filename,
 				PackagePath:       pkg.Path,
 				SourcePackagePath: pkg.Path,
 				PackageModTime:    pkg.ModTime,
@@ -296,7 +316,7 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 func toMacPPDVariant(model string, v MacCatalogVariant) MacPPDVariant {
 	return MacPPDVariant{
 		Language:           v.Language,
-		Label:              model + " (" + languageDisplayName(v.Language) + ")",
+		Label:              model + " (" + labelSuffix(v.Language, v.Filename) + ")",
 		NickName:           v.NickName,
 		Filename:           v.Filename,
 		PackagePath:        v.PackagePath,
@@ -367,7 +387,7 @@ func decorateMultiVersionLabels(byModel map[string][]MacPPDVariant) {
 			}
 			for _, i := range idxs {
 				v := &variants[i]
-				v.Label = model + " (" + languageDisplayName(v.Language) + ", " + packageVersionTag(v.PackagePath, v.PackageModTime) + ")"
+				v.Label = model + " (" + labelSuffix(v.Language, v.Filename) + ", " + packageVersionTag(v.PackagePath, v.PackageModTime) + ")"
 			}
 		}
 		// variants shares byModel[model]'s own backing array (both came from

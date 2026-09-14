@@ -4,6 +4,30 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-13 (v0.9.10) - macOS: Toshiba's Driver field now shows the real PDL-variant name, not a repeat of the model
+
+Ken: selecting "TOSHIBA e-STUDIO2525AC" (v0.9.9's own real model numbers) populated the Driver
+field with "TOSHIBA e-STUDIO2525AC (Driver)" - reading as if the driver name just repeats the
+model, when the real underlying file is "TOSHIBA ColorMFP-S2". Not a deploy bug (the correct
+file was always installed) - just a real, confusing loss of genuinely useful information once a
+model's own friendly name IS the real e-STUDIO number.
+
+### Fixed
+- `labelSuffix` (`macmodel.go`, new) replaces the bare `languageDisplayName(family)` call every
+  variant's own Label suffix used - for every manufacturer except Toshiba this is unchanged
+  (Canon's real "UFR II"/"PostScript"/"Generic PPD", or the generic "Driver" filler a
+  single-token family like Kyocera/Xerox has always shown). For Toshiba specifically, it derives
+  the real underlying PDL-variant name from the variant's own `Filename` instead
+  (`toshibaDriverHintFromFilename`, `mactoshiba.go`: "TOSHIBA_ColorMFP_S2.gz" -> "ColorMFP-S2") -
+  so the Driver field now reads "TOSHIBA e-STUDIO2525AC (ColorMFP-S2)", the real answer.
+  Computed from `Filename` (already available and already persisted in `catalog.toshiba.json`
+  everywhere a Label gets built) rather than threading a new field through
+  `ppdEntry`/`MacPPDVariant`/`MacCatalogVariant` - no schema change needed, and the fix applies
+  identically whether a variant comes from a fresh index build (`indexFamilyPackage`) or a
+  cached catalog reload (`toMacPPDVariant`), plus the multi-version-coexistence label path
+  (`decorateMultiVersionLabels`), which would otherwise have silently reverted to the generic
+  filler the moment two Toshiba package versions ever sit side by side in the same OS folder.
+
 ## 2026-09-13 (v0.9.9) - macOS: real Toshiba model numbers (136 models), not just 4 generic PDL variants
 
 Ken added `TOSHIBA_MonoMFP.dmg.gz` and asked whether the Color PPDs could be used on a B&W MFD -

@@ -421,7 +421,7 @@ per-row path unaffected. **Confirmed live**: a 2-row same-package Kyocera deploy
 + `TASKalfa 6052ci`) completed both rows' install+queue-create within the same second after a
 single wait for the one auth prompt.
 
-### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.9)
+### macOS Ricoh support (v0.8.0) and multi-version driver selection (v0.9.0-v0.9.10)
 
 Ricoh's own real macOS shape turned out different again from both Canon and Kyocera: many
 small, independent downloads side by side (10 real files), each covering its own small,
@@ -674,6 +674,24 @@ point its own `defer os.RemoveAll(tmpDir)` had already deleted every extracted P
 `ReadPPDProducts` always failed and silently fell back to the unexpanded generic entry every
 time (Toshiba's own model count came back as 8, not ~136, until this was caught). Fixed by
 running the hook inside `packagePPDEntriesFilteredFallback` itself, before its own cleanup.
+
+**v0.9.10 - Toshiba's Driver field now shows the real PDL-variant name, not a repeat of the
+model.** Ken: selecting "TOSHIBA e-STUDIO2525AC" (v0.9.9's own real model numbers) populated the
+Driver field with "TOSHIBA e-STUDIO2525AC (Driver)" - reading as if the driver name just repeats
+the model, when the real underlying file is "TOSHIBA ColorMFP-S2". Not a deploy bug (the correct
+file was always installed), just a real, confusing loss of genuinely useful information once a
+model's own friendly name IS the real e-STUDIO number. `labelSuffix` (`macmodel.go`, new)
+replaces the bare `languageDisplayName(family)` call every variant's own Label suffix used - for
+every manufacturer except Toshiba this is unchanged. For Toshiba specifically, it derives the
+real underlying PDL-variant name from the variant's own `Filename` instead
+(`toshibaDriverHintFromFilename`, `mactoshiba.go`: "TOSHIBA_ColorMFP_S2.gz" -> "ColorMFP-S2") -
+so the Driver field now reads "TOSHIBA e-STUDIO2525AC (ColorMFP-S2)", the real answer. Computed
+from `Filename` (already available and already persisted in `catalog.toshiba.json` everywhere a
+Label gets built) rather than threading a new field through
+`ppdEntry`/`MacPPDVariant`/`MacCatalogVariant` - no schema change needed, and the fix applies
+identically whether a variant comes from a fresh index build, a cached catalog reload, or the
+multi-version-coexistence label path (which would otherwise have silently reverted to the
+generic filler the moment two Toshiba package versions ever sit side by side).
 
 ### `cmd/pdtdebugmac`
 

@@ -18,6 +18,52 @@ func writeTempPPD(t *testing.T, dir, name, content string) string {
 	return path
 }
 
+// TestToshibaDriverHintFromFilename guards the real fix (2026-09-13, Ken's
+// own finding): selecting a real model like "TOSHIBA e-STUDIO2525AC"
+// populated the Driver field with "TOSHIBA e-STUDIO2525AC (Driver)" - once
+// a model's own friendly name IS the real e-STUDIO number,
+// languageDisplayName's generic "Driver" filler silently hid which of
+// Toshiba's 4 real PDL-variant files a model's own queue actually installs
+// from. The real answer, e-STUDIO2525AC -> "TOSHIBA_ColorMFP_S2.gz" ->
+// "ColorMFP-S2", is copied from the real catalog build.
+func TestToshibaDriverHintFromFilename(t *testing.T) {
+	cases := []struct {
+		filename string
+		want     string
+	}{
+		{"TOSHIBA_ColorMFP_S2.gz", "ColorMFP-S2"},
+		{"TOSHIBA_ColorMFP_X7.gz", "ColorMFP-X7"},
+		{"TOSHIBA_ColorMFP_CN.gz", "ColorMFP-CN"},
+		{"TOSHIBA_ColorMFP.gz", "ColorMFP"},
+		{"TOSHIBA_MonoMFP_S2.gz", "MonoMFP-S2"},
+		{"TOSHIBA_MonoMFP.gz", "MonoMFP"},
+	}
+	for _, c := range cases {
+		if got := toshibaDriverHintFromFilename(c.filename); got != c.want {
+			t.Errorf("toshibaDriverHintFromFilename(%q) = %q, want %q", c.filename, got, c.want)
+		}
+	}
+}
+
+// TestLabelSuffix_ToshibaUsesRealDriverFilenameNotGenericFiller is the
+// end-to-end regression at the shared labelSuffix level (used by both the
+// fresh-index path and the cached-catalog-reload path, so a Label reads the
+// same either way) - reproduces Ken's own exact example.
+func TestLabelSuffix_ToshibaUsesRealDriverFilenameNotGenericFiller(t *testing.T) {
+	if got := labelSuffix("Toshiba", "TOSHIBA_ColorMFP_S2.gz"); got != "ColorMFP-S2" {
+		t.Errorf(`labelSuffix("Toshiba", "TOSHIBA_ColorMFP_S2.gz") = %q, want "ColorMFP-S2"`, got)
+	}
+	// Every other manufacturer (single-token family, e.g. Kyocera/Xerox) is
+	// unaffected - still the generic "Driver" filler, filename ignored.
+	if got := labelSuffix("Kyocera", "some_kyocera_ppd.PPD.gz"); got != "Driver" {
+		t.Errorf(`labelSuffix("Kyocera", ...) = %q, want "Driver" (unaffected by the Toshiba-only fix)`, got)
+	}
+	// Canon's own real, genuinely distinct families keep their real names.
+	if got := labelSuffix("UFRII", "CNPZUIRAC5840ZU.ppd.gz"); got != "UFR II" {
+		t.Errorf(`labelSuffix("UFRII", ...) = %q, want "UFR II" (unaffected by the Toshiba-only fix)`, got)
+	}
+}
+
 func TestToshibaCanonicalModelName(t *testing.T) {
 	cases := []struct {
 		raw  string

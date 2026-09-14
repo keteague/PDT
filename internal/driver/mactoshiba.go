@@ -1,6 +1,9 @@
 package driver
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // toshibaCanonicalModelName turns one raw *Product line's own inner text
 // (already stripped of its "(...)" wrapper - see ppdProductRe) into the
@@ -21,6 +24,37 @@ func toshibaCanonicalModelName(raw string) string {
 		name = "TOSHIBA " + name
 	}
 	return name
+}
+
+// toshibaDriverHintFromFilename derives the short, real underlying PDL-
+// variant name ("ColorMFP-S2") from a real Toshiba PPD's own filename
+// ("TOSHIBA_ColorMFP_S2.gz") - strips the "TOSHIBA_" prefix and file
+// extension, then turns the remaining underscores into hyphens to match
+// each file's own real *NickName shape (confirmed live, 2026-09-13:
+// "TOSHIBA ColorMFP-X7"/"-S2"/"-CN", hyphenated, vs. the bare
+// "TOSHIBA ColorMFP" with no suffix at all for the base file - the
+// underscore-to-hyphen swap produces exactly this shape for all 8 real
+// files, color and mono alike). Computed from Filename rather than carried
+// as a separate field through ppdEntry/MacPPDVariant/MacCatalogVariant,
+// since Filename is already available (and already persisted in
+// catalog.<mfg>.json) everywhere a Toshiba variant's own Label gets built -
+// both the fresh-index path (indexFamilyPackage) and the cached-reload path
+// (toMacPPDVariant), with no schema change needed either way. Used instead
+// of the default "<model> (Driver)" shape languageDisplayName(family)
+// alone would produce - confirmed live (2026-09-13) that Ken found this
+// genuinely confusing in the running app: selecting "TOSHIBA e-STUDIO2525AC"
+// populated the Driver field with "TOSHIBA e-STUDIO2525AC (Driver)",
+// reading as if the driver name just repeats the model name, when the real
+// underlying file is "TOSHIBA ColorMFP-S2" - useful troubleshooting
+// information a technician would want visible, not hidden behind a
+// meaningless "(Driver)" filler that only ever existed because Toshiba
+// (like Kyocera/Xerox) has just one macFamilyPreference token, not a real
+// choice of distinguishable driver families the way Canon's UFRII/PS/PPD
+// tokens are.
+func toshibaDriverHintFromFilename(filename string) string {
+	name := strings.TrimSuffix(filename, filepath.Ext(filename))
+	name = strings.TrimPrefix(name, "TOSHIBA_")
+	return strings.ReplaceAll(name, "_", "-")
 }
 
 // toshibaExpandProductEntries is indexFamilyPackage's own Toshiba-specific

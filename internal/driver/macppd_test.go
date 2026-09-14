@@ -19,6 +19,9 @@ import (
 // vendor package.
 func buildTestPayload(t *testing.T, payloadPath string, files map[string]string) {
 	t.Helper()
+	if _, err := exec.LookPath("cpio"); err != nil {
+		t.Skip("cpio not on PATH (not running on macOS/Linux) - cannot build a real test Payload archive")
+	}
 	srcDir := t.TempDir()
 	var names []string
 	for name, content := range files {

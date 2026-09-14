@@ -647,7 +647,10 @@ tokens do; `findOption` now recognizes Toshiba's own real ColorModel-equivalent 
 `planToshibaBatchRow` folds its own install into the same shared batching - by far the smallest
 real package of any manufacturer here (6649 KB installed), though (like Xerox) no real Toshiba
 deploy has timed it live yet. Only Color MFP models are covered by the one real download placed
-so far - no separate monochrome-line driver exists in the Drivers folder yet.
+so far - no separate monochrome-line driver exists in the Drivers folder yet. **Confirmed
+live**: Ken ran a real 4-row Toshiba deploy (one row per real PDL variant - ColorMFP, -CN, -S2,
+-X7) against the rebuilt app - exactly 1 elevated prompt for all 4 rows (the shared install
+completed in ~32s under that one prompt), no ColorModel warning on any row.
 
 ### `cmd/pdtdebugmac`
 

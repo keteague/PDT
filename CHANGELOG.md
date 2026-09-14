@@ -53,6 +53,12 @@ cataloging the file as a package at all. Both needed real fixes before Toshiba c
 - Only Color MFP models are covered by the one real download placed so far - no separate
   monochrome-line driver exists in the Drivers folder yet.
 
+**Confirmed live**: Ken ran a real 4-row Toshiba deploy ("zFoo Bar"/"zThe Wire"/"zGreek Olive"/
+"zLawyer Present" - one row per real PDL variant: ColorMFP, -CN, -S2, -X7) against the rebuilt
+app - exactly 1 elevated prompt for all 4 rows (the shared install completed in ~32s under that
+one prompt), no ColorModel warning on any row.
+
+## 2026-09-13 (v0.9.7) - macOS: real Xerox driver support (178 models)
 
 Ken: "Let's work on Xerox" - the Drivers/macOS/Xerox folder was completely empty at first
 (confirmed: `ensureMacDriversScaffold` already correctly creates the bare manufacturer folder
@@ -105,7 +111,7 @@ no selective-install treatment is needed), no ColorModel warning on either row, 
 "Xerox Black and White" option (the PPD's own label for `XROutputColor`) showed the correct
 value for the row's own intended Mono setting.
 
-
+## 2026-09-13 (v0.9.6) - macOS: two real Sharp deploy bugs found live, both fixed
 
 Ken's own first real deploy against v0.9.5's Sharp support (2 rows, "zCom Two"/"zCom Three")
 found two real bugs immediately - exactly the "confirmed live, not just against synthetic

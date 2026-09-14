@@ -107,14 +107,3 @@ func toshibaExpandProductEntries(entries []ppdEntry) []ppdEntry {
 	return out
 }
 
-// macPPDEntryExpander returns indexFamilyPackage's own per-manufacturer
-// entry-expansion hook, or nil for every manufacturer whose real PPDs
-// already name their own model directly in *NickName (everyone except
-// Toshiba today) - see toshibaExpandProductEntries' own doc comment for the
-// one real exception and why it needs this.
-func macPPDEntryExpander(manufacturer string) func([]ppdEntry) []ppdEntry {
-	if manufacturer == "Toshiba" {
-		return toshibaExpandProductEntries
-	}
-	return nil
-}

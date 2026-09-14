@@ -74,6 +74,54 @@ func TestBuildMacCatalog_ExtractsZippedDmgAndIgnoresAppleDoubleJunk(t *testing.T
 	}
 }
 
+// TestBuildMacCatalog_ExtractsNestedZipInsideZip guards a real, confirmed-
+// live bug (2026-09-13): a real Konica Minolta download wraps two region
+// subfolders, each holding its own *inner* zip wrapping the real .pkg - two
+// levels of zip nesting, not the one level Canon's own shape needed. A
+// single ensureMacZipsExtracted pass only sees .zip files that already
+// exist before the walk starts, so the inner zip (only created *by* that
+// same pass's own extraction of the outer zip) was silently never
+// discovered at all - the real .pkg stayed permanently wrapped, invisible
+// to BuildMacCatalog, with no error. ensureMacZipsExtracted now repeats the
+// whole walk until a pass finds nothing new to extract.
+func TestBuildMacCatalog_ExtractsNestedZipInsideZip(t *testing.T) {
+	root := t.TempDir()
+	kmDir := filepath.Join(root, "macOS", "KonicaMinolta", "26-Tahoe")
+	if err := os.MkdirAll(kmDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Build the inner zip first (wrapping the real .pkg), then embed its
+	// raw bytes as one entry of the outer zip - mirrors the real shape
+	// exactly: outer.zip -> Region/ -> inner.pkg.zip -> real.pkg.
+	innerZipPath := filepath.Join(t.TempDir(), "inner.pkg.zip")
+	writeTestMacZip(t, innerZipPath, map[string]string{
+		"real.pkg": "pretend this is a real installer package",
+	})
+	innerZipBytes, err := os.ReadFile(innerZipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outerZipPath := filepath.Join(kmDir, "C750i_Series_MacOS_v5.2.14A.zip")
+	writeTestMacZip(t, outerZipPath, map[string]string{
+		"C750i_Series_MacOS_v5.2.14A/WW_Letter/inner.pkg.zip": string(innerZipBytes),
+	})
+
+	cat, err := BuildMacCatalog(root)
+	if err != nil {
+		t.Fatalf("BuildMacCatalog: %v", err)
+	}
+
+	pkgs := cat.Packages["Konica Minolta"]
+	if len(pkgs) != 1 {
+		t.Fatalf("expected exactly 1 Konica Minolta package (the real, doubly-nested .pkg), got %d: %v", len(pkgs), pkgs)
+	}
+	if filepath.Base(pkgs[0].Path) != "real.pkg" {
+		t.Errorf("expected the real nested real.pkg, got %q", pkgs[0].Path)
+	}
+}
+
 func TestBuildMacCatalog_DoesNotReExtractExistingZipFolder(t *testing.T) {
 	root := t.TempDir()
 	canonDir := filepath.Join(root, "macOS", "Canon", "15-Sequoia")

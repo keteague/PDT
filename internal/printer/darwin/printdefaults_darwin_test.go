@@ -535,6 +535,63 @@ func TestDecidePrintDefaults_ToshibaColorTypeAppliesMonoCorrectly(t *testing.T) 
 	}
 }
 
+// realKonicaMinoltaKMDuplexPPDBlock is copied verbatim (2026-09-13) from
+// the real, installed Konica Minolta C751i PPD (`gunzip -c
+// "KONICAMINOLTAC751i.gz"` from the real WW_Letter payload). Unlike every
+// other manufacturer inspected so far, Konica Minolta's own real
+// ColorModel-equivalent option *is* spelled the plain CUPS-standard
+// "ColorModel" way (needing no findOption addition) - it's the Duplex side
+// that needed one here: "KMDuplex", with choices Single/Double/Booklet -
+// no NoTumble/Tumble binding-edge split at all, and neither "single" nor
+// "double" matched any existing want-list vocabulary before this fix.
+const realKonicaMinoltaKMDuplexPPDBlock = `*OpenUI  *KMDuplex/Print Type: PickOne
+*OrderDependency: 5 AnySetup *KMDuplex
+*DefaultKMDuplex: Double
+*KMDuplex Single/1-Sided:  "<< /Duplex false >> setpagedevice"
+*KMDuplex Double/2-Sided:  "<< /Duplex true >> setpagedevice"
+*KMDuplex Booklet/Booklet:  "<< /Duplex true >> setpagedevice"
+*CloseUI: *KMDuplex`
+
+func TestFindOption_MatchesKonicaMinoltaKMDuplex(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realKonicaMinoltaKMDuplexPPDBlock)
+	got, ok := findOption(opts, "duplex", "cnduplex", "kmduplex")
+	if !ok || got.keyword != "KMDuplex" {
+		t.Errorf("findOption(..., kmduplex) = %+v, %v, want KMDuplex, true", got, ok)
+	}
+}
+
+// TestDecidePrintDefaults_KonicaMinoltaKMDuplexAppliesBothDirections is the
+// full real-deploy-shaped regression: before this fix, a one-sided request
+// matched nothing against "Single" (the want-list only had "none"/
+// "simplex") and a two-sided request matched nothing against "Double"
+// either (only "tumble"/"duplex"), silently leaving the PPD's own hardcoded
+// default (2-sided) in place regardless of what was actually requested -
+// a real, confirmed-live risk: a one-sided request would have silently
+// stayed 2-sided.
+func TestDecidePrintDefaults_KonicaMinoltaKMDuplexAppliesBothDirections(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realKonicaMinoltaKMDuplexPPDBlock)
+
+	toSet, warnings := decidePrintDefaults(opts, true, false, `row "Test"`)
+	if !containsSetting(toSet, "KMDuplex=Single") {
+		t.Errorf("expected KMDuplex=Single (one-sided) in toSet, got %v", toSet)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "Duplex") {
+			t.Errorf("did not expect a duplex-related warning (one-sided), got %q", w)
+		}
+	}
+
+	toSet, warnings = decidePrintDefaults(opts, false, false, `row "Test"`)
+	if !containsSetting(toSet, "KMDuplex=Double") {
+		t.Errorf("expected KMDuplex=Double (two-sided) in toSet, got %v", toSet)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "Duplex") {
+			t.Errorf("did not expect a duplex-related warning (two-sided), got %q", w)
+		}
+	}
+}
+
 func TestPrintDefaultsForNewQueue_GenericModelReferenceSkipsReading(t *testing.T) {
 	toSet, warnings := PrintDefaultsForNewQueue("Test Row", "drv:///sample.drv/generic.ppd", true, true)
 	if toSet != nil || warnings != nil {

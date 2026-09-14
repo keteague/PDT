@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,21 +28,46 @@ import (
 // distinguishes "this zip/exe was itself created from a folder that already
 // had the archive's own name" (the redundant case) from "this package's
 // real layout happens to start with one folder" (not redundant at all).
+//
+// Ignores a stray ".DS_Store" sitting alongside the real single folder,
+// rather than requiring literally the only entry - confirmed necessary
+// against a real Konica Minolta zip whose own top level has both the real
+// wrapper folder *and* a macOS Finder-authored ".DS_Store" file, which
+// otherwise defeated the "exactly one entry" check entirely, leaving a
+// redundant Foo/Foo/... nesting in place unflattened.
 func flattenRedundantWrapperDir(destDir string) {
 	entries, err := os.ReadDir(destDir)
-	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+	if err != nil {
 		return
 	}
-	if !strings.EqualFold(entries[0].Name(), filepath.Base(destDir)) {
+	var onlyDir fs.DirEntry
+	for _, e := range entries {
+		if e.Name() == ".DS_Store" {
+			continue
+		}
+		if onlyDir != nil || !e.IsDir() {
+			return // more than one real entry, or a non-directory - not the redundant-wrapper shape
+		}
+		onlyDir = e
+	}
+	if onlyDir == nil {
+		return
+	}
+	if !strings.EqualFold(onlyDir.Name(), filepath.Base(destDir)) {
 		return
 	}
 
-	nested := filepath.Join(destDir, entries[0].Name())
+	nested := filepath.Join(destDir, onlyDir.Name())
 	tmp := destDir + ".pdt-flatten-tmp"
 	if err := os.Rename(nested, tmp); err != nil {
 		return
 	}
-	if err := os.Remove(destDir); err != nil {
+	// RemoveAll, not Remove: destDir may still hold a stray ".DS_Store" at
+	// this point (only the real wrapper folder was just moved out above) -
+	// a plain Remove requires an empty directory and would fail here,
+	// silently leaving the redundant nesting in place (confirmed live as a
+	// real bug against a real Konica Minolta zip's own stray ".DS_Store").
+	if err := os.RemoveAll(destDir); err != nil {
 		_ = os.Rename(tmp, nested) // best-effort undo, leave destDir as it was
 		return
 	}

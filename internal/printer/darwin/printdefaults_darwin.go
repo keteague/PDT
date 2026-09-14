@@ -70,8 +70,20 @@ func listPPDOptions(ctx context.Context, queueName string) ([]ppdOption, error) 
 // line straight out of a raw PPD file - the same declaration `lpoptions -l`
 // itself reads to build the line ppdOptionLineRe parses, one level closer to
 // the source. Confirmed against the real installed Canon PPD's own
-// `*OpenUI *CNDuplex/Print Style: PickOne`.
-var ppdOpenUIRe = regexp.MustCompile(`^\*OpenUI \*(\S+?)(?:/[^:]*)?:`)
+// `*OpenUI *CNDuplex/Print Style: PickOne`. Matches one-or-more spaces
+// between "OpenUI" and the keyword, not exactly one - confirmed live
+// (2026-09-13) as a real, previously-undiscovered bug: every single
+// `*OpenUI` line in every real Konica Minolta PPD inspected uses a literal
+// double space ("*OpenUI  *KMDuplex/Print Type: PickOne", confirmed via a
+// raw hex dump, not just eyeballing it) - an exact-one-space regex silently
+// matched zero options in any real Konica Minolta PPD at all, meaning
+// Duplex/ColorModel would never have been set on a real deploy, no warning
+// either (the whole opts slice would just come back empty). The choice-line
+// and `*CloseUI:` matching elsewhere in this file both already use a plain,
+// single literal space and were confirmed live to need no similar
+// widening - only this one declaration line has the real double-space
+// quirk.
+var ppdOpenUIRe = regexp.MustCompile(`^\*OpenUI\s+\*(\S+?)(?:/[^:]*)?:`)
 
 // readPPDFileBytes reads ppdPath's raw contents, transparently gzip-
 // decompressing a ".gz" path - the same convention driver.ReadPPDNickName
@@ -226,10 +238,19 @@ func containsAny(s string, subs []string) bool {
 // ColorModel-ish option at all, or none of whose choices look like what was
 // asked for, produces a warning for that one setting and leaves the rest
 // alone - never a hard failure.
+//
+// The one-sided/two-sided want-lists ("none"/"simplex"/"single",
+// "tumble"/"duplex"/"double") grew "single"/"double" for Konica Minolta's
+// own real KMDuplex choices (confirmed live, 2026-09-13:
+// "Single"/"Double"/"Booklet" - no NoTumble/Tumble binding-edge split at
+// all, unlike every Duplex-spelled manufacturer inspected so far) - without
+// this, a one-sided request would have silently matched nothing at all
+// against "Single" and left the PPD's own hardcoded default (2-sided) in
+// place instead.
 func decidePrintDefaults(opts []ppdOption, oneSided, mono bool, subject string) (toSet, warnings []string) {
-	if duplex, ok := findOption(opts, "duplex", "cnduplex"); ok {
+	if duplex, ok := findOption(opts, "duplex", "cnduplex", "kmduplex"); ok {
 		if oneSided {
-			if choice, ok := pickChoice(duplex.choices, []string{"none", "simplex"}, nil); ok {
+			if choice, ok := pickChoice(duplex.choices, []string{"none", "simplex", "single"}, nil); ok {
 				toSet = append(toSet, duplex.keyword+"="+choice)
 			} else {
 				warnings = append(warnings, fmt.Sprintf("%s's PPD has no simplex/None choice for %s; leaving duplex as-is", subject, duplex.keyword))
@@ -237,7 +258,7 @@ func decidePrintDefaults(opts []ppdOption, oneSided, mono bool, subject string) 
 		} else {
 			if choice, ok := pickChoice(duplex.choices, []string{"notumble"}, nil); ok {
 				toSet = append(toSet, duplex.keyword+"="+choice)
-			} else if choice, ok := pickChoice(duplex.choices, []string{"tumble", "duplex"}, []string{"none"}); ok {
+			} else if choice, ok := pickChoice(duplex.choices, []string{"tumble", "duplex", "double"}, []string{"none"}); ok {
 				toSet = append(toSet, duplex.keyword+"="+choice)
 			} else {
 				warnings = append(warnings, fmt.Sprintf("%s's PPD has no two-sided choice for %s; leaving duplex as-is", subject, duplex.keyword))
@@ -347,9 +368,16 @@ func PrintDefaultsForNewQueue(rowName, ppdPath string, oneSided, mono bool) (toS
 // against a real Toshiba PPD's own `*OpenUI *ColorType/Color Type: PickOne`
 // block, choices Auto/Color/Mono/Black&Red - "Mono" is already
 // self-describing like Xerox's own choices, so again no label-matching gap;
-// Toshiba's own Duplex keyword also needed no addition) - add a new exact
-// spelling here if a future vendor's PPD needs one, never widen this back
-// to a suffix/substring match.
+// Toshiba's own Duplex keyword also needed no addition), and Konica
+// Minolta's own "KMDuplex" (confirmed live, 2026-09-13, against a real
+// Konica Minolta PPD's own `*OpenUI *KMDuplex/Print Type: PickOne` block,
+// choices Single/Double/Booklet - unlike every other manufacturer inspected
+// so far, this one's own real ColorModel-equivalent option *is* spelled the
+// plain CUPS-standard "ColorModel" way, needing no keyword addition at all;
+// it's the Duplex side that needed one here, the reverse of every other
+// manufacturer's own real gap) - add a new exact spelling here if a future
+// vendor's PPD needs one, never widen this back to a suffix/substring
+// match.
 func findOption(opts []ppdOption, exactKeywordsLower ...string) (ppdOption, bool) {
 	for _, o := range opts {
 		lower := strings.ToLower(o.keyword)

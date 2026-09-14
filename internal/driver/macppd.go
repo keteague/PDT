@@ -649,14 +649,36 @@ const ppdResourcesPathFragment = "/PPDs/Contents/Resources/"
 // macSubPackagePPDFallback returns indexFamilyPackage's own content-based
 // PPD-extraction fallback for a manufacturer, or nil for every manufacturer
 // whose real PPDs are already found correctly by the fast, extension-based
-// glob (everyone except Ricoh, Xerox, and Toshiba today - three real,
-// independently confirmed cases of a manufacturer naming its own real PPDs
-// with no ".ppd" anywhere at all) - see ppdExtractionFallback's own doc
-// comment for the exact contract.
+// glob (everyone except Ricoh, Xerox, Toshiba, and Konica Minolta today -
+// four real, independently confirmed cases of a manufacturer naming its own
+// real PPDs with no ".ppd" anywhere at all) - see ppdExtractionFallback's
+// own doc comment for the exact contract.
 func macSubPackagePPDFallback(manufacturer string) ppdExtractionFallback {
 	switch manufacturer {
-	case "Ricoh", "Xerox", "Toshiba":
+	case "Ricoh", "Xerox", "Toshiba", "Konica Minolta":
 		return pathFragmentPPDExtractionFallback
+	default:
+		return nil
+	}
+}
+
+// macPPDEntryExpander returns indexFamilyPackage's own per-manufacturer
+// entry-transformation hook, or nil for every manufacturer whose real PPDs
+// need no such transformation (everyone except Toshiba/Konica Minolta
+// today). Two real, independently confirmed shapes so far:
+// toshibaExpandProductEntries (mactoshiba.go) turns one generic file-level
+// entry into many real-model entries; konicaMinoltaCleanNickNames
+// (mackonicaminolta.go) keeps a 1:1 entry count but strips Konica Minolta's
+// own generic, non-distinguishing " PS" *NickName suffix (confirmed live,
+// 2026-09-13: universal across all 60 real PPDs inspected, Konica Minolta
+// ships no non-PostScript language variant at all) while deliberately
+// preserving a real, distinguishing "(S)" qualifier some models also carry.
+func macPPDEntryExpander(manufacturer string) func([]ppdEntry) []ppdEntry {
+	switch manufacturer {
+	case "Toshiba":
+		return toshibaExpandProductEntries
+	case "Konica Minolta":
+		return konicaMinoltaCleanNickNames
 	default:
 		return nil
 	}

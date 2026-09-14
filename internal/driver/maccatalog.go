@@ -146,6 +146,9 @@ func scanMacPackages(catalog MacCatalog, mfg, mfgPath string) {
 			if strings.EqualFold(d.Name(), "etc") || strings.EqualFold(d.Name(), "Archive") || d.Name() == "__MACOSX" {
 				return filepath.SkipDir
 			}
+			if mfg == "Konica Minolta" && isKonicaMinoltaA4RegionDir(d.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		// Skip AppleDouble resource-fork stub files (macOS's own zip/Archive

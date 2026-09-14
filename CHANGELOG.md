@@ -4,7 +4,72 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
-## 2026-09-13 (v0.9.11) - macOS: Toshiba's Driver field now shows exactly what macOS itself shows, no model name at all
+## 2026-09-13 (v0.9.12) - macOS: real Konica Minolta driver support (60 models) - and a real PPD-parsing bug found along the way
+
+Ken: "Let's do Konica Minolta" - the last unexplored manufacturer. Real files needed real fixes
+at every layer before any catalog work could even begin.
+
+### Fixed
+- `ensureMacZipsExtracted` (`maczip.go`) only did a single extraction pass - a real Konica
+  Minolta download wraps two region subfolders, each holding its own *inner* zip wrapping the
+  real `.pkg` (two levels of zip nesting, not the one level Canon's own shape needed). A single
+  pass never discovers a zip that's only created *by* that same pass's own extraction, silently
+  leaving the real `.pkg` permanently unextracted with no error at all. Now repeats the whole
+  walk (capped at 5 passes) until a pass finds nothing new to extract.
+- `flattenRedundantWrapperDir` (`flatten.go`) required literally the only top-level entry to be
+  the redundant wrapper folder - a real Konica Minolta zip's own top level has both the real
+  wrapper folder *and* a stray Finder-authored `.DS_Store`, defeating the check entirely. Now
+  ignores a stray `.DS_Store` when checking for the single-folder shape. Fixing this uncovered a
+  second bug in the same function: after moving the wrapper folder out, the leftover
+  `.DS_Store` made the cleanup step's plain `os.Remove` (which requires an empty directory) fail
+  silently, undoing the flatten - switched to `os.RemoveAll`.
+- `ppdOpenUIRe` (`printdefaults_darwin.go`) required exactly one space between `*OpenUI` and the
+  keyword - a real, previously-undiscovered bug: every single `*OpenUI` line in every real
+  Konica Minolta PPD inspected uses a literal double space (confirmed via a raw hex dump), so
+  this matched **zero** options in any real Konica Minolta PPD at all. Duplex/ColorModel would
+  never have been set on a real deploy, with no warning either (the whole parsed-options list
+  just came back empty). Now matches one-or-more spaces.
+- `findOption` now recognizes Konica Minolta's own real Duplex-equivalent keyword, `KMDuplex`
+  (choices Single/Double/Booklet, no NoTumble/Tumble binding-edge split at all) - its own real
+  ColorModel option is the one manufacturer inspected so far that already uses the plain
+  CUPS-standard spelling, needing no addition. `decidePrintDefaults`'s own one-sided/two-sided
+  want-lists grew "single"/"double" - neither existing want-list vocabulary
+  ("none"/"simplex"/"notumble"/"tumble"/"duplex") matched these choices at all, so a one-sided
+  request would have silently matched nothing and left the PPD's own hardcoded 2-sided default
+  in place.
+
+### Added
+- `macFamilyPreference["Konica Minolta"] = {".pkg"}` - unlike every other single-driver-line
+  manufacturer here, no real filename anywhere in the chain (outer zip or the real `.pkg`
+  discovered after extraction) ever contains "Konica" or "Minolta", and no single model-number
+  substring survives across all 3 real download generations either. `.pkg` is used instead -
+  every `MacPackage` entry already ends in `.pkg` or `.dmg` by construction, so it reliably
+  matches without depending on an accidental substring that could break on the next download.
+- Every real download splits into two paper-region variants, `WW_A4`/`A4` and
+  `WW_Letter`/`Letter` (confirmed genuinely different files - different sizes, different
+  checksums, not duplicates) - asked Ken which PDT should use; his call was Letter only, matching
+  every other US-region default already established (HP's own "raw", Xerox's own "lp").
+  `isKonicaMinoltaA4RegionDir` (`mackonicaminolta.go`) skips the A4 folder entirely during the
+  catalog scan - the two region copies share the exact same real filename, so this can't be done
+  by `classifyMacFamily`'s own basename-only convention at all.
+- `konicaMinoltaCleanNickNames` strips the generic, non-distinguishing `" PS"` suffix every real
+  PPD's own `*NickName` carries (Konica Minolta ships no non-PostScript language variant at all)
+  while deliberately preserving a real `"(S)"` qualifier some models also carry - it names a
+  real, separately-installable driver variant (the package's own second, non-default installer
+  choice, covering a genuinely different, non-overlapping set of model suffixes), not a naming
+  difference; collapsing it away would silently merge two real driver variants under one name.
+  `macPPDEntryExpander`'s own dispatcher (previously Toshiba-only) moved to `macppd.go` and
+  extended for this.
+- `macSubPackagePPDFallback` extended to cover Konica Minolta - every real PPD named
+  `KONICAMINOLTA<model>.gz`, no `.ppd` anywhere, the same real gotcha Ricoh/Xerox/Toshiba
+  already had.
+- `planKonicaMinoltaBatchRow` folds its own full `installer -pkg` run into the same shared
+  1-auth-prompt batching - timing not yet live-confirmed (no real Konica Minolta deploy has run),
+  flagged honestly since its own real package (59214 KB installed) is closer in scale to Xerox's
+  than Ricoh/Sharp/Toshiba's much smaller ones.
+- No Japan-market-only convention found across the 60 real PPDs inspected.
+
+
 
 Ken: v0.9.10's own fix still composed the Driver field as "<model> (<real driver>)" - e.g.
 "TOSHIBA e-STUDIO2525AC (ColorMFP-S2)". He asked for it to stop mimicking the model at all and
@@ -32,6 +97,35 @@ else appended (the model is already shown in its own separate Model field/column
 one row each for the base ColorMFP, -X7, and -CN PDL variants) against the rebuilt app - each
 resolved to and installed from its own correct real PPD file, exactly 1 elevated prompt for all
 3 rows (the shared install completed in ~22s under that one prompt).
+
+## 2026-09-13 (v0.9.11) - macOS: Toshiba's Driver field now shows exactly what macOS itself shows, no model name at all
+
+Ken: v0.9.10's own fix still composed the Driver field as "<model> (<real driver>)" - e.g.
+"TOSHIBA e-STUDIO2525AC (ColorMFP-S2)". He asked for it to stop mimicking the model at all and
+just show the driver exactly as it appears in macOS's own Printers & Scanners > Printer Details
+for that queue - i.e. the real PPD's own `*NickName` alone, "TOSHIBA ColorMFP-S2", with nothing
+else appended (the model is already shown in its own separate Model field/column).
+
+### Changed
+- `macVariantLabel` (`macmodel.go`) replaces v0.9.10's `labelSuffix` - instead of only computing
+  the parenthetical half of `"<model> (<suffix>)"`, it now builds a variant's own whole Label.
+  For Toshiba specifically, that whole Label is just `"TOSHIBA " + toshibaDriverHintFromFilename(filename)`
+  (`mactoshiba.go`, unchanged from v0.9.10) - the model name never appears in it at all. Every
+  other manufacturer keeps the existing `"<model> (<family>)"` shape unchanged. Confirmed live
+  that this reconstructs the real PPD's own `*NickName` byte-for-byte for all 8 real Toshiba
+  files ("TOSHIBA_ColorMFP_S2.gz" -> "TOSHIBA ColorMFP-S2", "TOSHIBA_ColorMFP.gz" -> "TOSHIBA
+  ColorMFP", etc.) - exactly what macOS's own Printer Details already shows for that queue.
+  `decorateMultiVersionLabels`'s own multi-version-coexistence path takes an optional
+  `versionTag` parameter now, appended in parens after the real driver name for Toshiba
+  ("TOSHIBA ColorMFP-S2 (2026-01-15)") rather than after the model name - still dormant (no
+  real Toshiba multi-version data exists yet), but consistent with the new shape.
+  `MacVariantForDeploy`'s own deploy-time matching is unaffected - it matches purely by exact
+  `Label` string equality, never assuming any particular shape.
+
+**Confirmed live**: Ken deployed 3 real Toshiba models (one row each for the base ColorMFP, -X7,
+and -CN PDL variants) against the rebuilt app - each resolved to and installed from its own
+correct real PPD file, exactly 1 elevated prompt for all 3 rows (the shared install completed in
+~22s under that one prompt).
 
 ## 2026-09-13 (v0.9.10) - macOS: Toshiba's Driver field now shows the real PDL-variant name, not a repeat of the model
 

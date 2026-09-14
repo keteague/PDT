@@ -146,6 +146,36 @@ var macFamilyPreference = map[string][]string{
 	// extension-detection fallback, maccatalog.go), not just this table.
 	// No Japan-market-only convention found in any real *Product line.
 	"Toshiba": {"Toshiba"},
+
+	// Konica Minolta ships exactly one real driver line, but unlike every
+	// other single-line manufacturer here (Kyocera/Xerox/Toshiba), no real
+	// filename anywhere in the chain - not the outer .zip, not the real
+	// .pkg discovered after extraction - ever contains "Konica" or
+	// "Minolta" at all. Real filenames are cryptic model-code strings
+	// instead (e.g. "C650i_C360i_C287i_..._MacOS_v5.2.14A.zip", eventually
+	// resolving to a real .pkg named just "C750i_C287i_C4050i_C751i_C4051i_11.pkg")
+	// - confirmed live (2026-09-13) across all 3 real download generations
+	// in the actual Drivers folder. No manufacturer-name substring and no
+	// single stable model-number substring survives across all 3
+	// generations either (each ships a different lead model in its own
+	// filename) - classifyMacFamily's own basename-substring convention has
+	// nothing real and stable to key on. ".pkg" is used as the token
+	// instead: every MacPackage entry scanMacPackages ever creates already
+	// ends in ".pkg" or ".dmg" by construction (that's the whole scan
+	// filter), so ".pkg" reliably matches any real Konica Minolta package
+	// today without depending on an accidental, could-change-any-time
+	// substring the way relying on e.g. "C750i" specifically would -
+	// unlocks the catalog-driven model index the same way Kyocera's/
+	// Xerox's/Toshiba's own single tokens do, just keyed on file shape
+	// instead of manufacturer name. See konicaMinoltaCleanNickNames
+	// (mackonicaminolta.go) for the real, needed NickName cleanup this
+	// still requires (stripping a generic, non-distinguishing " PS" suffix
+	// every real PPD carries) and macSubPackagePPDFallback (macppd.go) for
+	// the shared, Ricoh/Xerox/Toshiba/Konica-Minolta content-based
+	// extraction fallback this needs (every real PPD named
+	// "KONICAMINOLTA<model>.gz", no ".ppd" anywhere). No Japan-market-only
+	// convention found across the 60 real PPDs inspected.
+	"Konica Minolta": {".pkg"},
 }
 
 // classifyMacFamily returns which of tokens appears in path's own basename

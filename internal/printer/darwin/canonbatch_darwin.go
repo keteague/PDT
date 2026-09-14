@@ -63,7 +63,8 @@ type canonBatchRowPlan struct {
 // for a whole multi-row deploy run instead of one, or several, per row).
 // Tries each manufacturer-specific planner in turn for every row
 // (planCanonBatchRow, planKyoceraBatchRow, planRicohBatchRow,
-// planSharpBatchRow, planXeroxBatchRow, planToshibaBatchRow) - whichever
+// planSharpBatchRow, planXeroxBatchRow, planToshibaBatchRow,
+// planKonicaMinoltaBatchRow) - whichever
 // recognizes the row's actual package shape claims it; a row neither recognizes (a different
 // manufacturer entirely, the guess-based fallback with no catalog entry, a
 // loose-PPD no-installer family, or an existing queue to reuse) is left
@@ -151,6 +152,9 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 		}
 		if !handled {
 			plan, handled = planToshibaBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+		}
+		if !handled {
+			plan, handled = planKonicaMinoltaBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
 			continue // not a recognized shape - not batched, falls back to the old per-row path
@@ -486,6 +490,45 @@ func planToshibaBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, p
 	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
 
 	ppdPath, cleanup, err := driver.PPDPathForDefaults("Toshiba", pkgPath, variant.Filename)
+	if err != nil {
+		return plan, true
+	}
+	*cleanups = append(*cleanups, cleanup)
+	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromPath(ppdPath, row.OneSided, row.Mono, row.Name)
+
+	var s strings.Builder
+	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
+		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		sharedQueuedThisBatch[variant.PackagePath] = true
+		plan.sharedInstalled = true
+	} else {
+		s.WriteString("true")
+	}
+	plan.installScript = s.String()
+	return plan, true
+}
+
+// planKonicaMinoltaBatchRow is PrepareBatch's own Konica Minolta-specific
+// planner - the same "just fold a plain full install into the shared
+// batching" shape as planRicohBatchRow/planSharpBatchRow/planToshibaBatchRow.
+// Like Xerox, no real Konica Minolta deploy has timed this live yet as of
+// 2026-09-13, and its own real package is a meaningful size (59214 KB
+// installed - closer to Xerox's own scale than Ricoh/Sharp/Toshiba's much
+// smaller ones); unlike Canon/Kyocera, its own installer Distribution has
+// no per-model choices to select down even if a full install does turn out
+// slow (both of its own real choices, Choice0/Choice1, install two
+// genuinely different, non-overlapping sets of models - "C751i" vs
+// "C751i (S)" - not a speed-vs-coverage tradeoff to pick between). Added
+// anyway: batching still strictly reduces the auth-prompt count regardless
+// of install duration.
+func planKonicaMinoltaBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+	if row.Manufacturer != "Konica Minolta" {
+		return canonBatchRowPlan{}, false
+	}
+
+	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
+
+	ppdPath, cleanup, err := driver.PPDPathForDefaults("Konica Minolta", pkgPath, variant.Filename)
 	if err != nil {
 		return plan, true
 	}

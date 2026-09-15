@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"PDT/internal/driver"
 )
 
 func TestDiff_ClassifiesEveryCase(t *testing.T) {
@@ -73,5 +75,64 @@ func TestListLocal_UsesForwardSlashRelativePaths(t *testing.T) {
 	sizes := listLocal(root)
 	if sizes["Canon/26-Tahoe/driver.pkg"] != 5 {
 		t.Errorf("got %v, want a 5-byte entry at \"Canon/26-Tahoe/driver.pkg\" (forward slashes even on Windows)", sizes)
+	}
+}
+
+// TestListLocal_SkipsExtractedSiblingFolder is listLocal's own integration
+// test for GitHub issue #10's Sync-side fix: an archive's own extracted
+// sibling folder (see driver.ExtractedSiblingDirs) must never be uploaded -
+// it's a derived, re-creatable artifact of the archive sitting right next
+// to it, and Cloud Sync carrying it too is exactly what made a real Drivers
+// folder 5.4GB/22,570 files instead of ~1.5GB/~25.
+func TestListLocal_SkipsExtractedSiblingFolder(t *testing.T) {
+	root := t.TempDir()
+	canon := filepath.Join(root, "Canon")
+	if err := os.MkdirAll(canon, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canon, "Driver.zip"), []byte("not a real zip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extractedDir := filepath.Join(canon, "Driver")
+	if err := os.MkdirAll(extractedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extractedDir, "driver.inf"), []byte("extracted content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sizes := listLocal(root)
+	if _, ok := sizes["Canon/Driver.zip"]; !ok {
+		t.Errorf("expected the archive itself to still be listed, got %v", sizes)
+	}
+	if _, ok := sizes["Canon/Driver/driver.inf"]; ok {
+		t.Errorf("expected Driver/ (the archive's extracted sibling) to be skipped entirely, got %v", sizes)
+	}
+}
+
+// TestListLocal_SkipsPdtInfCacheFolder guards the other half of issue #10's
+// skip rule - the .inf-only metadata cache the catalog rework writes into is
+// never synced either.
+func TestListLocal_SkipsPdtInfCacheFolder(t *testing.T) {
+	root := t.TempDir()
+	cacheDir := filepath.Join(root, "Canon", driver.PdtInfCacheDirName, "Driver")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "driver.inf"), []byte("cached inf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Canon", "real.txt"), []byte("real file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sizes := listLocal(root)
+	if _, ok := sizes["Canon/real.txt"]; !ok {
+		t.Errorf("expected the unrelated real file to still be listed, got %v", sizes)
+	}
+	for rel := range sizes {
+		if filepath.Base(filepath.Dir(rel)) == driver.PdtInfCacheDirName || rel == "Canon/"+driver.PdtInfCacheDirName {
+			t.Errorf("expected nothing under %s to be listed, got %q", driver.PdtInfCacheDirName, rel)
+		}
 	}
 }

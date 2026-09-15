@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"PDT/internal/driver"
 )
 
 func TestSamePath(t *testing.T) {
@@ -382,5 +384,67 @@ func TestCopyTreeMerge_CancellationStopsEarlyAndReportsCanceled(t *testing.T) {
 	}
 	if len(entries) == fileCount {
 		t.Errorf("expected an already-canceled context to stop copying before every file was processed, but all %d landed at the destination", fileCount)
+	}
+}
+
+// TestCopyTreeMerge_SkipsExtractedSiblingFolder is copyTreeMerge's own
+// integration test for GitHub issue #10's Sync-side fix: an archive's own
+// extracted sibling folder (see driver.ExtractedSiblingDirs) must never be
+// copied - it's a derived, re-creatable artifact of the archive sitting
+// right next to it, and syncing it too is exactly what made a real Drivers
+// folder 5.4GB/22,570 files instead of ~1.5GB/~25.
+func TestCopyTreeMerge_SkipsExtractedSiblingFolder(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "Driver.zip"), []byte("not a real zip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	extractedDir := filepath.Join(src, "Driver")
+	if err := os.MkdirAll(extractedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extractedDir, "driver.inf"), []byte("extracted content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := copyTreeMerge(context.Background(), dest, src, nil); err != nil {
+		t.Fatalf("copyTreeMerge failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, "Driver.zip")); err != nil {
+		t.Errorf("expected the archive itself to still be copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "Driver")); !os.IsNotExist(err) {
+		t.Errorf("expected Driver/ (the archive's extracted sibling) to be skipped entirely, got err=%v", err)
+	}
+}
+
+// TestCopyTreeMerge_SkipsPdtInfCacheFolder guards the other half of issue
+// #10's skip rule - the .inf-only metadata cache the catalog rework writes
+// into is never synced either, regardless of whether it happens to
+// correspond to any specific archive by name.
+func TestCopyTreeMerge_SkipsPdtInfCacheFolder(t *testing.T) {
+	src := t.TempDir()
+	cacheDir := filepath.Join(src, driver.PdtInfCacheDirName, "Driver")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "driver.inf"), []byte("cached inf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "real.txt"), []byte("real file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := copyTreeMerge(context.Background(), dest, src, nil); err != nil {
+		t.Fatalf("copyTreeMerge failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, "real.txt")); err != nil {
+		t.Errorf("expected the unrelated real file to still be copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, driver.PdtInfCacheDirName)); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be skipped entirely, got err=%v", driver.PdtInfCacheDirName, err)
 	}
 }

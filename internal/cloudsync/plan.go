@@ -3,11 +3,13 @@ package cloudsync
 import (
 	"context"
 	"fmt"
-	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/minio/minio-go/v7"
+
+	"PDT/internal/driver"
 )
 
 // Action is what BuildPlan decided a given relative path needs.
@@ -88,24 +90,49 @@ func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (m
 // technician syncing for the very first time, before their own Drivers
 // folder has anything in it, should see every remote file as a download
 // candidate, not fail outright.
+//
+// A manual recursive walk (via os.ReadDir per directory), not a single
+// filepath.WalkDir - needed so driver.ExtractedSiblingDirs can see a whole
+// directory's sibling list at once to decide what to skip, the same reason
+// copytree.go's own collectCopyJobs is shaped this way. An archive's own
+// extracted sibling folder (Foo.zip -> Foo/) and the .inf-only metadata
+// cache (driver.PdtInfCacheDirName) are both derived, re-creatable
+// artifacts - Cloud Sync must not upload them any more than flash-drive
+// Sync does (GitHub issue #10: a real Drivers folder was 5.4GB/22,570 files
+// with both kept forever, vs. ~1.5GB/~25 files for just the archives).
+// Skipping the directory outright, rather than filtering its contents out
+// after the fact, also avoids paying the walk cost for whatever's inside it.
 func listLocal(root string) map[string]int64 {
 	out := map[string]int64{}
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return nil
-		}
-		info, infoErr := d.Info()
-		if infoErr != nil {
-			return nil
-		}
-		out[filepath.ToSlash(rel)] = info.Size()
-		return nil
-	})
+	walkLocal(root, "", out)
 	return out
+}
+
+func walkLocal(absDir, relDir string, out map[string]int64) {
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return
+	}
+	extractedSiblings := driver.ExtractedSiblingDirs(absDir, entries)
+	for _, entry := range entries {
+		if entry.IsDir() && (extractedSiblings[entry.Name()] || entry.Name() == driver.PdtInfCacheDirName) {
+			continue
+		}
+		childAbs := filepath.Join(absDir, entry.Name())
+		childRel := entry.Name()
+		if relDir != "" {
+			childRel = relDir + "/" + entry.Name()
+		}
+		if entry.IsDir() {
+			walkLocal(childAbs, childRel, out)
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		out[childRel] = info.Size()
+	}
 }
 
 // BuildPlan compares localRoot's own file tree against every object under

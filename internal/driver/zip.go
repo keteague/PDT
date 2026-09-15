@@ -56,6 +56,88 @@ func ensureZipsExtracted(root string) {
 	})
 }
 
+// ensureZipInfsExtracted is ensureZipsExtracted's .inf-only sibling -
+// GitHub issue #10's catalog rework. BuildCatalog only ever reads a driver
+// package's .inf text content (DriverNamesFromInf); nothing else in it is
+// needed to build the catalog, so this extracts just the .inf entries
+// (preserving each one's own path within the zip - scanManufacturerFolders'
+// own arch-token detection reads path segments relative to the
+// manufacturer folder, and needs the same structure a full extraction would
+// have produced) into destDir, under PdtInfCacheDirName, instead of the
+// whole package. Same skip-if-already-done convention as
+// ensureZipsExtracted.
+//
+// Deliberately does NOT skip PdtInfCacheDirName while walking for source
+// .zip files to process (unlike Sync's own ExtractedSiblingDirs, which
+// skips it for a completely different reason - never transferring it) -
+// confirmed live as a real gap: a multi-layer package (Lexmark's own outer
+// self-extracting RAR wrapping an inner .msi) needs ensureSfxArchiveInfsExtracted
+// to reveal that .msi *into* PdtInfCacheDirName first, then a later pass
+// needs to find and process it there - skipping the cache directory outright
+// would silently break that cascade for any package shaped this way.
+func ensureZipInfsExtracted(root string) {
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if strings.EqualFold(d.Name(), "etc") || strings.EqualFold(d.Name(), "Archive") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.EqualFold(filepath.Ext(path), ".zip") {
+			return nil
+		}
+
+		destDir := infCacheDestDir(root, path)
+		if info, statErr := os.Stat(destDir); statErr == nil && info.IsDir() {
+			return nil // already extracted
+		}
+
+		if err := extractInfsFromZip(path, destDir); err != nil {
+			os.RemoveAll(destDir)
+			return nil
+		}
+		flattenRedundantWrapperDir(destDir)
+		writeSourceMarker(destDir, path)
+		return nil
+	})
+}
+
+// extractInfsFromZip is extractZip's .inf-only sibling - see
+// ensureZipInfsExtracted's own doc comment for why. Reuses extractZip's own
+// isWithinDir/extractZipFile helpers; the only difference is skipping every
+// non-.inf entry instead of writing it out.
+func extractInfsFromZip(zipPath, destDir string) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", zipPath, err)
+	}
+	defer r.Close()
+
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return err
+	}
+
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() || !strings.EqualFold(filepath.Ext(f.Name), ".inf") {
+			continue
+		}
+		target := filepath.Join(destDir, f.Name)
+		if !isWithinDir(destDir, target) {
+			return fmt.Errorf("%s: entry %q would extract outside the destination folder", zipPath, f.Name)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := extractZipFile(f, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // extractZip extracts every entry in zipPath into destDir (created if
 // needed), rejecting any entry whose name would resolve outside destDir
 // ("zip slip") rather than silently following it.

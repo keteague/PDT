@@ -412,6 +412,24 @@ document.querySelector('#app').innerHTML = `
     </div>
   </div>
 
+  <div class="modal-backdrop" id="rescanBackdrop" hidden>
+    <div class="modal rescan-modal">
+      <h3>Rescan Drivers</h3>
+      <p class="modal-hint">Pick which manufacturers or driver packages to rescan.</p>
+      <div id="rescanTree" class="rescan-tree"></div>
+      <div class="modal-actions rescan-actions">
+        <button id="btnRescanSelectAll">Select All</button>
+        <label class="platform-windows-only" title="Delete the cached .inf files for the selected manufacturer(s)/package(s) first, so they're re-extracted fresh from the archive.">
+          <input type="checkbox" id="rescanRemoveInf"> Remove INF
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button id="btnRescanClose">Close</button>
+        <button class="primary" id="btnRescanConfirm" disabled>Rescan</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" id="cloudSyncProgressBackdrop" hidden>
     <div class="modal cloud-sync-progress-modal">
       <h3>Syncing with Cloud...</h3>
@@ -699,7 +717,7 @@ function applySalesChainGate() {
     document.body.classList.toggle('sales-chain-locked', locked);
     const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnSyncFlashDrive', 'btnCloudSync', 'btnOpenDriversFolder', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
-        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop')) continue;
+        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop') || c.closest('#rescanBackdrop')) continue;
         c.disabled = locked;
     }
     updatePortPrefixTextEnabled();
@@ -778,6 +796,43 @@ function isMac() {
 // Windows (state.macModelManufacturers stays empty there).
 function macModelDriven(manufacturer) {
     return isMac() && state.macModelManufacturers.has(manufacturer);
+}
+
+// applyCatalogStatus is the shared tail end of both the mac one-click
+// Refresh Drivers handler and the Windows Rescan dialog's own confirm
+// handler - both end up with the exact same CatalogStatus shape
+// (App.RefreshDriverCatalog/App.RescanDrivers) and need the exact same UI
+// refresh afterward. verb is just "refreshed"/"rescanned" for the OK/ERR log
+// line's own wording.
+async function applyCatalogStatus(status, verb) {
+    el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
+    if (!status.ok) {
+        logStatus('ERR', `Driver catalog ${verb === 'refreshed' ? 'refresh' : 'rescan'} failed: ${status.error}`);
+        return;
+    }
+    if (isMac()) {
+        state.macModelManufacturers = new Set(await App.MacModelManufacturers());
+    }
+    const mfgSelect = el('defMfg');
+    if (mfgSelect.value) {
+        el('defDriver').value = await App.DefaultDriverFor(mfgSelect.value);
+        el('defDriver').classList.toggle('input-needs-value', !el('defDriver').value && !macModelDriven(mfgSelect.value));
+    }
+    // A refresh/rescan can change which manufacturers have real per-model
+    // mac data - re-render so any already-added row's Model
+    // mandatory/optional styling reflects it.
+    renderGrid();
+    logStatus('OK', status.hasDrivers
+        ? `Driver catalog ${verb}.`
+        : `Driver catalog ${verb} - still no drivers found in the Drivers folder.`);
+    // macOS only - what changed for a manufacturer whose newest package
+    // turned out to be different from the one already recorded in its own
+    // catalog.<mfg>.json (App.CatalogStatus's own ModelChanges - see
+    // driver.DiffModels). Empty on a cache-hit refresh (nothing actually
+    // changed) or a first-ever build (nothing to diff against yet).
+    for (const change of status.modelChanges || []) {
+        logStatus('INFO', change);
+    }
 }
 
 async function init() {
@@ -1639,6 +1694,42 @@ function wireEvents() {
         btn.textContent = 'Canceling...';
     });
 
+    el('btnRescanClose').addEventListener('click', closeRescanModal);
+    el('btnRescanConfirm').addEventListener('click', confirmRescan);
+    el('btnRescanSelectAll').addEventListener('click', () => {
+        const paths = [];
+        if (rescanTreeRoot) collectRescanLeafPaths(rescanTreeRoot, paths);
+        for (const p of paths) rescanSelection.set(p, true);
+        renderRescanTree();
+    });
+    wireBackdropDismiss('rescanBackdrop', closeRescanModal);
+    // Delegated for the same reason as cloudSyncTree's own listener below -
+    // renderRescanTree replaces the tree's entire innerHTML on every
+    // toggle/checkbox change.
+    el('rescanTree').addEventListener('change', (e) => {
+        if (e.target.classList.contains('rst-leaf-check')) {
+            rescanSelection.set(e.target.dataset.relpath, e.target.checked);
+            renderRescanTree();
+        } else if (e.target.classList.contains('rst-folder-check')) {
+            const node = findRescanNode(e.target.dataset.folderPath);
+            const paths = [];
+            if (node) collectRescanLeafPaths(node, paths);
+            for (const p of paths) rescanSelection.set(p, e.target.checked);
+            renderRescanTree();
+        }
+    });
+    el('rescanTree').addEventListener('click', (e) => {
+        const btn = e.target.closest('.cst-toggle[data-toggle-path]');
+        if (!btn) return;
+        const path = btn.dataset.togglePath;
+        if (rescanCollapsed.has(path)) {
+            rescanCollapsed.delete(path);
+        } else {
+            rescanCollapsed.add(path);
+        }
+        renderRescanTree();
+    });
+
     el('btnCloudSync').addEventListener('click', () => openCloudSyncModal());
     el('btnCloudSyncClose').addEventListener('click', closeCloudSyncModal);
     el('btnCloudSyncConfirm').addEventListener('click', confirmCloudSync);
@@ -2490,6 +2581,138 @@ function closeCloudSyncModal() {
     el('cloudSyncBackdrop').hidden = true;
 }
 
+// ---- Rescan (GitHub issue #10 - Windows only, see btnRefreshDrivers) ----
+//
+// A simpler two-level version of the Cloud Sync tree above: manufacturer
+// rows, each expandable to its own individual driver packages
+// (App.ListRescanTargets), with the exact same tri-state folder-checkbox
+// pattern (folderCheckState/collectActionableRelPaths there) reused here as
+// rescanFolderCheckState/collectRescanLeafPaths - no size/action column
+// needed, since every leaf is just "included in this rescan or not". Leaf
+// paths are "Manufacturer/RelPath" strings, matching exactly what
+// App.RescanDrivers' own removeInf scope expects
+// (driver.RemoveInfCacheForSelection) - no separate encode/decode step.
+let rescanTargets = [];
+let rescanSelection = new Map(); // "Manufacturer/RelPath" -> checked
+let rescanCollapsed = new Set();
+let rescanTreeRoot = null;
+
+function buildRescanTree(targets) {
+    const root = { name: '', path: '', children: new Map(), leaf: false };
+    for (const mfg of targets) {
+        const mfgNode = { name: mfg.name, path: mfg.name, children: new Map(), leaf: false };
+        root.children.set(mfg.name, mfgNode);
+        for (const pkg of mfg.packages || []) {
+            const leafPath = `${mfg.name}/${pkg.relPath}`;
+            mfgNode.children.set(leafPath, { name: pkg.name, path: leafPath, children: new Map(), leaf: true });
+        }
+    }
+    return root;
+}
+
+function findRescanNode(path) {
+    let node = rescanTreeRoot;
+    for (const part of path.split('/')) {
+        node = node?.children.get(part);
+        if (!node) return null;
+    }
+    return node;
+}
+
+function collectRescanLeafPaths(node, out) {
+    if (node.leaf) {
+        out.push(node.path);
+        return;
+    }
+    for (const child of node.children.values()) collectRescanLeafPaths(child, out);
+}
+
+function rescanFolderCheckState(node) {
+    const paths = [];
+    collectRescanLeafPaths(node, paths);
+    if (paths.length === 0) return null;
+    const checkedCount = paths.filter(p => rescanSelection.get(p)).length;
+    if (checkedCount === 0) return 'unchecked';
+    if (checkedCount === paths.length) return 'checked';
+    return 'indeterminate';
+}
+
+function renderRescanEntry(node) {
+    if (node.leaf) {
+        return `
+            <div class="cst-row" title="${attr(node.path)}">
+              <span class="cst-toggle"></span>
+              <input type="checkbox" class="rst-leaf-check" data-relpath="${attr(node.path)}" ${rescanSelection.get(node.path) ? 'checked' : ''}>
+              <span class="cst-name">${attr(node.name)}</span>
+            </div>
+        `;
+    }
+    const state = rescanFolderCheckState(node);
+    const checkboxHtml = state === null
+        ? '<span class="cst-checkbox-spacer"></span>'
+        : `<input type="checkbox" class="rst-folder-check" data-folder-path="${attr(node.path)}" ${state === 'checked' ? 'checked' : ''} data-indeterminate="${state === 'indeterminate' ? '1' : ''}">`;
+    const collapsed = rescanCollapsed.has(node.path);
+    const entries = Array.from(node.children.values()).sort((a, b) => a.name.localeCompare(b.name));
+    return `
+        <div class="cst-node">
+          <div class="cst-row">
+            <button type="button" class="cst-toggle" data-toggle-path="${attr(node.path)}">${collapsed ? '▸' : '▾'}</button>
+            ${checkboxHtml}
+            <span class="cst-name">${attr(node.name)}</span>
+          </div>
+          <div class="cst-children" ${collapsed ? 'hidden' : ''}>
+            ${entries.map(renderRescanEntry).join('')}
+          </div>
+        </div>
+    `;
+}
+
+function renderRescanTree() {
+    rescanTreeRoot = buildRescanTree(rescanTargets);
+    const container = el('rescanTree');
+    if (rescanTargets.length === 0) {
+        container.innerHTML = '<p class="modal-hint">No driver packages found in the Drivers folder.</p>';
+    } else {
+        const entries = Array.from(rescanTreeRoot.children.values()).sort((a, b) => a.name.localeCompare(b.name));
+        container.innerHTML = entries.map(renderRescanEntry).join('');
+    }
+    for (const cb of container.querySelectorAll('.rst-folder-check')) {
+        cb.indeterminate = cb.dataset.indeterminate === '1';
+    }
+    el('btnRescanConfirm').disabled = !Array.from(rescanSelection.values()).some(v => v);
+}
+
+async function openRescanModal() {
+    el('rescanBackdrop').hidden = false;
+    el('rescanTree').innerHTML = '';
+    el('rescanRemoveInf').checked = false;
+    el('btnRescanConfirm').disabled = true;
+    rescanSelection = new Map();
+
+    const targets = await App.ListRescanTargets();
+    rescanTargets = targets || [];
+    renderRescanTree();
+}
+
+function closeRescanModal() {
+    el('rescanBackdrop').hidden = true;
+}
+
+async function confirmRescan() {
+    const selected = Array.from(rescanSelection.entries()).filter(([, checked]) => checked).map(([p]) => p);
+    if (selected.length === 0) return;
+    const btn = el('btnRescanConfirm');
+    btn.disabled = true;
+    logStatus('INFO', 'Rescanning driver catalog...');
+    try {
+        const status = await App.RescanDrivers(selected, el('rescanRemoveInf').checked);
+        closeRescanModal();
+        await applyCatalogStatus(status, 'rescanned');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
 // formatRate renders a bytes-per-second number as e.g. "4.2 MB/s" (reusing
 // formatByteSize's own unit logic) - "" for a not-yet-known/zero rate,
 // rather than a misleading "0 B/s" flashing at the very start of a batch
@@ -2966,7 +3189,16 @@ function wireSettingsModal() {
     // extra refreshing here - only things this snapshots at fetch time
     // (the banner, and the Defaults panel's currently-shown Driver value)
     // need an explicit nudge.
+    // Windows opens the selective Rescan dialog (GitHub issue #10) instead
+    // of immediately rescanning - macOS has no .pdt-infcache/"Remove INF"
+    // concept to be selective about (its own catalog.<mfg>.json staleness
+    // handling already runs automatically on every refresh), so it keeps
+    // this exact one-click behavior unchanged.
     el('btnRefreshDrivers').addEventListener('click', async () => {
+        if (!isMac()) {
+            openRescanModal();
+            return;
+        }
         const btn = el('btnRefreshDrivers');
         btn.disabled = true;
         // A first-ever/genuinely-changed driver folder scan can still take a
@@ -2979,36 +3211,7 @@ function wireSettingsModal() {
         // until the OK/ERR line below replaces it.
         logStatus('INFO', 'Refreshing driver catalog...');
         try {
-            const status = await App.RefreshDriverCatalog();
-            el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
-            if (!status.ok) {
-                logStatus('ERR', `Driver catalog refresh failed: ${status.error}`);
-            } else {
-                if (isMac()) {
-                    state.macModelManufacturers = new Set(await App.MacModelManufacturers());
-                }
-                const mfgSelect = el('defMfg');
-                if (mfgSelect.value) {
-                    el('defDriver').value = await App.DefaultDriverFor(mfgSelect.value);
-                    el('defDriver').classList.toggle('input-needs-value', !el('defDriver').value && !macModelDriven(mfgSelect.value));
-                }
-                // A refresh can change which manufacturers have real
-                // per-model mac data - re-render so any already-added row's
-                // Model mandatory/optional styling reflects it.
-                renderGrid();
-                logStatus('OK', status.hasDrivers
-                    ? 'Driver catalog refreshed.'
-                    : 'Driver catalog refreshed - still no drivers found in the Drivers folder.');
-                // macOS only - what changed for a manufacturer whose newest
-                // package turned out to be different from the one already
-                // recorded in its own catalog.<mfg>.json (App.CatalogStatus's
-                // own ModelChanges - see driver.DiffModels). Empty on a
-                // cache-hit refresh (nothing actually changed) or a
-                // first-ever build (nothing to diff against yet).
-                for (const change of status.modelChanges || []) {
-                    logStatus('INFO', change);
-                }
-            }
+            await applyCatalogStatus(await App.RefreshDriverCatalog(), 'refreshed');
         } finally {
             btn.disabled = false;
         }

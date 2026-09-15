@@ -942,6 +942,30 @@ table.grid td.checkbox-cell {
     margin-left: 18px;
 }
 
+/* Rescan dialog (GitHub issue #10) - reuses the .cst-row/.cst-toggle/
+   .cst-name/.cst-children tree-structure classes above (generic, not
+   Cloud-Sync-specific) for its own manufacturer/package tree; just its own
+   box sizing here, since it has no size/action column to make room for. */
+.rescan-modal {
+    width: 420px;
+}
+
+.rescan-tree {
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid #33455c;
+    border-radius: 4px;
+    background: #16202e;
+    padding: 6px;
+    font-size: 13px;
+}
+
+.rescan-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
 /* Cloud Sync's own progress dialog - a rolling single "spotlight" file
    (the longest-running still-in-progress transfer) with a big bar/ETA,
    a queue of what's left below it (any other concurrently-transferring

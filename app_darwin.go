@@ -34,7 +34,7 @@ func (a *App) platformStartup() {
 // BuildMacModelIndex gets two different directories for two different
 // reasons:
 //   - macRoot (driversRoot/macOS) is where each manufacturer's own
-//     catalog.json lives (MacCatalogFileName) - inside the Drivers folder
+//     catalog.json lives (CatalogFileName) - inside the Drivers folder
 //     itself, deliberately, so it travels with a portable/flash-drive copy
 //     (see MacManufacturerCatalog's own doc comment).
 //   - ppdCacheDir (a no-installer family's cached PPD bytes - see

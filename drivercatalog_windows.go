@@ -42,6 +42,32 @@ func (a *App) RefreshDriverCatalog() CatalogStatus {
 	return CatalogStatus{OK: true, HasDrivers: len(driver.ManufacturersWithDrivers(catalog)) > 0}
 }
 
+// ListRescanTargets: see driver.RescanManufacturer - the Rescan dialog's own
+// manufacturer/package tree data source (replaces the old one-click Refresh
+// Drivers button on Windows - see main.js's own btnRefreshDrivers handler).
+func (a *App) ListRescanTargets() []driver.RescanManufacturer {
+	<-a.ready
+	return driver.ListRescanTargets(driversRoot())
+}
+
+// RescanDrivers applies the Rescan dialog's own selection: if removeInf is
+// checked, best-effort clears the .pdt-infcache entries named in selected
+// (see driver.RemoveInfCacheForSelection) so they're re-extracted fresh
+// below, then always runs the exact same full rebuild RefreshDriverCatalog
+// already does. A full rebuild rather than one scoped just to the
+// selection: now that .inf-only extraction (GitHub issue #10) replaced full-
+// package extraction, a full rescan is cheap regardless - bounded by archive
+// count, not extracted-file count - so there's no performance reason for
+// separate partial-rebuild machinery just to mirror the dialog's own
+// selective removal scope.
+func (a *App) RescanDrivers(selected []string, removeInf bool) CatalogStatus {
+	<-a.ready
+	if removeInf {
+		driver.RemoveInfCacheForSelection(driversRoot(), selected)
+	}
+	return a.RefreshDriverCatalog()
+}
+
 func (a *App) GetCatalogStatus() CatalogStatus {
 	<-a.ready
 	catalog, _, catalogErr := a.catalogSnapshot()

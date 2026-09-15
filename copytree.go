@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"PDT/internal/driver"
 )
 
 // samePath reports whether a and b name the same location on disk - a
@@ -137,7 +139,18 @@ func collectCopyJobs(destDir, srcAbs, rel string, ancestors map[string]bool, job
 		*errs = append(*errs, fmt.Errorf("%s: %w", srcAbs, err))
 		return
 	}
+	// extractedSiblings/pdtInfCache: folders skipped entirely, never copied -
+	// both are derived, re-creatable artifacts of an archive sitting right
+	// next to them (extractedSiblings: driver.ExtractedSiblingDirs' own doc
+	// comment; pdtInfCacheDirName: the .inf-only metadata cache GitHub issue
+	// #10's own catalog rework builds). Confirmed live a real Drivers folder
+	// was 5.4GB/22,570 files with this sprawl kept forever, vs. ~1.5GB/~25
+	// files for just the archives - skipping it here is most of that win.
+	extractedSiblings := driver.ExtractedSiblingDirs(srcAbs, entries)
 	for _, entry := range entries {
+		if entry.IsDir() && (extractedSiblings[entry.Name()] || entry.Name() == driver.PdtInfCacheDirName) {
+			continue
+		}
 		childAbs := filepath.Join(srcAbs, entry.Name())
 		childRel := entry.Name()
 		if rel != "" {

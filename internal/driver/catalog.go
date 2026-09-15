@@ -78,6 +78,25 @@ type ArchEntry struct {
 	InfPath string
 	Date    time.Time
 	Version string
+	// ArchivePath is the real archive (.zip/.msi/a self-extracting .exe)
+	// InfPath's own .inf-only cache entry was extracted from - "" if InfPath
+	// isn't under PdtInfCacheDirName at all (an already fully-extracted
+	// folder from before GitHub issue #10's catalog rework, or a
+	// grandfathered manual extraction), in which case there's nothing to
+	// lazily re-extract at Deploy time; InfPath is already a real,
+	// deployable path as-is. Otherwise, EnsureArchiveExtracted resolves this
+	// into a real deployable directory (extracting it fully, on demand,
+	// the first time it's actually needed) right before Deploy stages the
+	// driver - see internal/printer/windows/deploy_windows.go.
+	ArchivePath string
+	// InfRelPath is InfPath's own path relative to wherever ArchivePath's
+	// own .inf-only cache entry lives - meaningless when ArchivePath is "".
+	// Once EnsureArchiveExtracted resolves ArchivePath into a real,
+	// deployable directory, filepath.Join(thatDir, InfRelPath) is the real
+	// .inf to actually stage - InfPath itself is only the tiny cached copy,
+	// missing every companion file (.dll/.cat/...) a real deploy needs
+	// alongside it.
+	InfRelPath string
 }
 
 // Catalog: Manufacturer -> DriverName -> VersionKey("version|yyyy-MM-dd") -> Arch -> ArchEntry.
@@ -210,16 +229,31 @@ func scanManufacturerFolders(catalog Catalog, root string, extract bool) {
 
 		mfgPath := filepath.Join(root, e.Name())
 		if extract {
-			ensureZipsExtracted(mfgPath)
-			// Kyocera's own bespoke two-stage extraction runs before the generic
-			// self-extracting-archive scan below - ensureSfxArchivesExtracted
-			// already skips any Kyocera-named exe outright (see its own doc
-			// comment for why order alone wouldn't be enough), but running the
-			// correct extraction first keeps this in the obvious "more specific
-			// before more general" order regardless.
-			ensureKyoceraExesExtracted(mfgPath)
-			ensureSfxArchivesExtracted(mfgPath)
-			ensureMsiExtracted(mfgPath)
+			// Prune stale .pdt-infcache entries first, before any new
+			// extraction and before the .inf-discovery walk below -
+			// correctness, not just disk hygiene: a removed/archived
+			// driver's own leftover cached .inf would otherwise still be
+			// found and parsed, keeping it visible in the catalog
+			// indefinitely (see pruneOrphanedInfCache's own doc comment).
+			pruneOrphanedInfCache(mfgPath)
+
+			// .inf-only extraction (GitHub issue #10's catalog rework) - the
+			// only thing this scan ever reads out of a package is .inf text
+			// content (DriverNamesFromInf below), so that's all that's ever
+			// extracted here; a full extraction only happens lazily, at
+			// Deploy-time, for the one specific package actually being
+			// installed (see EnsureArchiveExtracted). Same "more specific
+			// before more general" order as before (Kyocera's own two-stage
+			// process runs before the generic self-extracting-archive scan,
+			// which already skips any Kyocera-named exe outright), and the
+			// same reason sfx runs before msi still applies: sfx can reveal
+			// a nested .msi (confirmed live - Lexmark's own package, an
+			// outer self-extracting RAR wrapping an inner .msi) that msi
+			// needs its own pass to find and process afterward.
+			ensureZipInfsExtracted(mfgPath)
+			ensureKyoceraExeInfsExtracted(mfgPath)
+			ensureSfxArchiveInfsExtracted(mfgPath)
+			ensureMsiInfsExtracted(mfgPath)
 		}
 		_ = filepath.WalkDir(mfgPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -251,6 +285,20 @@ func scanManufacturerFolders(catalog Catalog, root string, extract bool) {
 				return nil
 			}
 
+			// archivePath/infRelPath: "" when path isn't under a
+			// .inf-only cache entry at all (an already fully-extracted
+			// folder from before GitHub issue #10's catalog rework, or a
+			// grandfathered manual extraction) - there's nothing to lazily
+			// re-extract for those, path is already a real, deployable
+			// .inf as-is.
+			archivePath, markerDir := findSourceArchive(filepath.Dir(path), mfgPath)
+			infRelPath := ""
+			if archivePath != "" {
+				if r, relErr := filepath.Rel(markerDir, path); relErr == nil {
+					infRelPath = r
+				}
+			}
+
 			versionKey := info.Version + "|" + formatDateKey(info.Date)
 
 			seenNames := map[string]bool{}
@@ -277,7 +325,10 @@ func scanManufacturerFolders(catalog Catalog, root string, extract bool) {
 						(info.Date.Equal(existing.Date) && compareVersions(info.Version, existing.Version) > 0)
 				}
 				if isNewer {
-					catalog[mfg][dname][versionKey][archSeg] = ArchEntry{InfPath: path, Date: info.Date, Version: info.Version}
+					catalog[mfg][dname][versionKey][archSeg] = ArchEntry{
+						InfPath: path, Date: info.Date, Version: info.Version,
+						ArchivePath: archivePath, InfRelPath: infRelPath,
+					}
 				}
 			}
 			return nil

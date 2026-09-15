@@ -4,6 +4,146 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-15 (v0.9.16) - Selective Rescan dialog replaces the one-click Refresh Drivers button on Windows (GitHub issue #10, increment 3 of 3)
+
+Increments 1 and 2 (below) stopped Sync from transferring extracted driver sprawl and stopped catalog
+scans from producing it in the first place, using a `.pdt-source` marker file per `.pdt-infcache` entry
+for both lazy-extraction resolution and orphan pruning - no separate `catalog.<mfg>.json` file was
+needed after all (Ken's own call, once the marker mechanism turned out to already cover staleness on
+its own).
+
+This increment closes out the issue's original ask: a selective Rescan dialog, replacing the toolbar's
+old one-click Refresh Drivers (🔄) button on Windows. Clicking it now opens a tree (manufacturer rows,
+expandable to each one's own driver packages) with checkboxes, a **Select All** button, and a
+Windows-only **Remove INF** checkbox that best-effort clears the selected packages' own
+`.pdt-infcache` entries before rescanning, forcing them to be re-extracted fresh from their archive
+rather than reused. New Go: `driver.ListRescanTargets` (the dialog's own tree data source - reuses the
+exact same archive-recognition rules `ensure*InfsExtracted` already applies) and
+`driver.RemoveInfCacheForSelection` (the "Remove INF" checkbox's own removal, keyed by
+`"Manufacturer/RelPath"` strings the dialog's own leaf checkboxes report directly, no separate
+encode/decode step), plus two new bound methods (`App.ListRescanTargets`/`App.RescanDrivers`) in
+`drivercatalog_windows.go`.
+
+The rescan itself is always a full `App.RefreshDriverCatalog()` regardless of what's checked in the
+tree, not a rebuild scoped to just the selection - now that `.inf`-only extraction replaced full-package
+extraction (increment 2), a full rescan is cheap regardless (bounded by archive count, not
+extracted-file count), so there's no performance reason for separate partial-rebuild machinery just to
+mirror the dialog's own selective removal scope; the selection only ever controls what "Remove INF"
+touches.
+
+macOS keeps the old one-click Refresh Drivers behavior completely unchanged - it has no
+`.pdt-infcache`/"Remove INF" concept to be selective about, since its own `catalog.<mfg>.json`
+staleness handling already runs automatically on every refresh (see the v0.9.2 entry below). The
+toolbar button is now platform-branched in `main.js` (`btnRefreshDrivers`'s own click handler) rather
+than split into two separate buttons, since both are "rescan my drivers" from the technician's own
+point of view - just with a different amount of interaction to get there.
+
+## 2026-09-15 - Catalog scans no longer extract whole driver packages (GitHub issue #10, increment 2 of 3)
+
+Increment 1 (below) stopped Sync from transferring the extracted sprawl; this increment stops
+producing it in the first place. `DriverNamesFromInf` (`internal/driver/inf.go`) only ever reads a
+single `.inf` file's own `[Version]`/`[Strings]`/`[Manufacturer]` text - nothing else in a real package
+(the actual `.dll`/`.cat`/help files, hundreds to thousands of them) is ever read to build the catalog.
+So `BuildCatalog` no longer extracts whole packages at scan time at all - it extracts just the `.inf`
+file(s) into a small `.pdt-infcache` folder, and defers full extraction to Deploy-time, on demand, for
+only the one specific package actually being installed.
+
+### Added
+- **`.inf`-only extraction for all four archive types** (`internal/driver/{zip,sfx,msi,kyoceraexe}.go`):
+  zip via `archive/zip` directly (no external tool needed at all); self-extracting archives and
+  Kyocera's own two-stage exe via 7z's own selective-extraction filter (`7z x pkg -o<dest> *.inf -r`,
+  pulling just the matching entries without unpacking the rest); MSI has no selective-extract mode via
+  `msiexec /a`, so it still runs the full administrative install, but only ever into a throwaway scratch
+  directory that's discarded immediately after the resulting `.inf` is copied out - the real payload is
+  never kept. All four write into `<Manufacturer>/<version>/.pdt-infcache/<ArchiveName>/...`, preserving
+  each `.inf`'s own path within the archive (needed for the existing arch-token detection, which reads
+  path segments relative to the manufacturer folder).
+- **`EnsureArchiveExtracted`** (`internal/driver/lazyextract.go`): the deferred full extraction, reusing
+  the *existing* per-format extraction functions verbatim - zero change to the actual extraction logic,
+  just when it runs. Wired into `internal/printer/windows/deploy_windows.go` right before `StageInf`
+  (`SetupCopyOEMInfW` needs the real files on disk next to the `.inf` - a hard Win32 constraint, not a
+  PDT design choice). Same skip-if-already-extracted convention - a repeat deploy of the same driver
+  reuses the folder instead of re-extracting.
+- **Automatic staleness cleanup, without a separate catalog file**: each `.inf`-only cache entry gets a
+  small `.pdt-source` marker recording exactly which archive produced it (`ArchEntry.ArchivePath`/
+  `InfRelPath` resolve through `Resolve()` from this). Every scan prunes any top-level cache entry whose
+  recorded archive no longer exists, *before* the `.inf`-discovery walk runs - confirmed live this is a
+  real correctness requirement, not just disk hygiene: without pruning first, a removed/archived
+  driver's stale cached `.inf` would keep being found and parsed, keeping it visible in the catalog
+  indefinitely. Pruning itself is best-effort and never required to succeed for correctness on a
+  write-protected flash drive (the field-deployment plan) - a failed cleanup just means the stale entry
+  sits there until the next writable run, never a wrong catalog result.
+- Considered building this as a real `catalog.<mfg>.json` file for consistency with the existing macOS
+  `catalog.<mfg>.json` (`internal/driver/maccatalogdb.go`) - decided against it once the `.pdt-source`
+  marker mechanism above turned out to already fully satisfy the staleness requirement on its own,
+  without a second persisted format to keep in sync. `MacCatalogFileName` was still renamed to the
+  platform-neutral `CatalogFileName` (pure string logic, nothing mac-specific) in case Windows ever does
+  grow a real catalog file for a different reason later.
+
+### Fixed
+- **A real bug found via live testing against Lexmark's actual package** (an outer self-extracting RAR
+  wrapping an inner `.msi` that itself contains the real `.inf`): the first cut of this rework skipped
+  `.pdt-infcache` entirely while searching for source archives, confusing it with Sync's own unrelated
+  "never transfer this" exclusion - which silently broke the cascade, since the `.msi` only exists
+  *inside* the cache once the sfx pass reveals it there. Fixed by no longer skipping the cache directory
+  while searching for archives (only Sync does that, for an unrelated reason), and by extending the sfx
+  extraction filter to also pull out any `.msi` it finds, not just `.inf`.
+- A related destination-path bug caught by the same fix: a nested archive already living inside
+  `.pdt-infcache` was computing a doubled `.pdt-infcache/.pdt-infcache/...` destination instead of
+  extracting as a plain sibling where it already sat.
+
+### Verified live
+Full real-world validation against this dev machine's actual Drivers folder (not testdata): all 9
+manufacturers and 555 driver names found correctly (matching the pre-rework catalog), including
+Lexmark's real sfx→msi cascade (6 `.inf` files) and Kyocera's real two-stage package (4 `.inf` files,
+~1MB total vs. ~12,700 files/GBs for a full extraction). End-to-end resolve→lazy-extract→deploy path
+confirmed against a real Canon package: `Resolve()` correctly returns `ArchivePath`/`InfRelPath`,
+`EnsureArchiveExtracted` produces a real `.inf` with its real companion files alongside it, and a
+repeat call reuses the extraction instead of redoing it. Staleness confirmed end-to-end too: removing a
+test archive and rebuilding the catalog correctly drops that driver and prunes its orphaned cache entry.
+
+**Correction to increment 1's own "bonus" note**: measured (not just reasoned about) whether
+`app_windows.go`'s `loadCatalog` could now drop its removable-media special-case
+(`BuildCatalogNoExtract`), since `.inf`-only extraction is so much cheaper than a full one - it can't,
+yet. The four new extraction functions still each `filepath.WalkDir` a whole manufacturer folder
+looking for source archives, and a real Drivers folder still has all its *legacy* full-extraction
+sprawl sitting alongside the new `.pdt-infcache` (nothing deletes that automatically) - measured at
+~4.8 seconds just for those four walks on this nVME dev machine's real Drivers folder, which would be
+dramatically worse over real USB 2.0. `BuildCatalogNoExtract`'s removable-media path is unchanged.
+
+## 2026-09-15 - Sync no longer transfers extracted driver sprawl (GitHub issue #10, increment 1 of 3)
+
+Ken's own live measurement of a real Drivers folder: **5.4GB/22,570 files** total, of which the
+original compressed archives are only **~1.5GB/~25 files** - the rest is extraction sprawl
+`BuildCatalog` (`internal/driver/catalog.go`) produces eagerly and never deletes. Both flash-drive Sync
+(`copytree.go`) and Cloud Sync (`internal/cloudsync`) were transferring that entire sprawl alongside
+the archives, with no concept of "this folder is a derived, re-creatable artifact of that archive
+sitting next to it." This is increment 1 of 3 toward closing the issue (see it for the full design) -
+the low-risk Sync-side fix, shippable against today's existing eager-extraction reality while the
+bigger catalog rework (stop extracting whole packages at all, cache just the `.inf` metadata, extract
+fully only at Deploy-time - mirroring the existing macOS `catalog.<mfg>.json` pattern for consistency)
+is still being built.
+
+### Changed
+- **New `driver.ExtractedSiblingDirs`** (`internal/driver/extractedsiblings.go`): given one directory's
+  own children, identifies which subfolders are the deterministic extraction output of an archive also
+  in that directory - `Foo.zip`/`.msi`/a real self-extracting `.exe` -> `Foo/`, or Kyocera's own
+  `KXDriver_<version>.exe` -> whichever sibling folder name *contains* that version token (mirroring
+  `kyoceraVersionAlreadyExtracted`'s own existing substring match) - computed without extracting
+  anything.
+- **Both Sync paths skip these folders entirely**, not just filter them from the result:
+  `copytree.go`'s `collectCopyJobs` (flash-drive Sync/Write to Flash Drive) and a rewritten
+  `cloudsync.listLocal` (`internal/cloudsync/plan.go`, now a manual recursive walker instead of a flat
+  `filepath.WalkDir`, so it can see a whole directory's sibling list at once the same way
+  `collectCopyJobs` already does) both skip any folder `ExtractedSiblingDirs` flags, plus a new
+  `.pdt-infcache` folder name reserved for the upcoming catalog rework's own `.inf`-only metadata
+  cache. Skipping the directory outright (not walking into it and filtering after) also avoids paying
+  the walk cost for whatever's inside it.
+- **Measured on this dev machine's real (mixed Windows+macOS) Drivers folder**: 29,620 files/8.25GB ->
+  7,081 files/4.65GB for what Sync would transfer - real, but short of the issue's own ~25-file ideal,
+  which needs increment 2 (this machine's folder also has macOS content and `Archive/` folders,
+  neither touched by this change, which is correct - not part of this problem).
+
 ## 2026-09-14 (v0.9.15) - Cloud Sync: rolling progress dialog, 95%-early-start pipelining, and a live Cancel-hang fix
 
 Ken tested v0.9.14's Cloud Sync live and asked for the progress dialog to be far less basic (a

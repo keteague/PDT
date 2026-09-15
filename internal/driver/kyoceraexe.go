@@ -114,6 +114,56 @@ func kyoceraVersionAlreadyExtracted(existingDirs []string, version string) bool 
 	return false
 }
 
+// ensureKyoceraExeInfsExtracted is ensureKyoceraExesExtracted's .inf-only
+// sibling - GitHub issue #10's catalog rework. Stage 1 (pulling the
+// embedded ".text" PE section out via 7z) is unavoidable and already
+// small; stage 2 uses 7z's own selective-extraction filter instead of a
+// full unpack of the real driver payload (see extractInfsFromKyoceraExe).
+// Destination folders live under PdtInfCacheDirName instead of directly in
+// root, but kyoceraVersionAlreadyExtracted's own version-substring check
+// (not a simple basename match - see its own doc comment) is applied the
+// same way, just against that cache folder's own existing entries.
+func ensureKyoceraExeInfsExtracted(root string) {
+	if SevenZipPath == "" {
+		return
+	}
+	cacheRoot := filepath.Join(root, PdtInfCacheDirName)
+	var existingDirs []string
+	if cacheEntries, err := os.ReadDir(cacheRoot); err == nil {
+		for _, e := range cacheEntries {
+			if e.IsDir() {
+				existingDirs = append(existingDirs, e.Name())
+			}
+		}
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		m := kyoceraExeNameRe.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		version := m[1]
+		if kyoceraVersionAlreadyExtracted(existingDirs, version) {
+			continue
+		}
+
+		destDir := filepath.Join(cacheRoot, "KXDriver_"+version)
+		exePath := filepath.Join(root, e.Name())
+		if err := extractInfsFromKyoceraExe(exePath, destDir); err != nil {
+			os.RemoveAll(destDir)
+			continue
+		}
+		writeSourceMarker(destDir, exePath)
+	}
+}
+
 // extractKyoceraExe runs the two-stage extraction: first pulls exePath's own
 // embedded ".text" PE section out to a scratch folder via 7z (an ordinary
 // executable's .text code section is at most a few MB; a Kyocera driver
@@ -146,6 +196,41 @@ func extractKyoceraExe(exePath, destDir string) error {
 	}
 	if out, err := exec.Command(SevenZipPath, "x", textPath, "-o"+destDir, "-y").CombinedOutput(); err != nil {
 		return fmt.Errorf("extracting %s (stage 2): %w: %s", exePath, err, out)
+	}
+	return nil
+}
+
+// extractInfsFromKyoceraExe is extractKyoceraExe's .inf-only sibling - stage
+// 1 (pulling the embedded ".text" PE section out) is unavoidable and
+// already small regardless of what's kept afterward; stage 2 uses 7z's own
+// selective-extraction filter (see extractInfsFromSfxArchive's own doc
+// comment for the same technique) instead of a full unpack of the real
+// driver payload.
+func extractInfsFromKyoceraExe(exePath, destDir string) error {
+	scratch, err := os.MkdirTemp("", "pdt-kyocera-inf-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(scratch)
+
+	stage1 := filepath.Join(scratch, "stage1")
+	if err := os.MkdirAll(stage1, 0o755); err != nil {
+		return err
+	}
+	if out, err := exec.Command(SevenZipPath, "x", exePath, "-o"+stage1, "-y").CombinedOutput(); err != nil {
+		return fmt.Errorf("extracting %s (stage 1): %w: %s", exePath, err, out)
+	}
+
+	textPath := filepath.Join(stage1, ".text")
+	if info, err := os.Stat(textPath); err != nil || info.IsDir() {
+		return fmt.Errorf("expected embedded archive %q not found after extracting %s", ".text", exePath)
+	}
+
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return err
+	}
+	if out, err := exec.Command(SevenZipPath, "x", textPath, "-o"+destDir, "*.inf", "-r", "-y").CombinedOutput(); err != nil {
+		return fmt.Errorf("7z .inf-only extraction of %s (stage 2) failed: %w: %s", exePath, err, out)
 	}
 	return nil
 }

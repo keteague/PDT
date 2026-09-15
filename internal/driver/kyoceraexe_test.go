@@ -152,3 +152,44 @@ func TestEnsureKyoceraExesExtracted_RepairsRawPEDumpLeftover(t *testing.T) {
 		t.Error("expected the raw-PE-dump leftover to be removed")
 	}
 }
+
+func TestEnsureKyoceraExeInfsExtracted_NoOpWithoutSevenZipConfigured(t *testing.T) {
+	old := SevenZipPath
+	SevenZipPath = ""
+	defer func() { SevenZipPath = old }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "KXDRIVER 8.6A.1412.exe"), []byte("not a real exe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureKyoceraExeInfsExtracted(dir)
+
+	if _, err := os.Stat(filepath.Join(dir, PdtInfCacheDirName)); !os.IsNotExist(err) {
+		t.Error("expected no extraction to happen with SevenZipPath unset")
+	}
+}
+
+func TestEnsureKyoceraExeInfsExtracted_SkipsAlreadyCachedVersion(t *testing.T) {
+	old := SevenZipPath
+	SevenZipPath = "some-path-that-would-fail-if-actually-invoked.exe"
+	defer func() { SevenZipPath = old }()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "KXDRIVER 8.6A.1412.exe"), []byte("not a real exe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(dir, PdtInfCacheDirName, "KXDriver_8.6A.1412")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureKyoceraExeInfsExtracted(dir)
+	// No assertion needed beyond "this didn't try to run a bogus
+	// SevenZipPath" - if the skip check didn't fire, extractInfsFromKyoceraExe
+	// would have tried (and failed) to run the bogus path, and the cache
+	// folder would have been removed afterward by the cleanup-on-failure path.
+	if _, err := os.Stat(cacheDir); err != nil {
+		t.Error("expected the already-cached version folder to be left alone, not removed")
+	}
+}

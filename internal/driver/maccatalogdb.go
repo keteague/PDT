@@ -20,7 +20,7 @@ import (
 // exist is to let a later build skip paying again when nothing has
 // actually changed (see IsCurrent below).
 //
-// One file per manufacturer (MacCatalogFileName, living inside that
+// One file per manufacturer (CatalogFileName, living inside that
 // manufacturer's own Drivers/macOS/<Manufacturer>/ folder), not one
 // combined catalog - deliberately, so rebuilding or deleting one
 // manufacturer's own catalog (to force a full re-index of just that one)
@@ -115,13 +115,16 @@ type MacCatalogVariant struct {
 	PackageModTime time.Time `json:"packageModTime,omitempty"`
 }
 
-// MacCatalogFileName returns the catalog filename for manufacturer, meant
-// to live inside that manufacturer's own Drivers/macOS/<Manufacturer>/
+// CatalogFileName returns the catalog filename for manufacturer, meant to
+// live inside that manufacturer's own Drivers/<platform>/<Manufacturer>/
 // folder - "catalog.<manufacturer, lowercased, spaces stripped>.json" (e.g.
 // Canon -> "catalog.canon.json", Konica Minolta ->
 // "catalog.konicaminolta.json"). Per-manufacturer, not one combined file -
-// see MacManufacturerCatalog's own doc comment for why.
-func MacCatalogFileName(manufacturer string) string {
+// see MacManufacturerCatalog's own doc comment for why. Shared by both
+// platforms (renamed from MacCatalogFileName once the Windows side grew its
+// own catalog.<mfg>.json too, GitHub issue #10) - pure string logic, nothing
+// mac-specific about it.
+func CatalogFileName(manufacturer string) string {
 	folder := strings.ToLower(strings.ReplaceAll(manufacturer, " ", ""))
 	return "catalog." + folder + ".json"
 }

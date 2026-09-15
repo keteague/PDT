@@ -414,7 +414,24 @@ func (d *Deployer) ensureDriverCurrent(ctx context.Context, resolved *driver.Res
 	if !needsInstall {
 		return nil
 	}
-	if err := EnsureDriverInstalled(resolved.InfPath, resolved.Name); err != nil {
+	infPath := resolved.InfPath
+	if resolved.ArchivePath != "" {
+		// resolved.InfPath is only the .inf-only cache's own tiny copy -
+		// missing every companion file (.dll/.cat/...) StageInf needs
+		// alongside it (SetupCopyOEMInfW reads them relative to the .inf's
+		// own directory - a hard Win32 constraint). Fully extract the real
+		// archive now, on demand, the first time this specific driver is
+		// actually being installed - GitHub issue #10's own catalog rework;
+		// see EnsureArchiveExtracted's own doc comment. Cheap on a repeat
+		// deploy of the same driver - already-extracted is reused, not
+		// re-extracted.
+		extractedDir, err := driver.EnsureArchiveExtracted(resolved.ArchivePath)
+		if err != nil {
+			return fmt.Errorf("extracting driver package for %q: %w", resolved.Name, err)
+		}
+		infPath = filepath.Join(extractedDir, resolved.InfRelPath)
+	}
+	if err := EnsureDriverInstalled(infPath, resolved.Name); err != nil {
 		return fmt.Errorf("installing driver %q: %w", resolved.Name, err)
 	}
 	log.OK("Installed driver %q (v%s, %s).", resolved.Name, resolved.Version, resolved.Date.Format("2006-01-02"))

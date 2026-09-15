@@ -17,6 +17,11 @@ type ResolvedDriver struct {
 	Date              time.Time
 	Version           string
 	IsExplicitVersion bool
+	// ArchivePath/InfRelPath: see ArchEntry's own doc comments - "" (both)
+	// when InfPath is already a real, deployable path as-is (no lazy
+	// extraction needed).
+	ArchivePath string
+	InfRelPath  string
 }
 
 var decoratedLabelRe = regexp.MustCompile(`^(.+) \(v([0-9.]+) - (\d{4}-\d{2}-\d{2})(?:, .+)?\)$`)
@@ -117,5 +122,8 @@ func Resolve(catalog Catalog, manufacturer, selection string) (*ResolvedDriver, 
 		return nil, nil
 	}
 
-	return &ResolvedDriver{Name: cleanName, InfPath: entry.InfPath, Date: entry.Date, Version: entry.Version, IsExplicitVersion: isExplicitVersion}, nil
+	return &ResolvedDriver{
+		Name: cleanName, InfPath: entry.InfPath, Date: entry.Date, Version: entry.Version, IsExplicitVersion: isExplicitVersion,
+		ArchivePath: entry.ArchivePath, InfRelPath: entry.InfRelPath,
+	}, nil
 }

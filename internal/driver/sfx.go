@@ -160,3 +160,71 @@ func extractSfxArchive(archivePath, destDir string) error {
 	}
 	return nil
 }
+
+// ensureSfxArchiveInfsExtracted is ensureSfxArchivesExtracted's .inf-only
+// sibling - GitHub issue #10's catalog rework. Same reasoning/skip
+// conventions as ensureZipInfsExtracted (its own doc comment, including why
+// PdtInfCacheDirName is deliberately NOT skipped while searching for source
+// archives): BuildCatalog only ever reads .inf text content, so this caches
+// just that instead of a full unpack. extractInfsFromSfxArchive also pulls
+// out any .msi it finds (not just .inf) - confirmed live as a real
+// necessity: Lexmark's own driver ships as exactly this shape, an outer
+// self-extracting RAR wrapping an inner .msi that itself contains the real
+// .inf, only reachable once ensureMsiInfsExtracted gets a chance to process
+// whatever .msi this step reveals.
+func ensureSfxArchiveInfsExtracted(root string) {
+	if SevenZipPath == "" {
+		return
+	}
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if strings.EqualFold(d.Name(), "etc") || strings.EqualFold(d.Name(), "Archive") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.EqualFold(filepath.Ext(path), ".exe") {
+			return nil
+		}
+		if kyoceraExeNameRe.MatchString(d.Name()) {
+			return nil // kyoceraexe.go's own two-stage extraction owns this one
+		}
+
+		destDir := infCacheDestDir(root, path)
+		if info, statErr := os.Stat(destDir); statErr == nil && info.IsDir() {
+			return nil // already extracted
+		}
+		if !isSelfExtractingArchive(path) {
+			return nil // an ordinary .exe, not an archive - leave it alone
+		}
+
+		if err := extractInfsFromSfxArchive(path, destDir); err != nil {
+			os.RemoveAll(destDir)
+			return nil
+		}
+		flattenRedundantWrapperDir(destDir)
+		writeSourceMarker(destDir, path)
+		return nil
+	})
+}
+
+// extractInfsFromSfxArchive is extractSfxArchive's .inf-only sibling - 7z's
+// own selective-extraction filter (trailing wildcard arguments plus -r to
+// match at any depth) pulls out just the matching entries, full internal
+// paths preserved, without unpacking the rest of the archive at all. Also
+// pulls out any .msi, not just .inf - see ensureSfxArchiveInfsExtracted's
+// own doc comment for why (Lexmark's real package needs it).
+func extractInfsFromSfxArchive(archivePath, destDir string) error {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return err
+	}
+	cmd := exec.Command(SevenZipPath, "x", archivePath, "-o"+destDir, "*.inf", "*.msi", "-r", "-y")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("7z .inf-only extraction of %s failed: %w: %s", archivePath, err, out)
+	}
+	return nil
+}

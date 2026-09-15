@@ -7,14 +7,14 @@ import (
 	"time"
 )
 
-func TestMacCatalogFileName(t *testing.T) {
+func TestCatalogFileName(t *testing.T) {
 	tests := []struct{ mfg, want string }{
 		{"Canon", "catalog.canon.json"},
 		{"Konica Minolta", "catalog.konicaminolta.json"},
 	}
 	for _, tt := range tests {
-		if got := MacCatalogFileName(tt.mfg); got != tt.want {
-			t.Errorf("MacCatalogFileName(%q) = %q, want %q", tt.mfg, got, tt.want)
+		if got := CatalogFileName(tt.mfg); got != tt.want {
+			t.Errorf("CatalogFileName(%q) = %q, want %q", tt.mfg, got, tt.want)
 		}
 	}
 }
@@ -44,7 +44,7 @@ func TestLoadMacManufacturerCatalog_CorruptFileReturnsEmptyReadyToUse(t *testing
 }
 
 func TestSaveLoadMacManufacturerCatalog_RoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "Canon", MacCatalogFileName("Canon"))
+	path := filepath.Join(t.TempDir(), "Canon", CatalogFileName("Canon"))
 	now := time.Now().Truncate(time.Second) // JSON round-trips to second precision
 	original := MacManufacturerCatalog{
 		Provenance: map[string]MacFamilyProvenance{

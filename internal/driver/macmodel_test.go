@@ -222,7 +222,7 @@ func TestBuildMacModelIndex_SecondBuildReusesCatalogWithoutReinspecting(t *testi
 		t.Errorf("expected no changes on a first-ever build (nothing to diff against), got %v", changes)
 	}
 
-	catalogPath := filepath.Join(dir, "Canon", MacCatalogFileName("Canon"))
+	catalogPath := filepath.Join(dir, "Canon", CatalogFileName("Canon"))
 	if _, err := os.Stat(catalogPath); err != nil {
 		t.Fatalf("expected %s to exist after a persisted build: %v", catalogPath, err)
 	}
@@ -389,7 +389,7 @@ func TestBuildMacModelIndex_MigratesLegacyCatalogMissingSourcePackagePath(t *tes
 	// Simulate a pre-2026-09-13 catalog file by stripping SourcePackagePath
 	// from every persisted entry, exactly like a real catalog.json written
 	// before that field existed.
-	catalogPath := filepath.Join(dir, "Canon", MacCatalogFileName("Canon"))
+	catalogPath := filepath.Join(dir, "Canon", CatalogFileName("Canon"))
 	legacy := LoadMacManufacturerCatalog(catalogPath)
 	for model, variants := range legacy.Models {
 		for i := range variants {
@@ -450,7 +450,7 @@ func TestBuildMacModelIndex_PrunesOrphanedPackageNoLongerInCurrentSet(t *testing
 	// used to be individually tracked but is no longer part of the current
 	// set at all (the real scenario: a duplicate OS-folder copy that
 	// packagesInFamily's own dedup now correctly excludes).
-	catalogPath := filepath.Join(dir, "Canon", MacCatalogFileName("Canon"))
+	catalogPath := filepath.Join(dir, "Canon", CatalogFileName("Canon"))
 	withOrphan := LoadMacManufacturerCatalog(catalogPath)
 	const orphanPath = "/nonexistent/orphaned/UFRII_test_fixture_stale_copy.pkg"
 	if withOrphan.ExtraProvenance["UFRII"] == nil {
@@ -515,7 +515,7 @@ func TestBuildMacModelIndex_PrunesFamilyThatDisappearedEntirely(t *testing.T) {
 		t.Error("expected a 'models removed' change to be reported")
 	}
 
-	catalogPath := filepath.Join(dir, "Canon", MacCatalogFileName("Canon"))
+	catalogPath := filepath.Join(dir, "Canon", CatalogFileName("Canon"))
 	persisted := LoadMacManufacturerCatalog(catalogPath)
 	if len(persisted.Models) != 0 {
 		t.Errorf("expected the persisted catalog to be pruned to zero models, got %d - stale entries survived", len(persisted.Models))

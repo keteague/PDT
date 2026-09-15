@@ -475,7 +475,7 @@ func cachedVariantFilesExist(variants map[string][]MacCatalogVariant) bool {
 //
 // macRoot is the Drivers/macOS directory - each manufacturer with real
 // per-model data gets its own catalog file there (inside that
-// manufacturer's own subfolder - MacCatalogFileName), so it travels with a
+// manufacturer's own subfolder - CatalogFileName), so it travels with a
 // portable Drivers folder and can be deleted per-manufacturer to force a
 // full re-index of just that one. persist controls whether an updated
 // catalog actually gets written back to macRoot at all - false when this
@@ -499,7 +499,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 	for mfg, tokens := range macFamilyPreference {
 		packages := catalog.Packages[mfg]
 		mfgFolder := strings.ReplaceAll(mfg, " ", "")
-		catalogPath := filepath.Join(macRoot, mfgFolder, MacCatalogFileName(mfg))
+		catalogPath := filepath.Join(macRoot, mfgFolder, CatalogFileName(mfg))
 		cat := LoadMacManufacturerCatalog(catalogPath)
 		dirty := false
 

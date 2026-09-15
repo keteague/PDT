@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"PDT/internal/cloudsync"
 	"PDT/internal/driver"
 )
 
@@ -17,7 +18,56 @@ type Settings struct {
 	PreinstallBasePath string            `json:"preinstallBasePath"`
 	ManufacturerURLs   map[string]string `json:"manufacturerUrls"`
 	ManufacturerOrder  []string          `json:"manufacturerOrder"`
+	CloudSync          CloudSyncSettings `json:"cloudSync"`
+
+	// CloudSyncSecretKey is write-only, never persisted to settings.json and
+	// never echoed back by GetSettings - SaveSettings reads it, stores it in
+	// the OS keychain (see internal/cloudsync.SaveSecretKey), and clears it
+	// back to "" before writing s to disk or keeping it as a.settings, the
+	// same "type the new value, never see it again" shape a password-change
+	// form normally has. Left "" on a save means "leave whatever secret is
+	// already stored alone" - Settings can be saved for any other reason
+	// (renaming a manufacturer URL, say) without re-entering the R2 key
+	// every time.
+	CloudSyncSecretKey string `json:"cloudSyncSecretKey,omitempty"`
+	// CloudSyncHasSecret is populated fresh on every GetSettings/SaveSettings
+	// response from the OS keychain itself (see internal/cloudsync.HasSecretKey)
+	// - whatever value it holds when read back from settings.json on disk is
+	// ignored, so a stale copy sitting there from an old save can't lie
+	// about whether a secret is actually configured.
+	CloudSyncHasSecret bool `json:"cloudSyncHasSecret"`
 }
+
+// CloudSyncSettings is the non-secret half of the Cloud Sync (R2) config -
+// everything needed to reach the bucket except the Secret Access Key itself,
+// which lives in the OS keychain instead (see Settings.CloudSyncSecretKey).
+type CloudSyncSettings struct {
+	// Endpoint is the R2 S3-compatible endpoint, e.g.
+	// "https://<account-id>.r2.cloudflarestorage.com" - no bucket path on
+	// the end (Bucket below is passed separately to every API call).
+	Endpoint string `json:"endpoint"`
+	Bucket   string `json:"bucket"`
+	// Prefix scopes this tool to one folder within Bucket rather than the
+	// whole bucket - Ken's own bucket has a single "Drivers" folder in it,
+	// but nothing here assumes that's the only thing ever stored in a
+	// shared bucket.
+	Prefix      string `json:"prefix"`
+	AccessKeyID string `json:"accessKeyId"`
+	// ConcurrentTransfers bounds how many files SyncCloud transfers at
+	// once - see SyncCloud's own doc comment for how this interacts with
+	// starting the next queued file once the current one reaches 95%
+	// (Ken's own request: actual simultaneous transfers can transiently
+	// run a little over this near a handoff). Always >=1 - SaveSettings
+	// clamps anything else, since 0 would mean no transfer could ever
+	// start at all.
+	ConcurrentTransfers int `json:"concurrentTransfers"`
+}
+
+// defaultConcurrentTransfers is Cloud Sync's own default worker count -
+// Ken's own explicit choice, not derived from anything (unlike
+// copyTreeWorkers' own "measured against real USB hardware" reasoning,
+// there's no equivalent real-world measurement against R2 yet).
+const defaultConcurrentTransfers = 3
 
 // installedAppDataDir, defaultDriversBasePath, defaultSaveFileBasePath: see
 // settings_windows.go/settings_darwin.go - installedAppDataDir is genuinely
@@ -128,18 +178,19 @@ func loadSettings() Settings {
 		PreinstallBasePath: defaultPreinstallBasePath(),
 		ManufacturerURLs:   defaultManufacturerURLs(),
 		ManufacturerOrder:  reconcileManufacturerOrder(nil),
+		CloudSync:          defaultCloudSyncSettings(),
 	}
 	path, err := settingsFilePath()
 	if err != nil {
-		return s
+		return withCloudSyncHasSecret(s)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return s
+		return withCloudSyncHasSecret(s)
 	}
 	var loaded Settings
 	if err := json.Unmarshal(data, &loaded); err != nil {
-		return s
+		return withCloudSyncHasSecret(s)
 	}
 	if loaded.SaveFileBasePath != "" {
 		s.SaveFileBasePath = loaded.SaveFileBasePath
@@ -156,10 +207,54 @@ func loadSettings() Settings {
 		}
 	}
 	s.ManufacturerOrder = reconcileManufacturerOrder(loaded.ManufacturerOrder)
+	if loaded.CloudSync.Endpoint != "" {
+		s.CloudSync.Endpoint = loaded.CloudSync.Endpoint
+	}
+	if loaded.CloudSync.Bucket != "" {
+		s.CloudSync.Bucket = loaded.CloudSync.Bucket
+	}
+	if loaded.CloudSync.Prefix != "" {
+		s.CloudSync.Prefix = loaded.CloudSync.Prefix
+	}
+	if loaded.CloudSync.AccessKeyID != "" {
+		s.CloudSync.AccessKeyID = loaded.CloudSync.AccessKeyID
+	}
+	if loaded.CloudSync.ConcurrentTransfers > 0 {
+		s.CloudSync.ConcurrentTransfers = loaded.CloudSync.ConcurrentTransfers
+	}
+	return withCloudSyncHasSecret(s)
+}
+
+// withCloudSyncHasSecret sets s.CloudSyncHasSecret from the OS keychain
+// itself - always recomputed, never trusted from whatever settings.json
+// happened to have on disk (see Settings.CloudSyncHasSecret's own doc
+// comment).
+func withCloudSyncHasSecret(s Settings) Settings {
+	s.CloudSyncHasSecret = cloudsync.HasSecretKey()
+	s.CloudSyncSecretKey = ""
 	return s
 }
 
+// defaultCloudSyncSettings seeds the account/bucket Ken's own PDT bucket
+// already uses - "Drivers" is the one folder in it (mirroring driversRoot()'s
+// own name), so a fresh install only ever needs an Access Key ID and Secret
+// Access Key typed in before Cloud Sync works, not the whole endpoint/bucket
+// pair re-entered by hand.
+func defaultCloudSyncSettings() CloudSyncSettings {
+	return CloudSyncSettings{
+		Endpoint:            "https://60a85894a285594161353b7731fa385f.r2.cloudflarestorage.com",
+		Bucket:              "pdt",
+		Prefix:              "Drivers/",
+		ConcurrentTransfers: defaultConcurrentTransfers,
+	}
+}
+
 func saveSettingsToDisk(s Settings) error {
+	// Never let the plaintext secret reach disk, even defensively - callers
+	// (SaveSettings) already clear it before calling this, but a secret
+	// belongs in the OS keychain and nowhere else, so this is enforced here
+	// too rather than trusted to every future caller getting that right.
+	s.CloudSyncSecretKey = ""
 	path, err := settingsFilePath()
 	if err != nil {
 		return err

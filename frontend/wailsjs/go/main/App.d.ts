@@ -6,6 +6,10 @@ import {config} from '../models';
 
 export function AllManufacturers():Promise<Array<string>>;
 
+export function CancelCloudSync():Promise<void>;
+
+export function CancelFlashSync():Promise<void>;
+
 export function CheckExportCollisions(arg1:string,arg2:string):Promise<main.ExportCollisionResult>;
 
 export function DefaultDriverFor(arg1:string):Promise<string>;
@@ -23,6 +27,8 @@ export function FormatDrives(arg1:Array<string>):Promise<main.BatchDriveResult>;
 export function GetAppInfo():Promise<main.AppInfo>;
 
 export function GetCatalogStatus():Promise<main.CatalogStatus>;
+
+export function GetCloudSyncPlan():Promise<main.CloudSyncPlanResult>;
 
 export function GetSettings():Promise<main.Settings>;
 
@@ -58,11 +64,19 @@ export function RefreshDriverCatalog():Promise<main.CatalogStatus>;
 
 export function ResetConfigPath():Promise<void>;
 
+export function SaveCloudSyncSelection(arg1:Array<string>):Promise<void>;
+
 export function SaveConfiguration(arg1:config.SavedConfig):Promise<main.PathResult>;
 
 export function SaveSettings(arg1:main.Settings):Promise<main.Settings>;
 
+export function SetCloudSyncPaused(arg1:boolean):Promise<void>;
+
 export function StopDeploy():Promise<void>;
+
+export function SyncCloud(arg1:Array<string>):Promise<main.CloudSyncResult>;
+
+export function SyncDriversFromFlashDrive(arg1:string):Promise<void>;
 
 export function SyncDriversToFlashDrives(arg1:Array<string>):Promise<main.BatchDriveResult>;
 

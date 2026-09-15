@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"PDT/internal/cloudsync"
 	"PDT/internal/config"
 	"PDT/internal/driver"
 	"PDT/internal/printer"
@@ -79,6 +81,24 @@ type App struct {
 	deployMu     sync.Mutex
 	deployCancel context.CancelFunc
 
+	// flashSyncMu guards flashSyncCancel below, the same pattern as
+	// deployMu/deployCancel but for a running Sync/Write-to-Flash-Drive
+	// transfer instead of a running Deploy - a separate field since the two
+	// are unrelated operations that can each have their own in-flight
+	// cancellation, and canceling one must never touch the other.
+	flashSyncMu     sync.Mutex
+	flashSyncCancel context.CancelFunc
+
+	// cloudSyncMu guards cloudSyncCancel/cloudSyncGate below - the same
+	// pattern as flashSyncMu/flashSyncCancel, for a running SyncCloud call
+	// instead of a flash-drive transfer. cloudSyncGate is additionally
+	// non-nil only while a SyncCloud call is actually in flight, since
+	// SetCloudSyncPaused needs somewhere to route a Pause click to when
+	// nothing is running (a no-op, not a panic).
+	cloudSyncMu     sync.Mutex
+	cloudSyncCancel context.CancelFunc
+	cloudSyncGate   *cloudsync.PauseGate
+
 	// lastConfigPath is the full path OpenConfiguration most recently loaded
 	// from, or SaveConfiguration most recently wrote to - "" if neither has
 	// happened yet this session (or ResetConfigPath cleared it). Read by
@@ -128,6 +148,14 @@ func (a *App) GetSettings() Settings {
 // replaced with its own default rather than saved as literally empty, so
 // clearing a field and saving can't leave a file dialog with no starting
 // directory, or "Check for Updates" with nowhere to go.
+//
+// s.CloudSyncSecretKey, if non-empty, is the one field never written to
+// settings.json at all - see its own doc comment - saved to the OS keychain
+// instead and cleared from both the disk copy and a.settings before this
+// returns, so it can never be read back out through GetSettings either.
+// Left "" (the common case - Settings can be saved for unrelated reasons
+// without retyping the R2 key every time), whatever secret is already
+// stored is left untouched.
 func (a *App) SaveSettings(s Settings) (Settings, error) {
 	<-a.ready
 	if s.SaveFileBasePath == "" {
@@ -148,6 +176,15 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 		}
 	}
 	s.ManufacturerOrder = reconcileManufacturerOrder(s.ManufacturerOrder)
+	if s.CloudSync.ConcurrentTransfers <= 0 {
+		s.CloudSync.ConcurrentTransfers = defaultConcurrentTransfers
+	}
+	if s.CloudSyncSecretKey != "" {
+		if err := cloudsync.SaveSecretKey(s.CloudSyncSecretKey); err != nil {
+			return Settings{}, fmt.Errorf("saving R2 secret key: %w", err)
+		}
+	}
+	s = withCloudSyncHasSecret(s)
 	if err := saveSettingsToDisk(s); err != nil {
 		return Settings{}, err
 	}

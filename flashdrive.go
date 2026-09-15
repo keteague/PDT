@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -109,6 +110,18 @@ func (e *etaEstimator) sample(now time.Time, doneBytes, totalBytes int64) int {
 		return 0
 	}
 	return int(float64(totalBytes-doneBytes) / rate)
+}
+
+// rate returns e's own current decayed bytes-per-second estimate (0 before
+// sample has ever been called, or once its window has fully decayed away) -
+// the same number sample derives its own return value from, exposed
+// separately for a caller that wants to show a live transfer-rate meter
+// rather than (or alongside) a time-remaining estimate.
+func (e *etaEstimator) rate() float64 {
+	if e.windowSeconds <= 0 {
+		return 0
+	}
+	return e.windowBytes / e.windowSeconds
 }
 
 // newFlashCopyProgressFunc returns a stepProgressFunc that emits
@@ -225,6 +238,43 @@ func (a *App) FormatDrives(letters []string) BatchDriveResult {
 	return result
 }
 
+// beginFlashSync starts a cancelable child of a.ctx and stores it as the
+// currently-running Sync/Write-to-Flash-Drive transfer (see
+// flashSyncMu/flashSyncCancel's own doc comment) - the same
+// derive-a-child-context-so-CancelFlashSync-only-touches-this-one-call
+// pattern Deploy/StopDeploy already use. The returned done func clears that
+// stored cancel and releases ctx's own resources; callers defer it.
+func (a *App) beginFlashSync() (ctx context.Context, done func()) {
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.flashSyncMu.Lock()
+	a.flashSyncCancel = cancel
+	a.flashSyncMu.Unlock()
+	return ctx, func() {
+		a.flashSyncMu.Lock()
+		a.flashSyncCancel = nil
+		a.flashSyncMu.Unlock()
+		cancel()
+	}
+}
+
+// CancelFlashSync cancels the currently-running Sync/Write-to-Flash-Drive
+// transfer, if any (a no-op otherwise). Unlike StopDeploy's own "let the
+// current step finish" semantics - a Deploy step half-applied to a real
+// printer object is a state worth avoiding - an interrupted file copy has no
+// equivalent concern, so this stops as close to immediately as possible: the
+// one file each worker is mid-copying when Cancel lands is aborted and its
+// partial destination content deleted (see copyTreeMerge/copyFile), and no
+// further file starts. Any drive not yet reached in a multi-drive batch is
+// reported as failed/canceled rather than silently skipped.
+func (a *App) CancelFlashSync() {
+	a.flashSyncMu.Lock()
+	cancel := a.flashSyncCancel
+	a.flashSyncMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 // WritePortablePDT copies a portable PDT install - the running executable
 // plus this laptop's own Drivers/ and Configs/ folders (driversRoot()/
 // configsRoot(), the same "next to the executable" locations PDT already
@@ -248,8 +298,15 @@ func (a *App) WritePortablePDT(letters []string) BatchDriveResult {
 		return result
 	}
 
+	ctx, done := a.beginFlashSync()
+	defer done()
+
 	for _, letter := range letters {
-		if err := writePortablePDTTo(letter, exeName, exeData, a.newFlashCopyProgressFunc(letter)); err != nil {
+		if ctx.Err() != nil {
+			result.Failed[letter] = ctx.Err().Error()
+			continue
+		}
+		if err := writePortablePDTTo(ctx, letter, exeName, exeData, a.newFlashCopyProgressFunc(letter)); err != nil {
 			result.Failed[letter] = err.Error()
 			continue
 		}
@@ -269,15 +326,54 @@ func (a *App) WritePortablePDT(letters []string) BatchDriveResult {
 func (a *App) SyncDriversToFlashDrives(letters []string) BatchDriveResult {
 	<-a.ready
 	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}}
+
+	ctx, done := a.beginFlashSync()
+	defer done()
+
 	for _, letter := range letters {
+		if ctx.Err() != nil {
+			result.Failed[letter] = ctx.Err().Error()
+			continue
+		}
 		progress := a.newFlashCopyProgressFunc(letter)
-		if err := syncDriversTo(letter, func(p CopyProgress) { progress("Drivers", p) }); err != nil {
+		if err := syncDriversTo(ctx, letter, func(p CopyProgress) { progress("Drivers", p) }); err != nil {
 			result.Failed[letter] = err.Error()
 			continue
 		}
 		result.Succeeded = append(result.Succeeded, letter)
 	}
 	return result
+}
+
+// SyncDriversFromFlashDrive copies letter's own Drivers folder onto this
+// laptop's Drivers folder (driversRoot()) - the reverse direction of
+// SyncDriversToFlashDrives, for pulling in whatever new driver packages
+// another technician's own sync run left on a shared flash drive since this
+// laptop last saw it. Single-drive rather than batched like the
+// to-flash-drive direction: pulling from more than one flash drive into the
+// same destination in one call would make "which drive's copy of a
+// same-named file wins" an unanswerable question, so the frontend has the
+// technician pick exactly one source drive at a time. Shares
+// flashSyncCancel with the to-flash-drive direction and WritePortablePDT
+// (see beginFlashSync) - only one such transfer is ever expected to be
+// running at once, and Cancel should stop whichever one that is.
+func (a *App) SyncDriversFromFlashDrive(letter string) error {
+	<-a.ready
+
+	src := filepath.Join(letter, "Drivers")
+	dest := driversRoot()
+	if samePath(src, dest) {
+		return nil
+	}
+	if !dirExists(src) {
+		return nil
+	}
+
+	ctx, done := a.beginFlashSync()
+	defer done()
+
+	progress := a.newFlashCopyProgressFunc(letter)
+	return copyTreeMerge(ctx, dest, src, func(p CopyProgress) { progress("Drivers", p) })
 }
 
 // writePortablePDTTo copies exeData to letter, then this laptop's own
@@ -303,7 +399,7 @@ func (a *App) SyncDriversToFlashDrives(letters []string) BatchDriveResult {
 // a progress dialog, pass nil throughout).
 type stepProgressFunc func(step string, progress CopyProgress)
 
-func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepProgressFunc) error {
+func writePortablePDTTo(ctx context.Context, letter, exeName string, exeData []byte, progress stepProgressFunc) error {
 	if err := os.WriteFile(filepath.Join(letter, exeName), exeData, 0o755); err != nil {
 		return fmt.Errorf("writing %s: %w", exeName, err)
 	}
@@ -314,14 +410,18 @@ func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepPro
 	// that), but this function used to still throw away everything after
 	// the first step that returned any error at all, which meant one bad
 	// file part-way through Drivers previously skipped Configs and tools
-	// entirely too, on top of whatever Drivers itself already skipped.
+	// entirely too, on top of whatever Drivers itself already skipped. A
+	// canceled ctx makes each of these near-instant no-ops rather than
+	// skipping them outright, for the same reason: simpler than threading a
+	// "did an earlier step get canceled" flag through, and copyTreeMerge
+	// already returns fast once ctx.Err() is set.
 	var errs []error
 	driversProgress := func(p CopyProgress) {
 		if progress != nil {
 			progress("Drivers", p)
 		}
 	}
-	if err := syncDriversTo(letter, driversProgress); err != nil {
+	if err := syncDriversTo(ctx, letter, driversProgress); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -332,7 +432,7 @@ func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepPro
 				progress("Configs", p)
 			}
 		}
-		if err := copyTreeMerge(configsDest, configsRoot(), configsProgress); err != nil {
+		if err := copyTreeMerge(ctx, configsDest, configsRoot(), configsProgress); err != nil {
 			errs = append(errs, fmt.Errorf("copying Configs: %w", err))
 		}
 	}
@@ -346,7 +446,7 @@ func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepPro
 				progress("7-Zip tools", p)
 			}
 		}
-		if err := copyTreeMerge(filepath.Join(letter, "tools", "7zip"), sevenZipToolsDir(), toolsProgress); err != nil {
+		if err := copyTreeMerge(ctx, filepath.Join(letter, "tools", "7zip"), sevenZipToolsDir(), toolsProgress); err != nil {
 			errs = append(errs, fmt.Errorf("copying 7-Zip tools: %w", err))
 		}
 	}
@@ -361,7 +461,7 @@ func writePortablePDTTo(letter, exeName string, exeData []byte, progress stepPro
 // shared step between writePortablePDTTo (full "Write to Flash Drive") and
 // the toolbar's Sync button (drivers only, no exe/Configs/tools, for topping
 // up a flash drive that already exists).
-func syncDriversTo(letter string, onProgress func(CopyProgress)) error {
+func syncDriversTo(ctx context.Context, letter string, onProgress func(CopyProgress)) error {
 	driversDest := filepath.Join(letter, "Drivers")
 	src := driversRoot()
 	if samePath(driversDest, src) {
@@ -377,7 +477,7 @@ func syncDriversTo(letter string, onProgress func(CopyProgress)) error {
 	}
 	var errs []error
 	if dirExists(src) {
-		if err := copyTreeMerge(driversDest, src, onProgress); err != nil {
+		if err := copyTreeMerge(ctx, driversDest, src, onProgress); err != nil {
 			errs = append(errs, fmt.Errorf("copying Drivers: %w", err))
 		}
 	}

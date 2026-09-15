@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -47,7 +48,7 @@ func TestWritePortablePDTTo_AlwaysCreatesConfigsAndFullDriversScaffold(t *testin
 	currentConfigsBasePath = filepath.Join(t.TempDir(), "Configs-does-not-exist")
 
 	dest := t.TempDir()
-	if err := writePortablePDTTo(dest, "PDT.exe", []byte("fake exe bytes"), nil); err != nil {
+	if err := writePortablePDTTo(context.Background(), dest, "PDT.exe", []byte("fake exe bytes"), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,12 +104,12 @@ func TestWritePortablePDTTo_RepeatWriteDoesNotDropRealDrivers(t *testing.T) {
 	currentConfigsBasePath = filepath.Join(t.TempDir(), "Configs-does-not-exist")
 
 	dest := t.TempDir()
-	if err := writePortablePDTTo(dest, "PDT.exe", []byte("fake exe bytes"), nil); err != nil {
+	if err := writePortablePDTTo(context.Background(), dest, "PDT.exe", []byte("fake exe bytes"), nil); err != nil {
 		t.Fatalf("first write failed: %v", err)
 	}
 	// Second write to the SAME already-populated destination - this is what
 	// os.CopyFS choked on.
-	if err := writePortablePDTTo(dest, "PDT.exe", []byte("fake exe bytes, updated"), nil); err != nil {
+	if err := writePortablePDTTo(context.Background(), dest, "PDT.exe", []byte("fake exe bytes, updated"), nil); err != nil {
 		t.Fatalf("second write to an already-populated destination failed: %v", err)
 	}
 
@@ -141,7 +142,7 @@ func TestWritePortablePDTTo_CopiesSevenZipTools(t *testing.T) {
 	}
 
 	dest := t.TempDir()
-	if err := writePortablePDTTo(dest, "PDT.exe", []byte("fake exe bytes"), nil); err != nil {
+	if err := writePortablePDTTo(context.Background(), dest, "PDT.exe", []byte("fake exe bytes"), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "tools", "7zip", "7z.exe")); err != nil {
@@ -173,7 +174,7 @@ func TestSyncDriversTo_SkipsWhenTargetIsTheSameAsSource(t *testing.T) {
 
 	// root's own Drivers subfolder IS driversRoot() - syncing "to root" would
 	// make the destination and source identical.
-	if err := syncDriversTo(root, nil); err != nil {
+	if err := syncDriversTo(context.Background(), root, nil); err != nil {
 		t.Fatalf("expected a same-path sync to be a silent no-op, got error: %v", err)
 	}
 

@@ -1203,14 +1203,15 @@ might be restricted.
 
 ### Settings (gear icon, top-right)
 
-A modal with three tabs: **General** (Save File Base Path, plus a drag-and-drop **Manufacturer sort
+A modal with four tabs: **General** (Save File Base Path, plus a drag-and-drop **Manufacturer sort
 order** list - see below), **External Sites** (one editable URL field per manufacturer - every
 manufacturer PDT knows about, not just ones with drivers currently on disk; see "Drivers folder
 layout" above - seeded with `defaultManufacturerURLs` in `settings.go`, saved together with the rest
-of Settings), and **About** (version, author, a clickable GitHub link, and **Check for Updates** - see
-below). The modal is a fixed size regardless of which tab is showing or how many manufacturers there
-are - both External Sites and the sort-order list scroll internally rather than growing the window
-once they're taller than that fixed size. The Defaults panel's own
+of Settings), **Cloud Sync** (R2 bucket connection details - see below), and **About** (version,
+author, a clickable GitHub link, and **Check for Updates** - see below). The modal is a fixed size
+regardless of which tab is showing or how many manufacturers there are - both External Sites and the
+sort-order list scroll internally rather than growing the window once they're taller than that fixed
+size. The Defaults panel's own
 **Check for Updates** button (a different one - printer driver updates, not app updates) opens the
 currently-selected manufacturer's configured URL in the system browser (`OpenManufacturerURL` ->
 `runtime.BrowserOpenURL`) - no vendor exposes an API to actually check the latest driver version, so
@@ -1238,6 +1239,82 @@ manufacturers still present, drops any name no longer recognized, and appends an
 in the saved order (freshly added to `driver.Manufacturers`, or never dragged by this user) at the end
 - so adding a ninth/tenth manufacturer later never causes it to silently disappear from either the
 reorder list or the dropdowns.
+
+### Cloud Sync (toolbar icon, Settings > Cloud Sync, `internal/cloudsync`, `cloudsync_app.go`)
+
+A shared Cloudflare R2 bucket every technician's own PDT syncs its Drivers folder against, so a
+driver package one technician downloads becomes available to everyone else without a flash drive
+physically changing hands - the multi-technician equivalent of flash-drive Sync (see "Which
+drivers should I use?" above), between a laptop and a bucket every technician reads from and
+writes to, rather than between a laptop and one specific plugged-in drive. R2 was chosen
+specifically for its zero egress fee - with several technicians repeatedly pulling a growing,
+multi-GB shared catalog, egress (not storage) is where a conventional S3-compatible provider's
+real cost would show up.
+
+**Settings > Cloud Sync** holds the connection details: Endpoint, Bucket, Folder (the prefix
+within the bucket PDT is scoped to - "Drivers/" for Ken's own bucket), Access Key ID, and
+Concurrent Transfers (see below). The Secret Access Key is the one field handled differently -
+it's written to the OS keychain (`internal/cloudsync/keyring.go`,
+`github.com/zalando/go-keyring`) via a write-only `Settings.CloudSyncSecretKey` field that's
+never persisted to the plaintext `settings.json` and never echoed back to the UI once saved
+(leaving it blank on a later Save keeps whatever secret is already stored, rather than clearing
+it) - the one credential in this whole app worth that treatment, since it grants write access to
+a bucket every technician shares.
+
+**The toolbar's Cloud Sync button** (vertical bidirectional-arrows icon) opens a tree view built
+client-side from `GetCloudSyncPlan`'s own flat list of relative paths (`internal/cloudsync/plan.go`'s
+`BuildPlan`, which diffs the local Drivers folder against the bucket by size alone - the same
+size-as-proxy-for-identical reasoning `copyTreeMerge` already uses locally, see its own doc
+comment). Every path lands in one of four buckets: **upload** (local only), **download** (bucket
+only), **synced** (present on both sides, same size - nothing to do, not shown in the tree at
+all), or **conflict** (present on both sides with *different* sizes - never auto-resolved in
+either direction, since guessing wrong on a shared bucket could destroy another technician's real
+content; surfaced in the tree with no checkbox at all, left completely alone until resolved by
+hand). **Sync is additive-only** - a file missing on one side only ever triggers a copy, never a
+deletion, so no technician's local mistake (or a bug) can cascade into removing the shared
+bucket's content for everyone else.
+
+The tree's checkboxes are per-file and tri-state per-folder; the selection persists per-technician
+across sessions (`cloudsyncstate.go`'s own `Deselected` set - everything **not** explicitly
+unchecked defaults to selected, so a brand-new file nobody has looked at yet still syncs by
+default). A file the tree hasn't shown this technician before is highlighted (amber, plus a small
+dot) until the next time the tree is opened, then clears for good (`cloudSyncState.Seen`).
+
+**Transfers are genuinely resumable**, not just retried from scratch: files at or above 32MiB
+(`cloudsync.MultipartThreshold`) use real S3 multipart upload, tracking which parts already
+landed on the server (`internal/cloudsync/transfer.go`'s `resumeOrCreateUpload`/
+`listAndValidateParts`) so an interrupted upload - Cancel, a lost connection, or PDT simply being
+closed mid-transfer - continues from the parts already there rather than from byte zero (a
+mismatch against what the *current* local file would produce, e.g. because it changed since the
+interrupted attempt, is detected and the stale upload is abandoned rather than trusted). Downloads
+resume the same way via an HTTP Range request against a `.pdt-partial` sidecar file. **Pause**
+(`cloudsync.PauseGate`) blocks between reads without losing any already-transferred bytes - Resume
+continues mid-file, not just mid-batch. **Cancel** is immediate and destructive on purpose:
+deletes a download's own partial file and aborts an upload's own incomplete multipart upload on
+the bucket (R2, like S3, bills for abandoned multipart storage left sitting there otherwise).
+
+**Concurrent Transfers** (Settings > Cloud Sync, default 3) bounds how many files transfer at
+once - implemented as a semaphore in `SyncCloud` (`cloudsync_app.go`) whose slot is released the
+moment a file reaches 95% done, not strictly at 100%, so the next queued file starts while the
+outgoing one is still finishing its own last few percent (often mostly finalization overhead - a
+multipart `CompleteMultipartUpload` round trip, a final rename) rather than a lane sitting idle
+waiting that out first. Actual simultaneous transfers can therefore transiently run a little over
+the configured count right at a handoff.
+
+**The progress dialog** shows a rolling single "spotlight" file (the longest-running transfer
+still in progress) with its own full path/big bar/per-file ETA, everything else concurrently
+transferring or still queued below it (concurrent ones get their own small inline bar), and the
+whole batch's combined progress/transfer-rate/ETA at the bottom - driven by two Wails events,
+`cloudsync-progress` (one file) and `cloudsync-total-progress` (the whole run), both throttled to
+150ms like `flashcopy-progress` already is.
+
+**Original file timestamps survive the round trip** - S3-compatible storage otherwise always
+stamps an object's `LastModified` as upload time, not the source file's own mtime, which would
+make every driver package downloaded by another technician look freshly created today. Each
+upload attaches its own mtime as custom object metadata (`x-amz-meta-mtime`,
+`internal/cloudsync/cloudsync.go`'s `mtimeMetaKey`); each download reads it back and restores it
+locally via `os.Chtimes`. `copyFile` (`copytree.go`) does the same for flash-drive Sync/Write to
+Flash Drive, which had the identical gap before Cloud Sync's own version of it prompted the fix.
 
 ### Checking for and applying app updates (`internal/update`, About tab)
 

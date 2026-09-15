@@ -211,6 +211,14 @@ document.querySelector('#app').innerHTML = `
         <polyline points="9,12 5,16 9,20"/>
       </svg>
     </button>
+    <button id="btnCloudSync" class="icon-btn-inline" title="Sync this computer's Drivers folder with the team's shared cloud repository - upload new local files, download new files other technicians have added.">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+        <line x1="8" y1="3" x2="8" y2="19"/>
+        <polyline points="4,15 8,19 12,15"/>
+        <line x1="16" y1="21" x2="16" y2="5"/>
+        <polyline points="12,9 16,5 20,9"/>
+      </svg>
+    </button>
     <button id="btnOpenDriversFolder" class="icon-btn-inline" title="Open Drivers folder">&#128194;</button>
     <span class="catalog-warning" id="catalogWarning" hidden></span>
     <button id="btnSettings" class="icon-btn" title="Settings">&#9881;</button>
@@ -222,6 +230,7 @@ document.querySelector('#app').innerHTML = `
       <div class="tabs">
         <button type="button" class="tab-btn active" data-tab="general">General</button>
         <button type="button" class="tab-btn" data-tab="sites">External Sites</button>
+        <button type="button" class="tab-btn" data-tab="cloudsync">Cloud Sync</button>
         <button type="button" class="tab-btn" data-tab="about">About</button>
       </div>
       <div class="tab-panel" data-tab-panel="general">
@@ -256,6 +265,35 @@ document.querySelector('#app').innerHTML = `
           automatically, so "Check for Updates" in Defaults just opens the page below for the
           selected manufacturer.</p>
         <div id="settingsSitesPanel"></div>
+      </div>
+      <div class="tab-panel" data-tab-panel="cloudsync" hidden>
+        <p class="modal-hint">Keeps this computer's Drivers folder in sync with the team's shared
+          Cloudflare R2 bucket, so every technician benefits from drivers anyone else downloads.</p>
+        <label class="modal-field">
+          R2 Endpoint
+          <input type="text" id="cloudSyncEndpoint" placeholder="https://&lt;account-id&gt;.r2.cloudflarestorage.com">
+        </label>
+        <label class="modal-field">
+          Bucket
+          <input type="text" id="cloudSyncBucket" placeholder="pdt">
+        </label>
+        <label class="modal-field">
+          Folder
+          <input type="text" id="cloudSyncPrefix" placeholder="Drivers/">
+        </label>
+        <label class="modal-field">
+          Access Key ID
+          <input type="text" id="cloudSyncAccessKeyId" autocomplete="off">
+        </label>
+        <label class="modal-field">
+          Secret Access Key
+          <input type="password" id="cloudSyncSecretKey" autocomplete="off">
+        </label>
+        <p class="modal-hint" id="cloudSyncSecretStatus"></p>
+        <label class="modal-field" title="How many files Cloud Sync transfers at the same time.">
+          Concurrent Transfers
+          <input type="number" id="cloudSyncConcurrentTransfers" min="1" max="10" step="1">
+        </label>
       </div>
       <div class="tab-panel" data-tab-panel="about" hidden>
         <div class="about-panel">
@@ -337,6 +375,10 @@ document.querySelector('#app').innerHTML = `
       <h3 id="flashDriveTitle">Write to Flash Drive</h3>
       <p class="modal-hint" id="flashDriveHint">Writes a portable copy of PDT (this executable, plus its
         Drivers and Configs folders) to every checked drive.</p>
+      <div class="modal-field-inline" id="flashSyncDirectionRow" hidden>
+        <label><input type="radio" name="flashSyncDirection" id="flashSyncDirectionTo" value="to" checked> This computer &rarr; Flash Drive</label>
+        <label><input type="radio" name="flashSyncDirection" id="flashSyncDirectionFrom" value="from"> Flash Drive &rarr; This computer</label>
+      </div>
       <div id="flashDriveList" class="import-printers-list"></div>
       <label class="modal-field-inline" id="flashDriveFormatRow" title="Erases all data on every checked drive and lays down a fresh exFAT filesystem before writing PDT to it.">
         <input type="checkbox" id="flashDriveFormat"> Format as exFAT first (erases all data on the selected drive(s))
@@ -352,6 +394,38 @@ document.querySelector('#app').innerHTML = `
     <div class="modal">
       <h3 id="flashCopyProgressTitle">Copying...</h3>
       <div id="flashCopyProgressList"></div>
+      <div class="modal-actions">
+        <button class="danger" id="btnFlashCopyCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="cloudSyncBackdrop" hidden>
+    <div class="modal cloud-sync-modal">
+      <h3>Cloud Sync</h3>
+      <p class="modal-hint" id="cloudSyncHint">Comparing this computer's Drivers folder against the shared cloud repository&hellip;</p>
+      <div id="cloudSyncTree" class="cloud-sync-tree"></div>
+      <div class="modal-actions">
+        <button id="btnCloudSyncClose">Close</button>
+        <button class="primary" id="btnCloudSyncConfirm" disabled>Sync Selected</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="cloudSyncProgressBackdrop" hidden>
+    <div class="modal cloud-sync-progress-modal">
+      <h3>Syncing with Cloud...</h3>
+      <div class="cloud-sync-current-path" id="cloudSyncCurrentPath"></div>
+      <progress class="cloud-sync-current-bar" id="cloudSyncCurrentBar" value="0" max="1"></progress>
+      <div class="cloud-sync-current-label" id="cloudSyncCurrentLabel"></div>
+      <div class="cloud-sync-queue-label" id="cloudSyncQueueLabel">Up next</div>
+      <div id="cloudSyncQueueList" class="cloud-sync-queue-list"></div>
+      <progress class="cloud-sync-total-bar" id="cloudSyncTotalBar" value="0" max="1"></progress>
+      <div class="cloud-sync-total-label" id="cloudSyncTotalLabel"></div>
+      <div class="modal-actions">
+        <button id="btnCloudSyncPause">Pause</button>
+        <button class="danger" id="btnCloudSyncCancelTransfer">Cancel</button>
+      </div>
     </div>
   </div>
 
@@ -623,9 +697,9 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 function applySalesChainGate() {
     const locked = !state.salesChainId;
     document.body.classList.toggle('sales-chain-locked', locked);
-    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnSyncFlashDrive', 'btnOpenDriversFolder', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
+    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnSyncFlashDrive', 'btnCloudSync', 'btnOpenDriversFolder', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
-        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#confirmBackdrop')) continue;
+        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop')) continue;
         c.disabled = locked;
     }
     updatePortPrefixTextEnabled();
@@ -1545,6 +1619,77 @@ function wireEvents() {
     el('btnFlashDriveCancel').addEventListener('click', closeFlashDriveModal);
     el('btnFlashDriveConfirm').addEventListener('click', confirmWriteToFlashDrive);
     wireBackdropDismiss('flashDriveBackdrop', closeFlashDriveModal);
+    for (const radio of [el('flashSyncDirectionTo'), el('flashSyncDirectionFrom')]) {
+        radio.addEventListener('change', () => {
+            flashSyncDirection = radio.value;
+            renderFlashDriveList();
+            updateFlashDriveModalLabels();
+        });
+    }
+    // Cancel immediately stops the in-progress transfer and deletes whatever
+    // partial file was mid-copy (see CancelFlashSync/copyTreeMerge) - the
+    // await in confirmWriteToFlashDrive resolves/rejects on its own shortly
+    // after, closing this modal in its own finally block; disabling the
+    // button here just guards against a second click piling on while that's
+    // still unwinding.
+    el('btnFlashCopyCancel').addEventListener('click', () => {
+        App.CancelFlashSync();
+        const btn = el('btnFlashCopyCancel');
+        btn.disabled = true;
+        btn.textContent = 'Canceling...';
+    });
+
+    el('btnCloudSync').addEventListener('click', () => openCloudSyncModal());
+    el('btnCloudSyncClose').addEventListener('click', closeCloudSyncModal);
+    el('btnCloudSyncConfirm').addEventListener('click', confirmCloudSync);
+    wireBackdropDismiss('cloudSyncBackdrop', closeCloudSyncModal);
+    // Delegated rather than one listener per row - the tree re-renders its
+    // entire innerHTML on every toggle/checkbox change (see
+    // renderCloudSyncTree), which would otherwise mean re-wiring listeners
+    // after every single click.
+    el('cloudSyncTree').addEventListener('change', (e) => {
+        if (e.target.classList.contains('cst-leaf-check')) {
+            cloudSyncSelection.set(e.target.dataset.relpath, e.target.checked);
+            saveCloudSyncSelection();
+            renderCloudSyncTree();
+        } else if (e.target.classList.contains('cst-folder-check')) {
+            const node = findCloudSyncNode(e.target.dataset.folderPath);
+            const relPaths = [];
+            if (node) collectActionableRelPaths(node, relPaths);
+            for (const p of relPaths) cloudSyncSelection.set(p, e.target.checked);
+            saveCloudSyncSelection();
+            renderCloudSyncTree();
+        }
+    });
+    el('cloudSyncTree').addEventListener('click', (e) => {
+        const btn = e.target.closest('.cst-toggle[data-toggle-path]');
+        if (!btn) return;
+        const path = btn.dataset.togglePath;
+        if (cloudSyncCollapsed.has(path)) {
+            cloudSyncCollapsed.delete(path);
+        } else {
+            cloudSyncCollapsed.add(path);
+        }
+        renderCloudSyncTree();
+    });
+    // Pause/Resume toggles the same button - unlike Cancel, Pause is
+    // reversible mid-transfer (see cloudsync.PauseGate's own doc comment),
+    // so there's no "disable after clicking" guard here the way Cancel has.
+    el('btnCloudSyncPause').addEventListener('click', () => {
+        const btn = el('btnCloudSyncPause');
+        const nowPaused = btn.dataset.paused !== 'true';
+        App.SetCloudSyncPaused(nowPaused);
+        btn.dataset.paused = nowPaused ? 'true' : 'false';
+        btn.textContent = nowPaused ? 'Resume' : 'Pause';
+    });
+    el('btnCloudSyncCancelTransfer').addEventListener('click', () => {
+        App.CancelCloudSync();
+        const btn = el('btnCloudSyncCancelTransfer');
+        btn.disabled = true;
+        btn.textContent = 'Canceling...';
+    });
+    EventsOn('cloudsync-progress', (progress) => updateCloudSyncProgress(progress));
+    EventsOn('cloudsync-total-progress', (progress) => updateCloudSyncTotalProgress(progress));
 
     wireBackdropDismiss('confirmBackdrop', () => { if (pendingConfirmCancel) pendingConfirmCancel(); });
     wireBackdropDismiss('stopBackdrop', () => { if (pendingStopCancel) pendingStopCancel(); });
@@ -1903,30 +2048,70 @@ function formatByteSize(n) {
 // duplicating it.
 let flashDriveMode = 'write';
 
+// flashSyncDirection only matters in 'sync' mode - 'to' (the original,
+// still-default direction) copies this computer's own Drivers folder onto
+// every checked flash drive; 'from' pulls one flash drive's own Drivers
+// folder back onto this computer instead, for picking up whatever another
+// technician's own sync run left on a shared drive. 'from' can only ever
+// have one real source, unlike 'to' - see renderFlashDriveList, which swaps
+// the checklist to single-select (radio buttons) for exactly this direction.
+let flashSyncDirection = 'to';
+
+// renderFlashDriveList (re)builds #flashDriveList from flashDriveCandidates
+// for the current flashDriveMode/flashSyncDirection - a checkbox list for
+// every mode except sync+from, which needs single-select (radio) since
+// SyncDriversFromFlashDrive only ever pulls from one drive at a time. Called
+// both when the modal first opens and again whenever the direction toggle
+// changes, so switching direction doesn't require re-listing drives.
+function renderFlashDriveList() {
+    const singleSelect = flashDriveMode === 'sync' && flashSyncDirection === 'from';
+    const list = el('flashDriveList');
+    list.innerHTML = flashDriveCandidates.length === 0
+        ? '<p class="modal-hint">No USB flash drives detected.</p>'
+        : flashDriveCandidates.map((d, i) => `
+            <label class="import-printer-item">
+              <input type="${singleSelect ? 'radio' : 'checkbox'}" name="flashDriveChoice" class="flash-drive-check" data-index="${i}">
+              <span class="import-printer-name">${attr(d.letter)}</span>
+              <span class="import-printer-detail">${attr(d.label || '(no label)')} - ${formatByteSize(d.freeBytes)} free of ${formatByteSize(d.totalBytes)}</span>
+            </label>
+        `).join('');
+}
+
+// updateFlashDriveModalLabels sets the modal's title/hint/confirm-button text
+// for the current flashDriveMode/flashSyncDirection - split out from
+// openFlashDriveModal so the direction radio's own change handler can update
+// these live without re-listing drives.
+function updateFlashDriveModalLabels() {
+    const isSync = flashDriveMode === 'sync';
+    const isFrom = isSync && flashSyncDirection === 'from';
+    el('flashDriveTitle').textContent = isFrom ? 'Sync Drivers from Flash Drive' : isSync ? 'Sync Drivers to Flash Drive' : 'Write to Flash Drive';
+    el('flashDriveHint').textContent = isFrom
+        ? 'Pulls the checked flash drive\'s own Drivers folder onto this computer (merging into whatever is already here) - pick one drive.'
+        : isSync
+            ? 'Copies this computer\'s Drivers folder onto every checked drive (merging into whatever is already there), then extracts anything newly-copied.'
+            : 'Writes a portable copy of PDT (this executable, plus its Drivers, Configs, and 7-Zip tools folders) to every checked drive.';
+    el('btnFlashDriveConfirm').textContent = isSync ? 'Sync' : 'Write';
+}
+
 async function openFlashDriveModal(mode = 'write') {
     flashDriveMode = mode;
+    flashSyncDirection = 'to';
     const result = await App.ListRemovableDrives();
     if (result.error) {
         logStatus('ERR', result.error);
         return;
     }
     flashDriveCandidates = result.drives || [];
-    const list = el('flashDriveList');
-    list.innerHTML = flashDriveCandidates.length === 0
-        ? '<p class="modal-hint">No USB flash drives detected.</p>'
-        : flashDriveCandidates.map((d, i) => `
-            <label class="import-printer-item">
-              <input type="checkbox" class="flash-drive-check" data-index="${i}">
-              <span class="import-printer-name">${attr(d.letter)}</span>
-              <span class="import-printer-detail">${attr(d.label || '(no label)')} - ${formatByteSize(d.freeBytes)} free of ${formatByteSize(d.totalBytes)}</span>
-            </label>
-        `).join('');
+    renderFlashDriveList();
 
     const isSync = mode === 'sync';
-    el('flashDriveTitle').textContent = isSync ? 'Sync Drivers to Flash Drive' : 'Write to Flash Drive';
-    el('flashDriveHint').textContent = isSync
-        ? 'Copies this computer\'s Drivers folder onto every checked drive (merging into whatever is already there), then extracts anything newly-copied.'
-        : 'Writes a portable copy of PDT (this executable, plus its Drivers, Configs, and 7-Zip tools folders) to every checked drive.';
+    el('flashSyncDirectionTo').checked = true;
+    // Inline style, not the `hidden` attribute - same reason
+    // flashDriveFormatRow below uses it: confirmed live elsewhere in this
+    // modal that toggling `hidden` on a .modal-field-inline row doesn't
+    // reliably take effect despite the CSS's own `:not([hidden])` guard.
+    el('flashSyncDirectionRow').style.display = isSync ? '' : 'none';
+    updateFlashDriveModalLabels();
     // Inline style, not the `hidden` attribute/`:not([hidden])` CSS pattern
     // used elsewhere in this file - confirmed live that this row still
     // rendered even with the compiled bundle's own `.hidden = true` logic
@@ -1935,13 +2120,21 @@ async function openFlashDriveModal(mode = 'write') {
     // directly can't lose to any stylesheet rule regardless of cause.
     el('flashDriveFormatRow').style.display = isSync ? 'none' : '';
     el('flashDriveFormat').checked = false;
-    el('btnFlashDriveConfirm').textContent = isSync ? 'Sync' : 'Write';
 
     el('flashDriveBackdrop').hidden = false;
 }
 
 function closeFlashDriveModal() {
     el('flashDriveBackdrop').hidden = true;
+}
+
+// isCanceledError reports whether a Go error message (from a BatchDriveResult
+// failure entry, or a caught rejected promise) is copyTreeMerge's own
+// context.Canceled - Go's context package guarantees that exact, stable
+// "context canceled" text for it. Used to log a Cancel-button-triggered stop
+// as a neutral WARN rather than a red ERR, since it isn't a real failure.
+function isCanceledError(message) {
+    return typeof message === 'string' && message.includes('context canceled');
 }
 
 // Write to Flash Drive: optionally formats the checked drives as exFAT
@@ -1957,10 +2150,17 @@ function closeFlashDriveModal() {
 // so this running instance's own catalog/no-drivers banner reflect whatever
 // just got copied too, not just the flash drive's own copy (which
 // SyncDriversToFlashDrives/syncDriversTo already extracted server-side).
+//
+// Sync mode's own 'from' direction (flashSyncDirection) reverses the copy -
+// SyncDriversFromFlashDrive instead of SyncDriversToFlashDrives - pulling
+// exactly one checked drive's Drivers folder back onto this computer, for
+// picking up whatever a different technician's own sync added to a shared
+// drive since this laptop last saw it.
 async function confirmWriteToFlashDrive() {
+    const mode = flashDriveMode;
+    const direction = mode === 'sync' ? flashSyncDirection : 'to';
     const checks = Array.from(el('flashDriveList').querySelectorAll('.flash-drive-check'));
     const chosen = checks.filter(c => c.checked).map(c => flashDriveCandidates[Number(c.dataset.index)]);
-    const mode = flashDriveMode;
     const doFormat = mode === 'write' && el('flashDriveFormat').checked;
     closeFlashDriveModal();
     if (chosen.length === 0) return;
@@ -1980,7 +2180,11 @@ async function confirmWriteToFlashDrive() {
         letters = formatResult.succeeded || [];
         if (letters.length === 0) return;
     } else {
-        const ok = await showConfirm(mode === 'sync' ? {
+        const ok = await showConfirm(direction === 'from' ? {
+            title: 'Sync Drivers from Flash Drive',
+            message: `Sync ${letters[0]}'s own Drivers folder onto this computer?`,
+            okLabel: 'Sync',
+        } : mode === 'sync' ? {
             title: 'Sync Drivers to Flash Drive',
             message: `Sync this computer's Drivers folder to: ${letters.join(', ')}?`,
             okLabel: 'Sync',
@@ -1994,10 +2198,31 @@ async function confirmWriteToFlashDrive() {
 
     openFlashCopyProgressModal(mode, letters);
     try {
+        if (direction === 'from') {
+            const letter = letters[0];
+            try {
+                await App.SyncDriversFromFlashDrive(letter);
+                logStatus('OK', `Synced Drivers from ${letter}.`);
+                const status = await App.RefreshDriverCatalog();
+                el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
+            } catch (err) {
+                const msg = err && err.message ? err.message : String(err);
+                if (isCanceledError(msg)) {
+                    logStatus('WARN', `Sync from ${letter} canceled.`);
+                } else {
+                    logStatus('ERR', `Could not sync Drivers from ${letter}: ${msg}`);
+                }
+            }
+            return;
+        }
+
         if (mode === 'sync') {
             const syncResult = await App.SyncDriversToFlashDrives(letters);
             for (const l of syncResult.succeeded || []) logStatus('OK', `Synced Drivers to ${l}.`);
-            for (const l of Object.keys(syncResult.failed || {})) logStatus('ERR', `Could not sync Drivers to ${l}: ${syncResult.failed[l]}`);
+            for (const l of Object.keys(syncResult.failed || {})) {
+                const msg = syncResult.failed[l];
+                logStatus(isCanceledError(msg) ? 'WARN' : 'ERR', isCanceledError(msg) ? `Sync to ${l} canceled.` : `Could not sync Drivers to ${l}: ${msg}`);
+            }
             if ((syncResult.succeeded || []).length > 0) {
                 const status = await App.RefreshDriverCatalog();
                 el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
@@ -2007,7 +2232,10 @@ async function confirmWriteToFlashDrive() {
 
         const writeResult = await App.WritePortablePDT(letters);
         for (const l of writeResult.succeeded || []) logStatus('OK', `Wrote portable PDT to ${l}.`);
-        for (const l of Object.keys(writeResult.failed || {})) logStatus('ERR', `Could not write to ${l}: ${writeResult.failed[l]}`);
+        for (const l of Object.keys(writeResult.failed || {})) {
+            const msg = writeResult.failed[l];
+            logStatus(isCanceledError(msg) ? 'WARN' : 'ERR', isCanceledError(msg) ? `Write to ${l} canceled.` : `Could not write to ${l}: ${msg}`);
+        }
     } finally {
         closeFlashCopyProgressModal();
     }
@@ -2032,6 +2260,12 @@ function openFlashCopyProgressModal(mode, letters) {
             <progress class="flash-copy-row-bar" value="0" max="1"></progress>
         </div>
     `).join('');
+    // Reset from whatever state a previous run's own Cancel click may have
+    // left the button in (disabled, "Canceling...") - each fresh run gets
+    // its own fresh Cancel button.
+    const cancelBtn = el('btnFlashCopyCancel');
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = 'Cancel';
     el('flashCopyProgressBackdrop').hidden = false;
 }
 
@@ -2067,6 +2301,350 @@ function updateFlashCopyProgress(progress) {
     bar.value = progress.doneBytes;
 }
 
+// ---- Cloud Sync ----
+//
+// cloudSyncItems: the flat plan GetCloudSyncPlan returned (one entry per
+// relative path on either side). cloudSyncSelection: relPath -> checked,
+// but only for actionable (upload/download) items - a conflict has no
+// checkbox at all (see renderCloudSyncLeaf), so it's never in this map.
+// cloudSyncCollapsed: folder paths currently collapsed, in-memory only for
+// this one modal session (not persisted - unlike the checkbox selection
+// itself, which is). cloudSyncTreeRoot: the nested tree renderCloudSyncTree
+// last built from cloudSyncItems, kept around so checkbox/toggle click
+// handlers can look a folder's own node back up by path without rebuilding
+// the whole tree on every click.
+let cloudSyncItems = [];
+let cloudSyncSelection = new Map();
+let cloudSyncCollapsed = new Set();
+let cloudSyncTreeRoot = null;
+
+function buildCloudSyncTree(items) {
+    const root = { name: '', path: '', children: new Map(), item: null };
+    for (const item of items) {
+        const parts = item.relPath.split('/');
+        let node = root;
+        let pathSoFar = '';
+        for (let i = 0; i < parts.length; i++) {
+            pathSoFar = pathSoFar ? `${pathSoFar}/${parts[i]}` : parts[i];
+            if (!node.children.has(parts[i])) {
+                node.children.set(parts[i], { name: parts[i], path: pathSoFar, children: new Map(), item: null });
+            }
+            node = node.children.get(parts[i]);
+            if (i === parts.length - 1) node.item = item;
+        }
+    }
+    return root;
+}
+
+function findCloudSyncNode(path) {
+    let node = cloudSyncTreeRoot;
+    for (const part of path.split('/')) {
+        node = node?.children.get(part);
+        if (!node) return null;
+    }
+    return node;
+}
+
+// collectActionableRelPaths gathers every upload/download leaf's own
+// relPath under node (a folder or a single leaf) into out - a conflict leaf
+// is deliberately never included, since there's nothing safe to check it
+// into: Sync must never guess which side of a size mismatch is right (see
+// cloudsync.ActionConflict's own Go doc comment).
+function collectActionableRelPaths(node, out) {
+    if (node.item) {
+        if (node.item.action === 'upload' || node.item.action === 'download') out.push(node.item.relPath);
+        return;
+    }
+    for (const child of node.children.values()) collectActionableRelPaths(child, out);
+}
+
+// folderCheckState is a folder's own tri-state checkbox value, derived
+// entirely from its actionable descendants' current selection - null (no
+// checkbox shown at all) for a folder with nothing actionable under it
+// (every descendant already synced, or every descendant a conflict).
+function folderCheckState(node) {
+    const relPaths = [];
+    collectActionableRelPaths(node, relPaths);
+    if (relPaths.length === 0) return null;
+    const checkedCount = relPaths.filter(p => cloudSyncSelection.get(p)).length;
+    if (checkedCount === 0) return 'unchecked';
+    if (checkedCount === relPaths.length) return 'checked';
+    return 'indeterminate';
+}
+
+function cloudSyncActionLabel(action) {
+    if (action === 'upload') return { text: '↑ Upload', cls: 'cst-action-upload' };
+    if (action === 'download') return { text: '↓ Download', cls: 'cst-action-download' };
+    return { text: '⚠ Conflict', cls: 'cst-action-conflict' };
+}
+
+function renderCloudSyncLeaf(item) {
+    const actionable = item.action === 'upload' || item.action === 'download';
+    const checkboxHtml = actionable
+        ? `<input type="checkbox" class="cst-leaf-check" data-relpath="${attr(item.relPath)}" ${cloudSyncSelection.get(item.relPath) ? 'checked' : ''}>`
+        : `<span class="cst-checkbox-spacer" title="Sizes differ on each side - this needs to be looked at by hand before it can sync either direction"></span>`;
+    const { text: actionText, cls: actionCls } = cloudSyncActionLabel(item.action);
+    const sizeText = item.action === 'conflict'
+        ? `${formatByteSize(item.localSize)} / ${formatByteSize(item.remoteSize)}`
+        : formatByteSize(item.action === 'upload' ? item.localSize : item.remoteSize);
+    const name = item.relPath.split('/').pop();
+    return `
+        <div class="cst-row ${item.isNew ? 'cst-new' : ''}" title="${attr(item.relPath)}">
+          <span class="cst-toggle"></span>
+          ${checkboxHtml}
+          ${item.isNew ? '<span class="cst-new-dot" title="New since you last opened Cloud Sync"></span>' : ''}
+          <span class="cst-name">${attr(name)}</span>
+          <span class="cst-size">${sizeText}</span>
+          <span class="cst-action ${actionCls}">${actionText}</span>
+        </div>
+    `;
+}
+
+function renderCloudSyncEntry(node) {
+    if (node.item) {
+        return renderCloudSyncLeaf(node.item);
+    }
+    const state = folderCheckState(node);
+    const checkboxHtml = state === null
+        ? '<span class="cst-checkbox-spacer"></span>'
+        : `<input type="checkbox" class="cst-folder-check" data-folder-path="${attr(node.path)}" ${state === 'checked' ? 'checked' : ''} data-indeterminate="${state === 'indeterminate' ? '1' : ''}">`;
+    const collapsed = cloudSyncCollapsed.has(node.path);
+    const entries = Array.from(node.children.values()).sort((a, b) => {
+        const aFolder = !a.item, bFolder = !b.item;
+        return aFolder !== bFolder ? (aFolder ? -1 : 1) : a.name.localeCompare(b.name);
+    });
+    return `
+        <div class="cst-node">
+          <div class="cst-row">
+            <button type="button" class="cst-toggle" data-toggle-path="${attr(node.path)}">${collapsed ? '▸' : '▾'}</button>
+            ${checkboxHtml}
+            <span class="cst-name">${attr(node.name)}</span>
+          </div>
+          <div class="cst-children" ${collapsed ? 'hidden' : ''}>
+            ${entries.map(renderCloudSyncEntry).join('')}
+          </div>
+        </div>
+    `;
+}
+
+function renderCloudSyncTree() {
+    cloudSyncTreeRoot = buildCloudSyncTree(cloudSyncItems);
+    const container = el('cloudSyncTree');
+    if (cloudSyncItems.length === 0) {
+        container.innerHTML = '<p class="modal-hint">Nothing to sync - this computer and the cloud repository already match.</p>';
+    } else {
+        const entries = Array.from(cloudSyncTreeRoot.children.values()).sort((a, b) => {
+            const aFolder = !a.item, bFolder = !b.item;
+            return aFolder !== bFolder ? (aFolder ? -1 : 1) : a.name.localeCompare(b.name);
+        });
+        container.innerHTML = entries.map(renderCloudSyncEntry).join('');
+    }
+    // indeterminate is a DOM property, not an HTML attribute - set in a pass
+    // after the markup above is actually attached to the document (setting
+    // it on a detached element, or via an attribute in the HTML string
+    // itself, has no effect).
+    for (const cb of container.querySelectorAll('.cst-folder-check')) {
+        cb.indeterminate = cb.dataset.indeterminate === '1';
+    }
+    el('btnCloudSyncConfirm').disabled = !Array.from(cloudSyncSelection.values()).some(v => v);
+}
+
+function saveCloudSyncSelection() {
+    const deselected = [];
+    for (const [relPath, selected] of cloudSyncSelection) {
+        if (!selected) deselected.push(relPath);
+    }
+    App.SaveCloudSyncSelection(deselected).catch(err => {
+        logStatus('ERR', `Could not save Cloud Sync selection: ${err && err.message ? err.message : err}`);
+    });
+}
+
+async function openCloudSyncModal() {
+    el('cloudSyncBackdrop').hidden = false;
+    el('cloudSyncHint').textContent = 'Comparing this computer\'s Drivers folder against the shared cloud repository…';
+    el('cloudSyncTree').innerHTML = '';
+    el('btnCloudSyncConfirm').disabled = true;
+
+    const result = await App.GetCloudSyncPlan();
+    if (result.error) {
+        el('cloudSyncHint').textContent = result.error;
+        return;
+    }
+    cloudSyncItems = result.items || [];
+    cloudSyncSelection = new Map();
+    for (const item of cloudSyncItems) {
+        if (item.action === 'upload' || item.action === 'download') {
+            cloudSyncSelection.set(item.relPath, item.selected);
+        }
+    }
+    const actionable = cloudSyncItems.filter(i => i.action === 'upload' || i.action === 'download').length;
+    const conflicts = cloudSyncItems.filter(i => i.action === 'conflict').length;
+    el('cloudSyncHint').textContent = actionable === 0 && conflicts === 0
+        ? 'Nothing to sync - this computer and the cloud repository already match.'
+        : `${actionable} file${actionable === 1 ? '' : 's'} to sync` +
+          (conflicts > 0 ? `, ${conflicts} conflict${conflicts === 1 ? '' : 's'} need manual review` : '') + '.';
+    renderCloudSyncTree();
+}
+
+function closeCloudSyncModal() {
+    el('cloudSyncBackdrop').hidden = true;
+}
+
+// formatRate renders a bytes-per-second number as e.g. "4.2 MB/s" (reusing
+// formatByteSize's own unit logic) - "" for a not-yet-known/zero rate,
+// rather than a misleading "0 B/s" flashing at the very start of a batch
+// before the backend's own decayed rate estimator has anything to report.
+function formatRate(bytesPerSec) {
+    if (!bytesPerSec || bytesPerSec <= 0) return '';
+    return `${formatByteSize(bytesPerSec)}/s`;
+}
+
+// ---- Cloud Sync progress dialog ----
+//
+// A rolling single "spotlight" file (the longest-running transfer still in
+// progress) gets the big bar/ETA/path treatment at the top; every other
+// concurrently-transferring file (Settings' own Concurrent Transfers can be
+// more than 1) shows in the queue list below with its own small inline
+// bar, alongside everything not yet started; the whole batch's own combined
+// progress/rate/ETA sits at the bottom (see SyncCloud/CloudSyncTotalProgress,
+// Go). cloudSyncQueueOrder is the batch's own submitted order - queue
+// position for anything not yet started; cloudSyncProgressByPath/
+// cloudSyncStartedAt/cloudSyncDone are all keyed by relPath and rebuilt
+// fresh each time openCloudSyncProgressModal runs.
+let cloudSyncQueueOrder = [];
+let cloudSyncProgressByPath = new Map(); // relPath -> {done, total, direction, etaSeconds}
+let cloudSyncStartedAt = new Map(); // relPath -> dispatch sequence number, set on that file's first progress event
+let cloudSyncSeq = 0;
+let cloudSyncDone = new Set(); // relPaths whose last progress event reported done >= total
+
+function openCloudSyncProgressModal(relPaths) {
+    cloudSyncQueueOrder = relPaths;
+    cloudSyncProgressByPath = new Map();
+    cloudSyncStartedAt = new Map();
+    cloudSyncSeq = 0;
+    cloudSyncDone = new Set();
+
+    const pauseBtn = el('btnCloudSyncPause');
+    pauseBtn.disabled = false;
+    pauseBtn.textContent = 'Pause';
+    pauseBtn.dataset.paused = 'false';
+    const cancelBtn = el('btnCloudSyncCancelTransfer');
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = 'Cancel';
+
+    el('cloudSyncTotalBar').value = 0;
+    el('cloudSyncTotalLabel').textContent = '';
+    renderCloudSyncProgress();
+    el('cloudSyncProgressBackdrop').hidden = false;
+}
+
+function closeCloudSyncProgressModal() {
+    el('cloudSyncProgressBackdrop').hidden = true;
+}
+
+function renderCloudSyncProgress() {
+    const active = cloudSyncQueueOrder
+        .filter(p => cloudSyncStartedAt.has(p) && !cloudSyncDone.has(p))
+        .sort((a, b) => cloudSyncStartedAt.get(a) - cloudSyncStartedAt.get(b));
+    const waiting = cloudSyncQueueOrder.filter(p => !cloudSyncStartedAt.has(p) && !cloudSyncDone.has(p));
+
+    const spotlightPath = active[0];
+    if (spotlightPath) {
+        const p = cloudSyncProgressByPath.get(spotlightPath);
+        const dirLabel = p.direction === 'upload' ? 'Uploading' : 'Downloading';
+        const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+        const eta = p.etaSeconds > 0 ? ` - ${formatEta(p.etaSeconds)}` : '';
+        el('cloudSyncCurrentPath').textContent = spotlightPath;
+        el('cloudSyncCurrentPath').title = spotlightPath;
+        const bar = el('cloudSyncCurrentBar');
+        bar.max = Math.max(p.total, 1);
+        bar.value = p.done;
+        el('cloudSyncCurrentLabel').textContent =
+            `${dirLabel} ${spotlightPath.split('/').pop()} - ${formatByteSize(p.done)} / ${formatByteSize(p.total)} (${pct}%)${eta}`;
+    } else {
+        el('cloudSyncCurrentPath').textContent = waiting.length > 0 ? 'Preparing next file…' : '';
+        el('cloudSyncCurrentPath').title = '';
+        el('cloudSyncCurrentBar').value = 0;
+        el('cloudSyncCurrentLabel').textContent = '';
+    }
+
+    const queueEntries = [...active.slice(1), ...waiting];
+    el('cloudSyncQueueLabel').textContent = queueEntries.length > 0 ? `Up next (${queueEntries.length})` : '';
+    el('cloudSyncQueueList').innerHTML = queueEntries.map(relPath => {
+        const name = relPath.split('/').pop();
+        const p = cloudSyncProgressByPath.get(relPath);
+        if (p) {
+            const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+            return `
+                <div class="cloud-sync-queue-row cloud-sync-queue-row-active" title="${attr(relPath)}">
+                    <span class="cloud-sync-queue-name">${attr(name)}</span>
+                    <progress class="cloud-sync-queue-bar" value="${p.done}" max="${Math.max(p.total, 1)}"></progress>
+                    <span class="cloud-sync-queue-pct">${pct}%</span>
+                </div>
+            `;
+        }
+        return `
+            <div class="cloud-sync-queue-row" title="${attr(relPath)}">
+                <span class="cloud-sync-queue-name">${attr(name)}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function updateCloudSyncProgress(progress) {
+    if (!cloudSyncQueueOrder.includes(progress.relPath)) return;
+    cloudSyncProgressByPath.set(progress.relPath, {
+        done: progress.done, total: progress.total, direction: progress.direction, etaSeconds: progress.etaSeconds,
+    });
+    if (!cloudSyncStartedAt.has(progress.relPath)) {
+        cloudSyncStartedAt.set(progress.relPath, cloudSyncSeq++);
+    }
+    if (progress.total > 0 && progress.done >= progress.total) {
+        cloudSyncDone.add(progress.relPath);
+    }
+    renderCloudSyncProgress();
+}
+
+function updateCloudSyncTotalProgress(progress) {
+    const bar = el('cloudSyncTotalBar');
+    bar.max = Math.max(progress.totalBytes, 1);
+    bar.value = progress.doneBytes;
+    const pct = progress.totalBytes > 0 ? Math.round((progress.doneBytes / progress.totalBytes) * 100) : 0;
+    const rateText = formatRate(progress.rateBytesPerSec);
+    const eta = progress.etaSeconds > 0 ? ` - ${formatEta(progress.etaSeconds)}` : '';
+    el('cloudSyncTotalLabel').textContent =
+        `Total: ${formatByteSize(progress.doneBytes)} / ${formatByteSize(progress.totalBytes)} (${pct}%)` +
+        (rateText ? ` - ${rateText}` : '') + eta;
+}
+
+// confirmCloudSync mirrors confirmWriteToFlashDrive's own shape (open the
+// progress modal, await the batch call, log per-item results, refresh the
+// catalog on success, close the progress modal in a finally) - see
+// SyncCloud's own Go doc comment for why the paths sent here are only a
+// request, not a guarantee: a path whose Action changed (already synced, or
+// now a conflict) by the time SyncCloud actually runs is silently skipped
+// rather than acted on with stale information.
+async function confirmCloudSync() {
+    const selectedPaths = Array.from(cloudSyncSelection.entries()).filter(([, sel]) => sel).map(([p]) => p);
+    if (selectedPaths.length === 0) return;
+    closeCloudSyncModal();
+    openCloudSyncProgressModal(selectedPaths);
+    try {
+        const result = await App.SyncCloud(selectedPaths);
+        for (const p of result.succeeded || []) logStatus('OK', `Synced ${p} with the cloud.`);
+        for (const p of Object.keys(result.failed || {})) {
+            const msg = result.failed[p];
+            logStatus(isCanceledError(msg) ? 'WARN' : 'ERR', isCanceledError(msg) ? `Cloud sync of ${p} canceled.` : `Could not sync ${p}: ${msg}`);
+        }
+        if ((result.succeeded || []).length > 0) {
+            const status = await App.RefreshDriverCatalog();
+            el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
+        }
+    } finally {
+        closeCloudSyncProgressModal();
+    }
+}
+
 function openSettingsModal() {
     el('settingsBasePath').value = state.settings.saveFileBasePath;
     el('settingsDriversBasePath').value = state.settings.driversBasePath;
@@ -2075,6 +2653,21 @@ function openSettingsModal() {
         input.value = state.settings.manufacturerUrls?.[input.dataset.mfg] || '';
     }
     renderManufacturerOrderList();
+    const cs = state.settings.cloudSync || {};
+    el('cloudSyncEndpoint').value = cs.endpoint || '';
+    el('cloudSyncBucket').value = cs.bucket || '';
+    el('cloudSyncPrefix').value = cs.prefix || '';
+    el('cloudSyncAccessKeyId').value = cs.accessKeyId || '';
+    // Secret Access Key is never sent back from the backend (see
+    // Settings.CloudSyncSecretKey's own doc comment) - this field always
+    // opens empty; leaving it empty on Save means "keep whatever's already
+    // stored," typing a new value replaces it.
+    el('cloudSyncSecretKey').value = '';
+    el('cloudSyncSecretKey').placeholder = state.settings.cloudSyncHasSecret ? 'Already set - leave blank to keep it' : 'Not set';
+    el('cloudSyncSecretStatus').textContent = state.settings.cloudSyncHasSecret
+        ? 'A Secret Access Key is already stored in this computer\'s keychain.'
+        : 'No Secret Access Key stored yet - Cloud Sync won\'t work until one is saved here.';
+    el('cloudSyncConcurrentTransfers').value = cs.concurrentTransfers || 3;
     switchSettingsTab('general');
     el('settingsBackdrop').hidden = false;
 }
@@ -2343,6 +2936,17 @@ function wireSettingsModal() {
             preinstallBasePath: el('settingsPreinstallBasePath').value,
             manufacturerUrls,
             manufacturerOrder,
+            cloudSync: {
+                endpoint: el('cloudSyncEndpoint').value,
+                bucket: el('cloudSyncBucket').value,
+                prefix: el('cloudSyncPrefix').value,
+                accessKeyId: el('cloudSyncAccessKeyId').value,
+                concurrentTransfers: parseInt(el('cloudSyncConcurrentTransfers').value, 10) || 3,
+            },
+            // Sent only when non-empty - see cloudSyncSecretKey's own field
+            // comment in Settings (Go): empty means "leave the stored
+            // secret alone," never "clear it."
+            cloudSyncSecretKey: el('cloudSyncSecretKey').value,
         });
         state.settings = saved;
         await refreshManufacturerDropdowns();

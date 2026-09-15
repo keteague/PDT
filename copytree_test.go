@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -73,7 +75,7 @@ func TestCopyTreeMerge_MergesIntoAlreadyPopulatedDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := copyTreeMerge(dest, src, nil); err != nil {
+	if err := copyTreeMerge(context.Background(), dest, src, nil); err != nil {
 		t.Fatalf("copyTreeMerge failed: %v", err)
 	}
 
@@ -116,7 +118,7 @@ func TestCopyTreeMerge_OneFailingFileDoesNotStopTheRest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := copyTreeMerge(dest, src, nil)
+	err := copyTreeMerge(context.Background(), dest, src, nil)
 	if err == nil {
 		t.Error("expected a non-nil error reporting the poisoned file's own failure")
 	}
@@ -153,7 +155,7 @@ func TestCopyTreeMerge_ConcurrentCopyIsCorrectAndComplete(t *testing.T) {
 		mu       sync.Mutex
 		progress []CopyProgress
 	)
-	err := copyTreeMerge(dest, src, func(p CopyProgress) {
+	err := copyTreeMerge(context.Background(), dest, src, func(p CopyProgress) {
 		mu.Lock()
 		progress = append(progress, p)
 		mu.Unlock()
@@ -183,6 +185,38 @@ func TestCopyTreeMerge_ConcurrentCopyIsCorrectAndComplete(t *testing.T) {
 	}
 	if last.DoneBytes != wantTotalBytes || last.TotalBytes != wantTotalBytes {
 		t.Errorf("final progress DoneBytes/TotalBytes = %d/%d, want %d/%d", last.DoneBytes, last.TotalBytes, wantTotalBytes, wantTotalBytes)
+	}
+}
+
+// TestCopyTreeMerge_PreservesSourceModTime guards a real, if minor, gap:
+// copyFile's own os.OpenFile(O_TRUNC) write stamps destPath's mtime as
+// whatever moment the copy happened, not the source file's own original
+// date - so every driver package looked freshly downloaded today after any
+// Sync/Write to Flash Drive, no matter how old it actually was. Ken asked
+// for original timestamps to survive a sync; this is the local half of that
+// (see internal/cloudsync's own mtimeMetaKey for the R2 half).
+func TestCopyTreeMerge_PreservesSourceModTime(t *testing.T) {
+	src := t.TempDir()
+	srcFile := filepath.Join(src, "old-driver.zip")
+	if err := os.WriteFile(srcFile, []byte("old content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wantModTime := time.Date(2019, 3, 14, 9, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(srcFile, wantModTime, wantModTime); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := copyTreeMerge(context.Background(), dest, src, nil); err != nil {
+		t.Fatalf("copyTreeMerge failed: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dest, "old-driver.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(wantModTime) {
+		t.Errorf("copied file's mtime = %v, want the source's own %v", info.ModTime(), wantModTime)
 	}
 }
 
@@ -222,7 +256,7 @@ func TestCopyTreeMerge_DereferencesDirectorySymlink(t *testing.T) {
 	symlinkOrSkip(t, realDir, filepath.Join(src, "15-Sequoia"))
 
 	dest := t.TempDir()
-	if err := copyTreeMerge(dest, src, nil); err != nil {
+	if err := copyTreeMerge(context.Background(), dest, src, nil); err != nil {
 		t.Fatalf("copyTreeMerge failed: %v", err)
 	}
 
@@ -249,7 +283,7 @@ func TestCopyTreeMerge_DereferencesFileSymlink(t *testing.T) {
 	symlinkOrSkip(t, realFile, filepath.Join(src, "alias.inf"))
 
 	dest := t.TempDir()
-	if err := copyTreeMerge(dest, src, nil); err != nil {
+	if err := copyTreeMerge(context.Background(), dest, src, nil); err != nil {
 		t.Fatalf("copyTreeMerge failed: %v", err)
 	}
 
@@ -277,7 +311,7 @@ func TestCopyTreeMerge_SymlinkCycleDoesNotHang(t *testing.T) {
 
 	dest := t.TempDir()
 	done := make(chan error, 1)
-	go func() { done <- copyTreeMerge(dest, src, nil) }()
+	go func() { done <- copyTreeMerge(context.Background(), dest, src, nil) }()
 	select {
 	case err := <-done:
 		if err == nil {
@@ -285,5 +319,68 @@ func TestCopyTreeMerge_SymlinkCycleDoesNotHang(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("copyTreeMerge did not return - likely stuck in a symlink cycle")
+	}
+}
+
+// TestCopyFile_CanceledContextDeletesPartialDestinationFile is the direct
+// regression test for the Cancel button's own requirement: "immediately stop
+// the current transfer and delete the file that was in transit, so that we
+// don't end up with a partially copied file." An already-canceled context
+// makes ctxReader's first Read call fail before any real bytes are copied -
+// deterministic and instant, rather than racing real disk I/O to catch a
+// copy truly mid-flight - but exercises the exact same cleanup path
+// (copyFile's own deferred os.Remove) that a cancellation landing partway
+// through a large real file would hit.
+func TestCopyFile_CanceledContextDeletesPartialDestinationFile(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "src.bin")
+	if err := os.WriteFile(srcPath, []byte("real content that must never land at the destination"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	destPath := filepath.Join(dir, "dest.bin")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	buf := make([]byte, copyBufferSize)
+	err := copyFile(ctx, destPath, srcPath, time.Now(), buf)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("copyFile with an already-canceled context returned %v, want an error wrapping context.Canceled", err)
+	}
+	if _, statErr := os.Stat(destPath); !os.IsNotExist(statErr) {
+		t.Errorf("expected the partially-copied destination file to be deleted after cancellation, got stat err=%v", statErr)
+	}
+}
+
+// TestCopyTreeMerge_CancellationStopsEarlyAndReportsCanceled guards the
+// batch-level half of the same requirement: an already-canceled context must
+// stop copyTreeMerge from starting fresh files (not just abort one already
+// in flight), and the returned error must let a caller (SyncDriversToFlashDrives)
+// tell "the user hit Cancel" apart from a genuine per-file failure via
+// errors.Is(err, context.Canceled).
+func TestCopyTreeMerge_CancellationStopsEarlyAndReportsCanceled(t *testing.T) {
+	src := t.TempDir()
+	const fileCount = 50
+	for i := 0; i < fileCount; i++ {
+		if err := os.WriteFile(filepath.Join(src, fmt.Sprintf("file-%03d.txt", i)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := t.TempDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := copyTreeMerge(ctx, dest, src, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the returned error to report cancellation via errors.Is, got %v", err)
+	}
+
+	entries, readErr := os.ReadDir(dest)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) == fileCount {
+		t.Errorf("expected an already-canceled context to stop copying before every file was processed, but all %d landed at the destination", fileCount)
 	}
 }

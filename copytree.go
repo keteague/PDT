@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // samePath reports whether a and b name the same location on disk - a
@@ -95,9 +97,10 @@ const copyBufferSize = 1024 * 1024
 
 // copyJob is one file copyTreeMerge's worker pool needs to (maybe) copy.
 type copyJob struct {
-	rel  string // slash-separated, relative to destDir/srcDir
-	path string // the real file to read - a resolved symlink target, or srcDir+rel directly
-	size int64
+	rel     string // slash-separated, relative to destDir/srcDir
+	path    string // the real file to read - a resolved symlink target, or srcDir+rel directly
+	size    int64
+	modTime time.Time // source file's own mtime, restored on the copy - see copyFile
 }
 
 // collectCopyJobs recursively walks srcAbs (destDir-relative path rel so
@@ -153,7 +156,7 @@ func collectCopyJobs(destDir, srcAbs, rel string, ancestors map[string]bool, job
 				continue
 			}
 			if !info.IsDir() {
-				*jobs = append(*jobs, copyJob{rel: childRel, path: resolved, size: info.Size()})
+				*jobs = append(*jobs, copyJob{rel: childRel, path: resolved, size: info.Size(), modTime: info.ModTime()})
 				*totalBytes += info.Size()
 				continue
 			}
@@ -185,7 +188,7 @@ func collectCopyJobs(destDir, srcAbs, rel string, ancestors map[string]bool, job
 			*errs = append(*errs, fmt.Errorf("%s: %w", childAbs, err))
 			continue
 		}
-		*jobs = append(*jobs, copyJob{rel: childRel, path: childAbs, size: info.Size()})
+		*jobs = append(*jobs, copyJob{rel: childRel, path: childAbs, size: info.Size(), modTime: info.ModTime()})
 		*totalBytes += info.Size()
 	}
 }
@@ -244,7 +247,19 @@ func collectCopyJobs(destDir, srcAbs, rel string, ancestors map[string]bool, job
 // as) has no symlink/junction support at all, so writing one across used to
 // silently produce a truncated, empty 0-byte file at the destination
 // instead of any of the real content it pointed to. See collectCopyJobs.
-func copyTreeMerge(destDir, srcDir string, onProgress func(CopyProgress)) error {
+// ctx, if canceled (see App.CancelFlashSync), stops copyTreeMerge as close
+// to immediately as this can manage: no new file starts copying once
+// ctx.Err() is non-nil, and the one file actually being copied on each
+// worker when cancellation lands is aborted mid-io.CopyBuffer (see
+// ctxReader) with its own partial destination content deleted (see
+// copyFile) rather than left behind half-written - exactly what a Cancel
+// button needs ("stop the current transfer and delete the file that was in
+// transit, so we don't end up with a partially copied file"), not just
+// "stop starting new files eventually." A canceled run's own ctx.Err() is
+// joined into the returned error alongside any real per-file failures, so
+// callers can tell "the user canceled this" apart from "a file genuinely
+// failed to copy."
+func copyTreeMerge(ctx context.Context, destDir, srcDir string, onProgress func(CopyProgress)) error {
 	existing := listFileSizes(destDir)
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return err
@@ -275,8 +290,10 @@ func copyTreeMerge(destDir, srcDir string, onProgress func(CopyProgress)) error 
 			for j := range jobCh {
 				target := filepath.Join(destDir, filepath.FromSlash(j.rel))
 				var copyErr error
-				if sz, ok := existing[j.rel]; !ok || sz != j.size {
-					copyErr = copyFile(target, j.path, buf)
+				if ctx.Err() != nil {
+					copyErr = ctx.Err()
+				} else if sz, ok := existing[j.rel]; !ok || sz != j.size {
+					copyErr = copyFile(ctx, target, j.path, j.modTime, buf)
 				}
 				mu.Lock()
 				if copyErr != nil {
@@ -291,19 +308,53 @@ func copyTreeMerge(destDir, srcDir string, onProgress func(CopyProgress)) error 
 			}
 		}()
 	}
+feed:
 	for _, j := range jobs {
-		jobCh <- j
+		select {
+		case <-ctx.Done():
+			break feed
+		case jobCh <- j:
+		}
 	}
 	close(jobCh)
 	wg.Wait()
 
+	if ctx.Err() != nil {
+		errs = append(errs, ctx.Err())
+	}
 	return errors.Join(errs...)
+}
+
+// ctxReader wraps r so io.CopyBuffer notices ctx being canceled mid-copy,
+// not just between one file and the next - checked once per Read call
+// (every copyBufferSize worth of a large file), which is what actually lets
+// Cancel stop a huge in-progress driver installer promptly instead of
+// waiting for it to finish first.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 // copyFile copies srcPath to destPath using buf as the read/write buffer
 // (see copyBufferSize), creating destPath's parent directory if needed and
-// overwriting whatever's already at destPath.
-func copyFile(destPath, srcPath string, buf []byte) error {
+// overwriting whatever's already at destPath. If ctx is canceled partway
+// through, the copy stops (see ctxReader) and whatever partial content had
+// already been written to destPath is deleted - callers must never be left
+// with a truncated, half-copied file standing in for the real one.
+//
+// destPath's own mtime is set to srcModTime once the copy succeeds, rather
+// than left at whatever the copy itself stamped it with (the moment the
+// write happened) - so a file's real original date (when a driver package
+// was actually downloaded/built) survives a trip through Sync/Write to
+// Flash Drive instead of every copy looking like it was just created today.
+func copyFile(ctx context.Context, destPath, srcPath string, srcModTime time.Time, buf []byte) error {
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
 		return err
 	}
@@ -316,7 +367,18 @@ func copyFile(destPath, srcPath string, buf []byte) error {
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
-	_, err = io.CopyBuffer(dst, src, buf)
-	return err
+	_, copyErr := io.CopyBuffer(dst, ctxReader{ctx: ctx, r: src}, buf)
+	closeErr := dst.Close()
+	if copyErr != nil || closeErr != nil {
+		if ctx.Err() != nil {
+			os.Remove(destPath)
+		}
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	}
+	// Chtimes after dst is fully closed - some filesystems only honor a
+	// mtime change once every open handle writing to the path is gone.
+	return os.Chtimes(destPath, srcModTime, srcModTime)
 }

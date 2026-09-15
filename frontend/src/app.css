@@ -831,6 +831,213 @@ table.grid td.checkbox-cell {
     height: 10px;
 }
 
+/* Cloud Sync's own tree view - wider than the generic .modal (460px) since
+   a real relative path (manufacturer/OS-version/file.zip) plus a size and
+   an upload/download tag needs real room, the same reasoning
+   .settings-modal's own comment gives. */
+.cloud-sync-modal {
+    width: 560px;
+}
+
+.cloud-sync-tree {
+    max-height: 360px;
+    overflow-y: auto;
+    border: 1px solid #33455c;
+    border-radius: 4px;
+    background: #16202e;
+    padding: 6px;
+    font-size: 13px;
+}
+
+.cst-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px;
+    border-radius: 3px;
+}
+
+.cst-row:hover {
+    background: #1f2d40;
+}
+
+/* No caret at all (rather than a disabled/invisible one) for a leaf row -
+   an actual empty element here would still take up its own width and throw
+   off alignment against folder rows that do have one. */
+.cst-toggle {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    width: 14px;
+    height: 14px;
+    flex: none;
+    color: #9fb3c8;
+    font-size: 11px;
+    line-height: 14px;
+}
+
+.cst-toggle:hover:not(:disabled) {
+    background: transparent;
+    color: white;
+}
+
+.cst-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* New-since-last-view highlight (see App.GetCloudSyncPlan's own IsNew) -
+   the same amber already used for a WARN log line, since "you haven't seen
+   this yet" is an attention cue, not a status judgement (ok/err green/red
+   would wrongly imply something succeeded or failed). Shown once per item -
+   the backend marks it seen the moment this same tree is fetched, so it
+   won't still be amber the next time this modal opens. */
+.cst-new .cst-name {
+    color: #ffb454;
+    font-weight: 600;
+}
+
+.cst-new-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #ffb454;
+    flex: none;
+}
+
+.cst-size {
+    color: #9fb3c8;
+    font-size: 11px;
+    flex: none;
+}
+
+.cst-action {
+    flex: none;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid #3f5978;
+}
+
+.cst-action-upload {
+    color: #6fd88a;
+    border-color: #3f8f66;
+}
+
+.cst-action-download {
+    color: #7fc4f5;
+    border-color: #3f6f8f;
+}
+
+.cst-action-conflict {
+    color: #ff6b6b;
+    border-color: #8f3f3f;
+}
+
+.cst-children {
+    margin-left: 18px;
+}
+
+/* Cloud Sync's own progress dialog - a rolling single "spotlight" file
+   (the longest-running still-in-progress transfer) with a big bar/ETA,
+   a queue of what's left below it (any other concurrently-transferring
+   file shown with its own small inline bar, everything else plain), and a
+   whole-batch total bar/rate/ETA at the very bottom. +60px over the
+   generic .modal width (460px) - Ken's own explicit ask, this dialog has
+   real content (a full relative path, a rate meter, a queue) the generic
+   confirm-style modals sharing that width don't. */
+.cloud-sync-progress-modal {
+    width: 520px;
+}
+
+.cloud-sync-current-path {
+    font-size: 12px;
+    color: #9fb3c8;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 6px;
+}
+
+.cloud-sync-current-bar {
+    width: 100%;
+    height: 14px;
+}
+
+.cloud-sync-current-label {
+    font-size: 13px;
+    margin: 6px 0 14px;
+}
+
+.cloud-sync-queue-label {
+    font-size: 12px;
+    color: #9fb3c8;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 6px;
+}
+
+.cloud-sync-queue-list {
+    max-height: 160px;
+    overflow-y: auto;
+    border: 1px solid #33455c;
+    border-radius: 4px;
+    background: #16202e;
+    padding: 4px 6px;
+    margin-bottom: 14px;
+}
+
+.cloud-sync-queue-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 2px;
+    font-size: 12px;
+    color: #9fb3c8;
+}
+
+/* A file already transferring in the background (a concurrent slot beyond
+   the one big spotlight above) - distinguished from a plain waiting row by
+   its own small live bar/percentage and brighter text, still visually
+   subordinate to the spotlight's own big treatment. */
+.cloud-sync-queue-row-active {
+    color: #e6edf3;
+}
+
+.cloud-sync-queue-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cloud-sync-queue-bar {
+    width: 70px;
+    height: 6px;
+    flex: none;
+}
+
+.cloud-sync-queue-pct {
+    flex: none;
+    width: 32px;
+    text-align: right;
+}
+
+.cloud-sync-total-bar {
+    width: 100%;
+    height: 10px;
+}
+
+.cloud-sync-total-label {
+    font-size: 12px;
+    color: #9fb3c8;
+    margin-top: 6px;
+}
+
 .import-printer-detail {
     color: #9fb3c8;
     font-size: 12px;

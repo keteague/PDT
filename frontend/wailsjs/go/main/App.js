@@ -6,6 +6,14 @@ export function AllManufacturers() {
   return window['go']['main']['App']['AllManufacturers']();
 }
 
+export function CancelCloudSync() {
+  return window['go']['main']['App']['CancelCloudSync']();
+}
+
+export function CancelFlashSync() {
+  return window['go']['main']['App']['CancelFlashSync']();
+}
+
 export function CheckExportCollisions(arg1, arg2) {
   return window['go']['main']['App']['CheckExportCollisions'](arg1, arg2);
 }
@@ -40,6 +48,10 @@ export function GetAppInfo() {
 
 export function GetCatalogStatus() {
   return window['go']['main']['App']['GetCatalogStatus']();
+}
+
+export function GetCloudSyncPlan() {
+  return window['go']['main']['App']['GetCloudSyncPlan']();
 }
 
 export function GetSettings() {
@@ -110,6 +122,10 @@ export function ResetConfigPath() {
   return window['go']['main']['App']['ResetConfigPath']();
 }
 
+export function SaveCloudSyncSelection(arg1) {
+  return window['go']['main']['App']['SaveCloudSyncSelection'](arg1);
+}
+
 export function SaveConfiguration(arg1) {
   return window['go']['main']['App']['SaveConfiguration'](arg1);
 }
@@ -118,8 +134,20 @@ export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
+export function SetCloudSyncPaused(arg1) {
+  return window['go']['main']['App']['SetCloudSyncPaused'](arg1);
+}
+
 export function StopDeploy() {
   return window['go']['main']['App']['StopDeploy']();
+}
+
+export function SyncCloud(arg1) {
+  return window['go']['main']['App']['SyncCloud'](arg1);
+}
+
+export function SyncDriversFromFlashDrive(arg1) {
+  return window['go']['main']['App']['SyncDriversFromFlashDrive'](arg1);
 }
 
 export function SyncDriversToFlashDrives(arg1) {

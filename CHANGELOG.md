@@ -4,6 +4,117 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-14 (v0.9.15) - Cloud Sync: rolling progress dialog, 95%-early-start pipelining, and a live Cancel-hang fix
+
+Ken tested v0.9.14's Cloud Sync live and asked for the progress dialog to be far less basic (a
+rolling "current file" spotlight with its own path/ETA, a queue of what's left, a total-batch
+bar/rate/ETA, +60px wider), for the next queued file to start once the current one reaches 95%
+rather than waiting for it to fully finish, and for Concurrent Transfers to be a real Settings
+field (default 3) instead of a fixed constant. Separately, a real live bug: canceling an
+in-progress upload left the Cancel button frozen on "Canceling..." forever.
+
+### Added
+- `internal/cloudsync`'s `Upload`/`Download` are unchanged, but `SyncCloud` (`cloudsync_app.go`)
+  was rebuilt around a semaphore whose slot releases the moment a file reaches 95% done (not
+  strictly 100%) - the next queued file starts while the outgoing one finishes its own last few
+  percent (often mostly finalization overhead: a multipart `CompleteMultipartUpload` round trip,
+  a final rename) instead of a lane sitting idle waiting that out. Actual simultaneous transfers
+  can transiently run a little over the configured count right at a handoff.
+- Settings > Cloud Sync gained a **Concurrent Transfers** field (default 3, clamped to at least 1
+  on save) - the semaphore's own size above, previously a hardcoded `cloudSyncWorkers = 4`
+  constant.
+- The progress dialog was fully redesigned: a rolling single "spotlight" file (the
+  longest-running transfer still in progress) with its own full path, a big bar, and a per-file
+  ETA (`newCloudSyncProgressFunc` now carries its own `etaEstimator`, the same per-step machinery
+  flash-drive Sync's own progress dialog already uses); everything else concurrently transferring
+  or still queued shown below it (a concurrent file gets its own small inline bar); a whole-batch
+  total progress bar, transfer-rate meter, and ETA at the bottom, fed by a new
+  `cloudsync-total-progress` event (`CloudSyncTotalProgress`) alongside the existing per-file
+  `cloudsync-progress` one. `etaEstimator` gained a `rate()` method (`flashdrive.go`) for the
+  meter. Widened +60px (460px -> 520px) - Ken's own explicit ask, since this dialog now carries
+  real content (a full path, a rate meter, a queue) the generic confirm-style modals sharing the
+  default width don't.
+
+### Fixed
+- A real live bug: canceling an in-progress Cloud Sync upload could leave the Cancel button stuck
+  on "Canceling..." indefinitely. Two new regression tests
+  (`internal/cloudsync/cancel_hang_test.go`, `cancel_hang_multipart_test.go`, both against a real
+  `httptest` server standing in for R2) confirm `Upload`'s own context-cancellation handling
+  returns in well under a second for both the simple and multipart code paths - the hang couldn't
+  be reproduced in isolation, meaning it's most likely a real, possibly-stalled R2 connection not
+  unblocking as promptly as `context` cancellation is normally guaranteed to. Rather than leave
+  that open-ended, `SyncCloud` now bounds how long it waits after Cancel for every in-flight
+  transfer to unwind (`cloudSyncCancelGracePeriod`, 10s) before giving up and returning anyway -
+  whatever's still stuck keeps running in the background rather than being reflected in the
+  result, but the dialog is now guaranteed to close either way.
+- A stray `PDT` binary (a leftover local `go build .` artifact, never meant to be committed) was
+  removed from the repo root; `/PDT` added to `.gitignore` so a bare `go build .` in the root
+  can't reintroduce it.
+
+## 2026-09-14 (v0.9.14) - Flash-drive Cancel/bidirectional Sync, and a full Cloudflare R2 Cloud Sync feature
+
+A live crash report (PDT's window disappearing right as the elevation auth prompt appeared)
+turned into a real, confirmed finding: ad-hoc code signing gets SIGKILLed by macOS AMFI during
+privileged escalation (`Error Domain=AppleMobileFileIntegrityError Code=-423`), reproduced via a
+real `zsh: killed` on direct execution and worked around locally with a self-signed cert -
+tracked as [GitHub issue #9](https://github.com/keteague/PDT/issues/9) rather than fixed here,
+since the real fix needs a paid Apple Developer ID.
+
+Separately, Ken asked for three things: a Cancel button on flash-drive Sync (stop immediately,
+delete whatever file was mid-copy), true bidirectional flash-drive Sync (Flash Drive -> This
+computer, not just the other way), and - after learning PDT would have multiple technicians
+sharing driver downloads - a shared Cloudflare R2 bucket every technician can sync their own
+Drivers folder against, so a driver one technician downloads becomes available to everyone else
+without a flash drive changing hands.
+
+### Added
+- Cancel button on the flash-drive copy-progress dialog (`copyTreeMerge`/`copyFile`,
+  `copytree.go`) - stops as close to immediately as possible: no new file starts, and the one
+  file each of the 4 worker goroutines is mid-copying is aborted and its partial destination
+  content deleted, never left as a truncated stand-in for the real file.
+- Bidirectional flash-drive Sync: the Sync modal now has a direction toggle ("This computer ->
+  Flash Drive" / "Flash Drive -> This computer") backed by a new `SyncDriversFromFlashDrive`
+  App method - previously Sync only ever copied laptop -> flash drive.
+- Local copies (Sync/Write to Flash Drive) now preserve each file's original modification time
+  instead of stamping today's date on every copy (`copyFile`'s own `os.Chtimes` after the copy
+  completes).
+- **Cloud Sync**, a new toolbar button (vertical bidirectional-arrows icon) and full feature for
+  keeping this computer's Drivers folder in sync with a shared Cloudflare R2 bucket:
+  - New `internal/cloudsync` package (`github.com/minio/minio-go/v7` against R2's S3-compatible
+    API): `BuildPlan` diffs the local Drivers folder against the bucket by size (upload/download/
+    already-synced/conflict - a size mismatch is never auto-resolved in either direction, only
+    ever surfaced); `Upload`/`Download` are genuinely resumable - files at or above 32MiB use
+    real S3 multipart upload with per-part resume (an interrupted upload, a lost connection, or
+    PDT simply being closed mid-transfer all continue from the parts already on the server, not
+    from byte zero), and downloads resume via HTTP Range requests against a `.pdt-partial`
+    sidecar file.
+  - `PauseGate`: Pause blocks between reads without losing any already-transferred bytes (Resume
+    continues mid-file); Cancel is immediate and destructive on purpose - deletes a download's
+    partial file and aborts an upload's incomplete multipart upload on the bucket (R2, like S3,
+    bills for abandoned multipart storage otherwise).
+  - Sync is additive-only, matching flash-drive Sync's own philosophy - a file missing on one
+    side only ever triggers a copy, never a deletion, so no technician's local mistake (or a
+    bug) can cascade into removing the shared bucket's content for everyone else.
+  - Each object's original mtime round-trips through a custom `x-amz-meta-mtime` object
+    metadata field (S3-compatible storage otherwise always stamps `LastModified` as upload time)
+    - restored locally via `os.Chtimes` once a download completes.
+  - Settings gained a Cloud Sync tab (Endpoint/Bucket/Folder/Access Key ID, pre-filled with
+    Ken's own bucket) - the Secret Access Key itself is stored in the OS keychain
+    (`github.com/zalando/go-keyring`) via a new `CloudSyncSecretKey` write-only field on
+    `Settings`, never written to `settings.json` and never echoed back to the UI once saved.
+  - The Cloud Sync modal is a hierarchical tree view (built client-side from the flat plan's own
+    relative paths) with per-file and tri-state per-folder checkboxes; the selection persists
+    per-technician across sessions (`cloudsyncstate.go`'s own `Deselected` set, defaulting every
+    new/unknown file to selected - "everyone benefits from new drivers"). A file the tree hasn't
+    shown this technician before is highlighted (amber, plus a small dot) until the next time
+    the tree is opened, then the highlight clears for good (`cloudSyncState.Seen`).
+
+### Fixed
+- `applySalesChainGate()`'s own exemption list (`main.js`) didn't include the two new Cloud Sync
+  modal backdrops, so every button and checkbox inside them - Close, Sync Selected, Pause,
+  Cancel, and the tree's own checkboxes - stayed disabled whenever no Save ID was entered yet,
+  caught live from a screenshot before this shipped.
+
 ## 2026-09-13 (v0.9.13) - macOS: Konica Minolta's "(S)" duplicate models dropped entirely (60 -> 30)
 
 Ken asked what the real "(S)" PPD variant meant - answering it meant checking the real

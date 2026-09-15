@@ -125,6 +125,94 @@ export namespace main {
 	        this.modelChanges = source["modelChanges"];
 	    }
 	}
+	export class CloudSyncPlanItem {
+	    relPath: string;
+	    action: string;
+	    localSize: number;
+	    remoteSize: number;
+	    selected: boolean;
+	    isNew: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudSyncPlanItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.relPath = source["relPath"];
+	        this.action = source["action"];
+	        this.localSize = source["localSize"];
+	        this.remoteSize = source["remoteSize"];
+	        this.selected = source["selected"];
+	        this.isNew = source["isNew"];
+	    }
+	}
+	export class CloudSyncPlanResult {
+	    items: CloudSyncPlanItem[];
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudSyncPlanResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], CloudSyncPlanItem);
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CloudSyncResult {
+	    succeeded: string[];
+	    failed: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudSyncResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.succeeded = source["succeeded"];
+	        this.failed = source["failed"];
+	    }
+	}
+	export class CloudSyncSettings {
+	    endpoint: string;
+	    bucket: string;
+	    prefix: string;
+	    accessKeyId: string;
+	    concurrentTransfers: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudSyncSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.endpoint = source["endpoint"];
+	        this.bucket = source["bucket"];
+	        this.prefix = source["prefix"];
+	        this.accessKeyId = source["accessKeyId"];
+	        this.concurrentTransfers = source["concurrentTransfers"];
+	    }
+	}
 	export class DeployRowResult {
 	    rowName: string;
 	    log: string[];
@@ -333,6 +421,9 @@ export namespace main {
 	    preinstallBasePath: string;
 	    manufacturerUrls: Record<string, string>;
 	    manufacturerOrder: string[];
+	    cloudSync: CloudSyncSettings;
+	    cloudSyncSecretKey?: string;
+	    cloudSyncHasSecret: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -345,7 +436,28 @@ export namespace main {
 	        this.preinstallBasePath = source["preinstallBasePath"];
 	        this.manufacturerUrls = source["manufacturerUrls"];
 	        this.manufacturerOrder = source["manufacturerOrder"];
+	        this.cloudSync = this.convertValues(source["cloudSync"], CloudSyncSettings);
+	        this.cloudSyncSecretKey = source["cloudSyncSecretKey"];
+	        this.cloudSyncHasSecret = source["cloudSyncHasSecret"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

@@ -59,6 +59,23 @@ type remoteObject struct {
 // would silently treat everything past it as "missing locally" and try to
 // download all of it. Keys come back with prefix stripped, using forward
 // slashes, matching PlanItem.RelPath's own shape.
+//
+// ctx is checked between pages, not passed into ListObjectsV2 itself -
+// minio-go v7.3.0's Core.ListObjectsV2 (unlike every other Core method used
+// elsewhere in this package) takes no context.Context parameter at all, so
+// there's no way to abort a single in-flight page request. This was a real
+// live bug: SyncCloud's own Cancel button re-runs BuildPlan (this function)
+// at the very start of every sync, before any per-file transfer (which DOES
+// respect ctx - see transfer.go) even begins, so hitting Cancel while a
+// large shared bucket's listing was still paging left the button frozen on
+// "Canceling..." until the entire multi-page listing finished on its own,
+// with no way to interrupt it. Checking ctx.Done() right after each page
+// lands (rather than mid-request, which isn't possible here) bounds that
+// wait to however long one more page's own request-response cycle takes,
+// not however many pages remain - the same "can't cancel the network call
+// itself, but never let that freeze the button indefinitely" reasoning
+// cloudSyncCancelGracePeriod (cloudsync_app.go) already applies to the
+// per-file transfer join, just one level further out.
 func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (map[string]remoteObject, error) {
 	out := map[string]remoteObject{}
 	token := ""
@@ -79,6 +96,9 @@ func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (m
 		}
 		if !result.IsTruncated {
 			return out, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		token = result.NextContinuationToken
 	}

@@ -254,7 +254,39 @@ func (a *App) SyncCloud(relPaths []string) CloudSyncResult {
 		cancel()
 	}()
 
-	plan, err := cloudsync.BuildPlan(ctx, core, cfg.Bucket, a.settings.CloudSync.Prefix, driversRoot())
+	// Run BuildPlan's own remote listing in a goroutine rather than awaiting
+	// it directly, so Cancel is bounded here the same way it already is
+	// below for the per-file wg.Wait() join: listRemote checks ctx between
+	// pages (see its own doc comment), but can't abort a single in-flight
+	// page request - minio-go's ListObjectsV2 takes no context at all - so
+	// without this, Cancel landing mid-request during the plan rebuild could
+	// still freeze the button until that one request happens to return.
+	// Whatever's still running past cloudSyncCancelGracePeriod keeps running
+	// in the background and its result is simply discarded, matching
+	// cloudSyncCancelGracePeriod's own doc comment.
+	type planResult struct {
+		plan []cloudsync.PlanItem
+		err  error
+	}
+	planCh := make(chan planResult, 1)
+	go func() {
+		p, err := cloudsync.BuildPlan(ctx, core, cfg.Bucket, a.settings.CloudSync.Prefix, driversRoot())
+		planCh <- planResult{p, err}
+	}()
+
+	var plan []cloudsync.PlanItem
+	select {
+	case r := <-planCh:
+		plan, err = r.plan, r.err
+	case <-ctx.Done():
+		select {
+		case r := <-planCh:
+			plan, err = r.plan, r.err
+		case <-time.After(cloudSyncCancelGracePeriod):
+			result.Failed["*"] = ctx.Err().Error()
+			return result
+		}
+	}
 	if err != nil {
 		result.Failed["*"] = err.Error()
 		return result

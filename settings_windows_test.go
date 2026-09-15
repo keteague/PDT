@@ -19,6 +19,34 @@ func TestInstalledAppDataDir(t *testing.T) {
 	}
 }
 
+// TestIsKnownInstallDir is the direct regression test for the real bug this
+// guards against (see its own doc comment): an installed copy with a stray
+// Drivers folder sitting next to its own exe used to get silently
+// reclassified as portable.
+func TestIsKnownInstallDir(t *testing.T) {
+	t.Setenv("ProgramFiles", `C:\Program Files`)
+	t.Setenv("LOCALAPPDATA", `C:\Users\Test\AppData\Local`)
+
+	cases := []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{"elevated install dir", `C:\Program Files\PDT`, true},
+		{"elevated install dir, different case", `C:\PROGRAM FILES\pdt`, true},
+		{"unelevated install dir", `C:\Users\Test\AppData\Local\Programs\PDT`, true},
+		{"some other folder under Documents", `C:\Users\Test\Documents\PDT`, false},
+		{"a flash drive's own root", `D:\PDT`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isKnownInstallDir(c.dir); got != c.want {
+				t.Errorf("isKnownInstallDir(%q) = %v, want %v", c.dir, got, c.want)
+			}
+		})
+	}
+}
+
 // TestDefaultDriversBasePath_PortableLiteralHasNoBackslash: the portable
 // case's relative-path literal is bare "Drivers"/"Configs" now, matching
 // settings_darwin.go's own portable case exactly (see both files' doc

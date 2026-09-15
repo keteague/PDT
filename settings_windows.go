@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // installedAppDataDir is %LocalAppData%\PDT - where an installed (non-
@@ -18,14 +19,48 @@ func installedAppDataDir() string {
 	return ""
 }
 
+// isKnownInstallDir reports whether dir is one of the two directories the
+// installer itself ever places PDT.exe under (installer/pdt.iss's own
+// DefaultDirName={autopf}\PDT - %ProgramFiles%\PDT for an elevated install,
+// %LocalAppData%\Programs\PDT for the default unelevated one).
+//
+// defaultDriversBasePath/defaultSaveFileBasePath use this to tell "PDT is
+// genuinely installed, and something unrelated just happens to have put a
+// Drivers folder next to the exe" apart from "this really is a portable/
+// flash-drive copy" - confirmed as a real, live bug: without this check, an
+// installed copy with a stray Drivers folder sitting next to its own exe
+// (e.g. left over from early testing, or copied there by hand) silently got
+// reclassified as portable and started using that exe-relative folder
+// instead of installedAppDataDir(), splitting one technician's driver
+// library across two locations with no visible indication of which one PDT
+// was actually reading from at any given moment.
+func isKnownInstallDir(dir string) bool {
+	dir = filepath.Clean(dir)
+	if pf := os.Getenv("ProgramFiles"); pf != "" && strings.EqualFold(dir, filepath.Clean(filepath.Join(pf, "PDT"))) {
+		return true
+	}
+	if lad := os.Getenv("LOCALAPPDATA"); lad != "" && strings.EqualFold(dir, filepath.Clean(filepath.Join(lad, "Programs", "PDT"))) {
+		return true
+	}
+	return false
+}
+
 // defaultDriversBasePath and defaultSaveFileBasePath both apply the same
 // rule: prefer a real, already-populated Drivers folder sitting next to the
 // running executable - the portable/flash-drive case, and the tell
 // BuildCatalog itself already used to decide whether Configs was
 // exe-relative too, before DriversBasePath/SaveFileBasePath existed as their
-// own Settings fields - falling back to installedAppDataDir() for an
-// installed copy, where the current user always has write access regardless
-// of whether PDT itself sits under %ProgramFiles% or %LocalAppData%\Programs.
+// own Settings fields - unless the exe is running from one of PDT's own
+// known installed locations (isKnownInstallDir), in which case a Drivers
+// folder happening to sit there doesn't mean this is a portable copy at
+// all. Falls back to installedAppDataDir() for an installed copy - not
+// because %ProgramFiles%\PDT/%LocalAppData%\Programs\PDT aren't writable
+// (PDT.exe's own manifest requires elevation for every launch regardless of
+// install location, so both actually are by the time PDT is running), but
+// so an uninstall/reinstall of the program itself - which Inno Setup's own
+// default behavior can remove {app}'s entire contents for - never risks
+// touching a multi-GB, technician-curated driver library that has nothing
+// to do with the program binary itself.
 //
 // The portable case returns a *relative* path ("Drivers", "Configs" - no
 // leading ".\" - see settings.go's own doc comment for why: a bare relative
@@ -47,7 +82,8 @@ func installedAppDataDir() string {
 // even for a portable copy before this.
 func defaultDriversBasePath() string {
 	if exe, err := os.Executable(); err == nil {
-		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {
+		exeDir := filepath.Dir(exe)
+		if !isKnownInstallDir(exeDir) && dirExists(filepath.Join(exeDir, "Drivers")) {
 			return "Drivers"
 		}
 	}
@@ -59,7 +95,8 @@ func defaultDriversBasePath() string {
 
 func defaultSaveFileBasePath() string {
 	if exe, err := os.Executable(); err == nil {
-		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {
+		exeDir := filepath.Dir(exe)
+		if !isKnownInstallDir(exeDir) && dirExists(filepath.Join(exeDir, "Drivers")) {
 			return "Configs"
 		}
 	}

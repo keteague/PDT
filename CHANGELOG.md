@@ -4,6 +4,43 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-15 (v0.9.17) - Cloud Sync Cancel could still freeze on "Canceling...", and an installed copy's Drivers folder could get silently misdetected as portable
+
+Two real bugs found live, both Windows-only.
+
+### Fixed
+- **Cloud Sync's Cancel button could still freeze on "Canceling..." forever.** The
+  cloudSyncCancelGracePeriod fix already in place (see the v0.9.16 entry below) only bounded the
+  per-file transfer join - it didn't cover SyncCloud rebuilding its own plan via `BuildPlan` at the
+  very start of every sync, before any per-file transfer (and its ctx-aware cancellation) even
+  begins. `listRemote`'s own `ctx` parameter (`internal/cloudsync/plan.go`) was accepted but never
+  actually read - minio-go v7.3.0's `Core.ListObjectsV2`, unlike every other `Core` method this
+  package uses, takes no `context.Context` at all, so a bucket listing still paging when Cancel
+  landed had no way to be interrupted. Fixed in two layers: `listRemote` now checks `ctx.Err()`
+  between pages (bounds the wait to one more page's own round trip rather than however many pages
+  remain), and `SyncCloud` (`cloudsync_app.go`) now races its own `BuildPlan` call against ctx with
+  the same grace-period backstop the per-file join already used, for the case where even a single
+  page request hangs. New regression test:
+  `TestListRemote_CancelBetweenPagesReturnsPromptly` (a fake server that pages forever, confirming
+  `listRemote` still returns promptly once canceled).
+- **An installed copy's Drivers folder could get silently reclassified as portable.**
+  `defaultDriversBasePath`/`defaultSaveFileBasePath` (`settings_windows.go`) treat a Drivers folder
+  sitting next to the running exe as a portable/flash-drive copy - correct for an actual portable
+  copy, but a real gap for an *installed* copy: if a Drivers folder ever ends up sitting next to
+  `PDT.exe` under `%ProgramFiles%\PDT` or `%LocalAppData%\Programs\PDT` (leftover from early
+  testing, copied there by hand, etc.), PDT silently started treating that install as portable and
+  used that exe-relative folder instead of `%LocalAppData%\PDT\Drivers` - splitting one
+  technician's driver library across two locations with no visible indication of which one PDT was
+  actually reading from. Fixed with a new `isKnownInstallDir` check: a Drivers folder next to the
+  exe only means "portable" when the exe isn't running from one of PDT's own two known installed
+  locations (the exact two `installer/pdt.iss` ever places it under). Installed copies now always
+  use `%LocalAppData%\PDT\Drivers` regardless of what else happens to be sitting next to the exe -
+  deliberately not because `%ProgramFiles%\PDT` isn't writable (`PDT.exe`'s own manifest requires
+  elevation for every launch regardless of install location, so it is by the time PDT is running),
+  but so an uninstall/reinstall of the program itself never risks touching a multi-GB,
+  technician-curated driver library that has nothing to do with the program binary. New regression
+  test: `TestIsKnownInstallDir`.
+
 ## 2026-09-15 (v0.9.16) - Selective Rescan dialog replaces the one-click Refresh Drivers button on Windows (GitHub issue #10, increment 3 of 3)
 
 Increments 1 and 2 (below) stopped Sync from transferring extracted driver sprawl and stopped catalog

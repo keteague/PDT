@@ -6,6 +6,14 @@ export function AllManufacturers() {
   return window['go']['main']['App']['AllManufacturers']();
 }
 
+export function ApplyUpdate(arg1, arg2) {
+  return window['go']['main']['App']['ApplyUpdate'](arg1, arg2);
+}
+
+export function BrowseDevModeFile(arg1, arg2) {
+  return window['go']['main']['App']['BrowseDevModeFile'](arg1, arg2);
+}
+
 export function CancelCloudSync() {
   return window['go']['main']['App']['CancelCloudSync']();
 }
@@ -14,8 +22,20 @@ export function CancelFlashSync() {
   return window['go']['main']['App']['CancelFlashSync']();
 }
 
+export function CaptureDevModeForPrinter(arg1, arg2) {
+  return window['go']['main']['App']['CaptureDevModeForPrinter'](arg1, arg2);
+}
+
 export function CheckExportCollisions(arg1, arg2) {
   return window['go']['main']['App']['CheckExportCollisions'](arg1, arg2);
+}
+
+export function CheckForUpdate() {
+  return window['go']['main']['App']['CheckForUpdate']();
+}
+
+export function CheckSevenZipUpdate() {
+  return window['go']['main']['App']['CheckSevenZipUpdate']();
 }
 
 export function DefaultDriverFor(arg1) {
@@ -28,6 +48,10 @@ export function Deploy(arg1, arg2, arg3) {
 
 export function DriverCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['DriverCandidates'](arg1, arg2, arg3);
+}
+
+export function EnumerateLocalPrinters() {
+  return window['go']['main']['App']['EnumerateLocalPrinters']();
 }
 
 export function ExportConfigs(arg1, arg2, arg3) {
@@ -58,6 +82,10 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
+export function GetSevenZipVersion() {
+  return window['go']['main']['App']['GetSevenZipVersion']();
+}
+
 export function ImportCsv() {
   return window['go']['main']['App']['ImportCsv']();
 }
@@ -72,10 +100,6 @@ export function ListPreinstallFolders(arg1) {
 
 export function ListRemovableDrives() {
   return window['go']['main']['App']['ListRemovableDrives']();
-}
-
-export function MacModelManufacturers() {
-  return window['go']['main']['App']['MacModelManufacturers']();
 }
 
 export function Manufacturers() {
@@ -106,6 +130,10 @@ export function OpenRepoURL() {
   return window['go']['main']['App']['OpenRepoURL']();
 }
 
+export function OpenSevenZipHomepage() {
+  return window['go']['main']['App']['OpenSevenZipHomepage']();
+}
+
 export function PickFolder(arg1) {
   return window['go']['main']['App']['PickFolder'](arg1);
 }
@@ -120,6 +148,10 @@ export function RefreshDriverCatalog() {
 
 export function ResetConfigPath() {
   return window['go']['main']['App']['ResetConfigPath']();
+}
+
+export function RestartSpooler() {
+  return window['go']['main']['App']['RestartSpooler']();
 }
 
 export function SaveCloudSyncSelection(arg1) {
@@ -138,8 +170,20 @@ export function SetCloudSyncPaused(arg1) {
   return window['go']['main']['App']['SetCloudSyncPaused'](arg1);
 }
 
+export function SpoolerStatus() {
+  return window['go']['main']['App']['SpoolerStatus']();
+}
+
+export function StartSpooler() {
+  return window['go']['main']['App']['StartSpooler']();
+}
+
 export function StopDeploy() {
   return window['go']['main']['App']['StopDeploy']();
+}
+
+export function StopSpooler() {
+  return window['go']['main']['App']['StopSpooler']();
 }
 
 export function SyncCloud(arg1) {
@@ -152,6 +196,10 @@ export function SyncDriversFromFlashDrive(arg1) {
 
 export function SyncDriversToFlashDrives(arg1) {
   return window['go']['main']['App']['SyncDriversToFlashDrives'](arg1);
+}
+
+export function UpdateSevenZip(arg1) {
+  return window['go']['main']['App']['UpdateSevenZip'](arg1);
 }
 
 export function WritePortablePDT(arg1) {

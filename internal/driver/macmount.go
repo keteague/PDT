@@ -100,8 +100,16 @@ func mountDmg(path string) (mountPoint string, detach func() error, err error) {
 }
 
 // findFirstByExt walks root looking for the first file whose extension
-// matches ext (case-insensitive), skipping Archive/etc segments the same way
-// scanMacPackages does. Returns "" if none found.
+// matches ext (case-insensitive), skipping Archive/etc/__MACOSX segments and
+// "._"-prefixed AppleDouble resource-fork stub files - the same convention
+// scanMacPackages/collectByExt already apply, needed here too now that a
+// caller can be searching inside a temp directory resolveMacZipSource just
+// extracted a real vendor .zip into (confirmed live: a real Canon download's
+// own zip carries a __MACOSX/._<name>.dmg stub alongside the real .dmg -
+// without this, a search that happened to visit the stub first would return
+// a ~300-byte junk file instead of the real 80+ MB one; relying on
+// alphabetical WalkDir ordering to avoid that by luck is not a real
+// guarantee). Returns "" if none found.
 func findFirstByExt(root, ext string) string {
 	found := ""
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -109,9 +117,12 @@ func findFirstByExt(root, ext string) string {
 			return nil
 		}
 		if d.IsDir() {
-			if strings.EqualFold(d.Name(), "etc") || strings.EqualFold(d.Name(), "Archive") {
+			if strings.EqualFold(d.Name(), "etc") || strings.EqualFold(d.Name(), "Archive") || d.Name() == "__MACOSX" {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), "._") {
 			return nil
 		}
 		if strings.EqualFold(filepath.Ext(path), ext) {
@@ -155,17 +166,29 @@ func collectByExt(root string, exts ...string) []string {
 	return out
 }
 
-// LocateLoosePPDs mounts path (like LocatePkg) and returns every loose
+// LocateLoosePPDs resolves path (like LocatePkg) - transparently extracting
+// it first, into a throwaway temp directory, if it's a .zip (see
+// resolveMacZipSource) - then mounts it and returns every loose
 // *.ppd/*.ppd.gz file found inside - for a package shape with no installer
 // .pkg at all (confirmed live against Canon's own "PPD" bucket download:
-// PPDv5.50_mac.dmg wraps one nested mac-ppd-*.dmg, itself a plain
-// folder-per-model tree of *.PPD.gz files with no *cupsFilter line in any of
-// them - real Generic PostScript PPDs, not a proprietary driver, so there's
-// no installer to look for at all). Same one-level-of-nesting mount
-// convention as LocatePkg - checks the outer mount first, then one level of
-// nested .dmg. cleanup unmounts everything this call mounted; always call
-// it, even after an error.
+// PPDv5.50_mac.zip wraps one PPDv5.50_mac.dmg, which itself wraps one nested
+// mac-ppd-*.dmg, itself a plain folder-per-model tree of *.PPD.gz files with
+// no *cupsFilter line in any of them - real Generic PostScript PPDs, not a
+// proprietary driver, so there's no installer to look for at all). Same
+// one-level-of-nesting mount convention as LocatePkg - checks the outer
+// mount first, then one level of nested .dmg. cleanup unmounts everything
+// this call mounted AND removes any temp extraction directory
+// resolveMacZipSource created; always call it, even after an error.
 func LocateLoosePPDs(path string) (ppdPaths []string, cleanup func(), err error) {
+	realPath, zipCleanup, zerr := resolveMacZipSource(path)
+	if zerr != nil {
+		return nil, func() {}, zerr
+	}
+	ppdPaths, innerCleanup, err := locateLoosePPDsFromRealPath(realPath)
+	return ppdPaths, func() { innerCleanup(); zipCleanup() }, err
+}
+
+func locateLoosePPDsFromRealPath(path string) (ppdPaths []string, cleanup func(), err error) {
 	if !isDmgLikePath(path) {
 		return nil, func() {}, fmt.Errorf("%s is not a .dmg", path)
 	}
@@ -217,13 +240,42 @@ func LocatePkg(path string) (pkgPath string, cleanup func(), err error) {
 }
 
 // LocatePkgWithChain is LocatePkg plus the chain of files it actually had to
-// open to get there - path itself first, then each nested .dmg it mounted
-// along the way, ending with the resolved .pkg. Used by the catalog-
-// building code (macmodel.go) to record exactly which files (and their own
-// parents) produced a given set of indexed models - MacCatalogDB's own
-// provenance chain. LocatePkg itself is a thin wrapper that just drops the
-// chain; every one of its own existing callers is unaffected.
+// open to get there - path itself first (never the throwaway temp file
+// resolveMacZipSource may have extracted it to internally, which has no
+// meaningful identity of its own), then each nested .dmg it mounted along
+// the way, ending with the resolved .pkg. Used by the catalog-building code
+// (macmodel.go) to record exactly which files (and their own parents)
+// produced a given set of indexed models - MacCatalogDB's own provenance
+// chain. LocatePkg itself is a thin wrapper that just drops the chain;
+// every one of its own existing callers is unaffected.
+//
+// Transparently extracts path first, into a throwaway temp directory, if
+// it's a .zip (see resolveMacZipSource) - GitHub issue #11: a .zip is
+// resolved fresh on every call, never left behind as a permanent sibling
+// folder the way this function's callers used to rely on
+// (ensureMacZipsExtracted, called eagerly by the catalog scan before this
+// ever ran). cleanup unmounts everything AND removes that temp directory.
 func LocatePkgWithChain(path string) (pkgPath string, chain []string, cleanup func(), err error) {
+	realPath, zipCleanup, zerr := resolveMacZipSource(path)
+	if zerr != nil {
+		return "", nil, func() {}, zerr
+	}
+	pkgPath, innerChain, innerCleanup, err := locatePkgWithChainFromRealPath(realPath)
+	cleanup = func() { innerCleanup(); zipCleanup() }
+	if err != nil {
+		return "", nil, cleanup, err
+	}
+	// innerChain[0] is realPath - either path itself (the common,
+	// non-.zip case, where resolveMacZipSource was a no-op pass-through and
+	// this is a no-op replacement) or a meaningless throwaway temp path;
+	// replaced with path itself either way, since indexFamilyPackage's own
+	// outerRef is built from pkg.Path directly and expects chain[0] to
+	// duplicate it exactly (see its own doc comment).
+	chain = append([]string{path}, innerChain[1:]...)
+	return pkgPath, chain, cleanup, nil
+}
+
+func locatePkgWithChainFromRealPath(path string) (pkgPath string, chain []string, cleanup func(), err error) {
 	if strings.EqualFold(filepath.Ext(path), ".pkg") {
 		return path, []string{path}, func() {}, nil
 	}

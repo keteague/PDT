@@ -65,26 +65,31 @@ func TestKonicaMinoltaIsSimplexDefaultVariant(t *testing.T) {
 	}
 }
 
-// TestClassifyMacFamily_KonicaMinoltaPkgTokenMatchesAnyRealPackage locks in
-// the real finding that no real Konica Minolta filename (outer .zip or the
-// real .pkg found after extraction) ever contains "Konica" or "Minolta" -
-// unlike every other single-driver-line manufacturer here (Kyocera/Xerox/
-// Toshiba), so the classification token can't be the manufacturer's own
-// name. ".pkg" matches by construction instead - every real Konica Minolta
-// package discovered across all 3 real download generations resolves down
-// to a real .pkg file.
-func TestClassifyMacFamily_KonicaMinoltaPkgTokenMatchesAnyRealPackage(t *testing.T) {
+// TestClassifyMacFamily_KonicaMinoltaZipTokenMatchesAnyRealPackage locks in
+// the real finding that no real Konica Minolta filename (the outer .zip
+// scanMacPackages actually records since GitHub issue #11, or the real
+// .pkg it wraps) ever contains "Konica" or "Minolta" - unlike every other
+// single-driver-line manufacturer here (Kyocera/Xerox/Toshiba), so the
+// classification token can't be the manufacturer's own name. ".zip" matches
+// by construction instead - every real Konica Minolta download across all
+// 3 real download generations is a .zip; ".pkg"/".dmg" are kept in the
+// token list as a defensive fallback (checked below too) should Konica
+// Minolta ever ship one of those directly, unwrapped.
+func TestClassifyMacFamily_KonicaMinoltaZipTokenMatchesAnyRealPackage(t *testing.T) {
 	tokens := macFamilyPreference["Konica Minolta"]
-	for _, name := range []string{
-		"C750i_C650i_C360i_C287i_C286i_C4050i_C4000i_C3320i.pkg",
-		"C750i_C287i_C4050i_C751i_C4751i_11.pkg",
-		"C750i_C287i_C4050i_C751i_C4051i_11.pkg",
+	for name, want := range map[string]string{
+		"C750i_C650i_C360i_C287i_C286i_C4050i_C4000i_C3320i.zip": ".zip",
+		"C750i_C287i_C4050i_C751i_C4751i_11_MacOS_v5.2.14A.zip":  ".zip",
+		"C750i_C287i_C4050i_C751i_C4051i_11.pkg":                 ".pkg",
+		"C750i_C287i_C4050i_C751i_C4051i_11.dmg":                 ".dmg",
 	} {
-		if got := classifyMacFamily(tokens, name); got != ".pkg" {
-			t.Errorf("expected %q to classify as %q, got %q", name, ".pkg", got)
+		if got := classifyMacFamily(tokens, name); got != want {
+			t.Errorf("expected %q to classify as %q, got %q", name, want, got)
 		}
 	}
-	if got := languageDisplayName(".pkg"); got != "Driver" {
-		t.Errorf(`expected languageDisplayName(".pkg") == "Driver", got %q`, got)
+	for _, tok := range []string{".zip", ".pkg", ".dmg"} {
+		if got := languageDisplayName(tok); got != "Driver" {
+			t.Errorf(`expected languageDisplayName(%q) == "Driver", got %q`, tok, got)
+		}
 	}
 }

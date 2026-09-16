@@ -88,7 +88,7 @@ nothing analogous to create ahead of the queue itself.
 
 | File | What it does |
 |---|---|
-| `internal/driver/maccatalog.go`, `maczip.go` | Scans `Drivers/macOS/<Manufacturer>/<any version folder>/*.dmg`/`*.pkg` (version nested under manufacturer, the other way from the Windows side - see "Drivers folder layout" below for why), plus a flat `Drivers/macOS/OpenPrinting/<Manufacturer>/*.ppd` fallback bucket. `.zip` is auto-extracted first (`ensureMacZipsExtracted`, reusing the Windows side's own `extractZip`/`flattenRedundantWrapperDir` - no Windows-only dependency in either) - confirmed necessary against a real Canon download, which ships as a `.zip` directly wrapping one `.dmg` with no installer of its own inside. `__MACOSX/` and `._`-prefixed AppleDouble resource-fork stubs (macOS's own zip tooling litters these into any zip made on a Mac) are explicitly skipped - confirmed live one of these shares its real file's own `.dmg` extension, at a few hundred bytes instead of 80+ MB, so without this it would show up as a second, bogus catalog entry that fails the moment something tries to mount it. |
+| `internal/driver/maccatalog.go`, `maczip.go` | Scans `Drivers/macOS/<Manufacturer>/<any version folder>/*.dmg`/`*.pkg`/`*.zip` (version nested under manufacturer, the other way from the Windows side - see "Drivers folder layout" below for why), plus a flat `Drivers/macOS/OpenPrinting/<Manufacturer>/*.ppd` fallback bucket. A `.zip` (Canon: wraps one `.dmg`; Konica Minolta: wraps a further-nested `.zip`) is recorded as its own catalog entry directly, never extracted at scan time at all - GitHub issue #11's fix: the previous eager-extract-into-a-permanent-sibling-folder behavior (`ensureMacZipsExtracted`) was confirmed live to regenerate real, repeated disk bloat (~2.6G/36 folders on a real machine) on every single catalog rebuild. `resolveMacZipSource` now extracts a `.zip` on demand, into a throwaway temp directory, only when something (cataloging, or a real Deploy) actually needs the real bytes inside - reusing the Windows side's own `extractZip`/`flattenRedundantWrapperDir`, no Windows-only dependency in either. Any leftover pre-fix sibling folder still found on disk is recognized (`ExtractedSiblingDirs`, the same predicate Sync already used to skip these) and deleted outright. `__MACOSX/` and `._`-prefixed AppleDouble resource-fork stubs (macOS's own zip tooling litters these into any zip made on a Mac) are explicitly skipped - confirmed live one of these shares its real file's own `.dmg` extension, at a few hundred bytes instead of 80+ MB, so without this it would show up as a second, bogus catalog entry that fails the moment something tries to mount it. |
 | `internal/driver/macmount.go` | `LocatePkg` resolves a `.dmg` to the real `.pkg` inside it (mounts via `hdiutil`, recurses into one level of nested `.dmg` - confirmed necessary against a real Kyocera package that wraps a nested image), with no bundled extraction tool needed - unlike Windows' bundled 7-Zip, macOS driver packages need no pre-extraction step at all. `PackageLabel` is a best-effort *display* label only (see below) - never used to decide which package is newest. `LocateLoosePPDs` is `LocatePkg`'s sibling for the opposite case - a `.dmg` with no `.pkg` inside at all, confirmed live to be Canon's own "PPD" bucket shape (a nested `.dmg` wrapping a plain folder-per-model tree of `*.PPD.gz` files, no installer anywhere) - same mount/one-nested-level convention, collecting every loose PPD found instead of a single `.pkg`. |
 | `internal/driver/macresolve.go` | `ResolveMac` picks the newest package for a manufacturer **by file modification time**, not by any version parsed out of the package - confirmed against a real Kyocera distribution-style package that there's no reliable per-package version field on macOS at all (every component's own declared "version" was boilerplate `1.0`/`0`); the file's own mtime is the only honest signal available. `ResolveOpenPrintingPPD`/`OpenPrintingCandidates` fuzzy-match a technician-typed driver/model string against the OpenPrinting fallback bucket's own filenames (normalized from `Ricoh_MP_C3003.ppd`-style underscores to spaces first - confirmed necessary, `FuzzyMatchScore`'s subsequence matching is strict about order and does not treat `_` and ` ` as interchangeable). |
 | `internal/driver/macppd.go` | `ReadPPDNickName` reads a PPD's own `*NickName` (falling back to `*ModelName`), transparently gzip-decompressing `.ppd.gz` - confirmed live necessary against real Canon PPDs, whose filenames (`CNPZUIRAC5840ZU.ppd.gz`) are cryptic vendor codes sharing no matchable substring, or even in-order character sequence, with how a technician would actually type the model (`iR-ADV C5840`); `FuzzyMatchScore` against the raw filename is a hard `-1`. `PackagePPDNickNames`/`PackageBestModelScore` do the same read-only `pkgutil --expand-full` inspection `PackageLabel` already does, but collect every PPD's `*NickName` and score them against a model string - lets a package be checked for whether it even supports a given model *before* installing it. |
@@ -480,6 +480,58 @@ prunes any entry/provenance for a package no longer part of a family's current s
 family's own current packages have all been processed. Both bugs have dedicated regression
 tests and were confirmed live against Ken's own real, previously-broken catalog files -
 restored to 460 (Kyocera) and 354 (Ricoh) models with zero duplicates.
+
+### macOS: lazy zip extraction (issue #11), real Lexmark support, and OpenPrinting improvements (2026-09-15/16)
+
+**Issue #11**: the eager-extract-and-never-clean-up `.zip` behavior described above (now fixed
+- see `maccatalog.go`'s own table row) mirrors GitHub issue #10's own Windows-side fix, found the
+same way: Ken deleted the same regenerated `Foo/` sibling folders by hand twice before asking why
+mac never got the same treatment. Unlike Windows' `.inf` text (readable straight out of zip bytes,
+no extraction needed at all until Deploy), macOS's `hdiutil`/`pkgutil` need a real file on disk,
+so the fix is "extract on demand into a throwaway temp directory" rather than "never extract
+until Deploy" - see `resolveMacZipSource`'s own doc comment. A real regression this surfaced,
+caught only by tracing the code (the existing test suite stayed green the whole time): Konica
+Minolta's own family-classification token was a bare `".pkg"` file extension, which only ever
+matched because the old eager extraction had already unwrapped the zip first - widened to
+`{".zip", ".pkg", ".dmg"}` once `scanMacPackages` started recording the outer `.zip` directly.
+
+**Real Lexmark support**: Ken's own real download (`Universal_Color_Print.pkg`) turned out to be
+a genuine Universal Print Driver - exactly one PPD ("Lexmark Universal Color.gz", no `.ppd` in
+the name, same content-based extraction fallback Ricoh/Xerox/Toshiba/Konica Minolta already
+needed), no per-model `*Product` list the way Toshiba/Konica Minolta's own generic PDL-variant
+PPDs have. Still needed a full `macFamilyPreference` entry despite there being only one real
+model to index - `PrepareBatch`'s own batching only ever recognizes a row once
+`driver.MacVariantForDeploy` resolves it to a real catalog variant, so without one, Lexmark kept
+falling through to the old per-row path forever, paying its own separate auth prompt every
+deploy (confirmed live). `planLexmarkBatchRow` folds a plain full install into the existing
+1-auth-prompt batching, the same shape Ricoh/Sharp/Xerox/Toshiba/Konica Minolta's own planners
+already use.
+
+**A real, live-confirmed bug this surfaced immediately**: the very next real batched deploy after
+Lexmark landed, Ricoh failed with `installer: Error - This update requires macOS version 15.0 or
+earlier.` - the real `installer` binary enforcing Ricoh's own `<installation-check>` version-gate
+predicate against a macOS release newer than Ricoh validated this specific download against. This
+was only diagnosable at all because of a separate fix landed the same night: `PrepareBatch`'s own
+batch script now redirects each row's own subshell stderr to a per-row file (previously only an
+exit code ever survived - "batched install/queue-create failed (exit 1)" with zero detail on
+why). Tracked as [GitHub issue #12](https://github.com/keteague/PDT/issues/12) - not yet fixed;
+Ken's own proposed design is to fall back to extracting the PPD directly from the payload
+(bypassing `installer` and its version gate entirely) only when the failure looks like this
+specific version check *and* the failing package's own `OSVersionFolder` is macOS 14+ (a
+conservative floor - an older driver failing a version check on a much newer macOS is more likely
+to have a genuine incompatibility beyond just a stale predicate).
+
+**OpenPrinting fallback PPDs** (the community-maintained generic bucket, never a real
+vendor-branded driver) now carry a trailing `" (OP)"` marker everywhere they're shown
+(`ppdMatchLabel`) - confirmed live as a real point of confusion: a Lexmark deploy used one of
+these with nothing in the Driver dropdown distinguishing it from a genuine Lexmark driver.
+`DriverCandidates` also now always offers matching OpenPrinting PPDs alongside whatever real
+driver/catalog match already resolved, not just when nothing else is available - a technician can
+explicitly override the auto-resolved driver when it doesn't actually cover their printer's real
+model. And a row that resolves *only* via an OpenPrinting fallback (no real installer package at
+all) now also joins the shared batch (`planOpenPrintingBatchRow` - no install step, `lpadmin -P`
+straight against the loose PPD's own real path) instead of always paying its own separate
+elevated call just to run one `lpadmin` command.
 
 **v0.9.2 - `catalog.<mfg>.json` now prunes a fully-removed/archived package too.** Moving a
 real vendor package into an `Archive` folder (or deleting it outright) always correctly

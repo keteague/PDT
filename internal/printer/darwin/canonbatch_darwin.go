@@ -47,9 +47,16 @@ type canonBatchResult struct {
 // per-row result-file bookkeeping) is shared and doesn't care which
 // manufacturer produced it.
 type canonBatchRowPlan struct {
-	row              printer.PrinterRow
-	packagePath      string // variant.PackagePath - the cache key sharedComponentsInstalledThisRun also uses
-	ppdFilename      string
+	row         printer.PrinterRow
+	packagePath string // variant.PackagePath - the cache key sharedComponentsInstalledThisRun also uses
+	ppdFilename string
+	// ppdFullPath, when set, is used directly as the queue-create step's own
+	// -P argument instead of filepath.Join(ppdResourcesDir, ppdFilename) -
+	// planOpenPrintingBatchRow's own case: an OpenPrinting fallback PPD is a
+	// loose file under the Drivers folder, never something a real installer
+	// places under ppdResourcesDir, so there's no ppdFilename-relative-to-
+	// ppdResourcesDir path to build at all.
+	ppdFullPath      string
 	queueName        string
 	deviceURI        string
 	installScript    string
@@ -64,7 +71,7 @@ type canonBatchRowPlan struct {
 // Tries each manufacturer-specific planner in turn for every row
 // (planCanonBatchRow, planKyoceraBatchRow, planRicohBatchRow,
 // planSharpBatchRow, planXeroxBatchRow, planToshibaBatchRow,
-// planKonicaMinoltaBatchRow) - whichever
+// planKonicaMinoltaBatchRow, planLexmarkBatchRow) - whichever
 // recognizes the row's actual package shape claims it; a row neither recognizes (a different
 // manufacturer entirely, the guess-based fallback with no catalog entry, a
 // loose-PPD no-installer family, or an existing queue to reuse) is left
@@ -117,7 +124,18 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 
 		variant, ok := driver.MacVariantForDeploy(d.ModelIndex, row.Manufacturer, row.Model, row.Driver)
 		if !ok || variant.PackagePath == "" {
-			continue // guess-based fallback or a loose-PPD family - not batched
+			// No real catalog-driven driver for this row (a manufacturer
+			// with no macFamilyPreference entry, or a loose-PPD family with
+			// nothing to install) - see if an OpenPrinting fallback PPD
+			// resolves instead, so this row can still join the shared
+			// batch/single-auth-prompt rather than always falling back to
+			// its own separate elevated call (Ken's own explicit ask,
+			// 2026-09-16: "we should only get 1 prompt for auth at all
+			// times").
+			if plan, handled := planOpenPrintingBatchRow(d.Catalog, row, deviceURI); handled {
+				plans = append(plans, plan)
+			}
+			continue
 		}
 
 		pkgPath, cleanup, err := driver.LocatePkg(variant.PackagePath)
@@ -157,6 +175,9 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 			plan, handled = planKonicaMinoltaBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
+			plan, handled = planLexmarkBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+		}
+		if !handled {
 			continue // not a recognized shape - not batched, falls back to the old per-row path
 		}
 		if plan.installScript == "" {
@@ -183,19 +204,56 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 	resultsFile.Close()
 	defer os.Remove(resultsPath)
 
+	// errDir holds one stderr-capture file per row (errDir/<index>) - a real
+	// gap found live (2026-09-16): a failing row's own privilegedErr used to
+	// be nothing but "batched install/queue-create failed (exit 1)", since
+	// the results-file mechanism above only ever captured an exit code, not
+	// whatever the actually-failing command (installer, or the queue-create
+	// step) printed about *why*. Same reasoning as resultsPath itself for
+	// using files rather than the combined call's own stdout: `do shell
+	// script` mangles/buffers everything until the whole script exits (see
+	// elevate_darwin.go), and a shared combined script has no other way to
+	// keep one row's own error text apart from every other row's.
+	errDir, err := os.MkdirTemp("", "pdt-mac-batch-errs-*")
+	if err != nil {
+		return
+	}
+	defer os.RemoveAll(errDir)
+
 	var script strings.Builder
 	for i, p := range plans {
-		ppdDest := filepath.Join(ppdResourcesDir, p.ppdFilename)
+		ppdDest := p.ppdFullPath
+		if ppdDest == "" {
+			ppdDest = filepath.Join(ppdResourcesDir, p.ppdFilename)
+		}
 		queueArgv := buildEnsureQueueArgv(p.queueName, p.deviceURI, ppdDest, QueueOptions{Description: p.row.Name, Shared: true, ExtraOptionArgs: p.extraArgs})
+		errPath := filepath.Join(errDir, strconv.Itoa(i))
 
 		script.WriteString("( ")
 		script.WriteString(p.installScript)
 		script.WriteString(" && ")
 		script.WriteString(quoteShellCommand(queueArgv))
-		fmt.Fprintf(&script, " ) ; printf '%%d:%%d\\n' %d $? >> %s ; ", i, singleQuoteShellArg(resultsPath))
+		fmt.Fprintf(&script, " ) 2>%s ; printf '%%d:%%d\\n' %d $? >> %s ; ", singleQuoteShellArg(errPath), i, singleQuoteShellArg(resultsPath))
 	}
 
 	_, runErr := runPrivilegedShell(ctx, script.String())
+
+	// rowErrText is best-effort (a missing/unreadable/empty file just means
+	// no extra detail beyond the exit code - never treated as its own
+	// error) and capped well short of anything that would make one bad row
+	// blow up the deploy log.
+	rowErrText := func(i int) string {
+		data, err := os.ReadFile(filepath.Join(errDir, strconv.Itoa(i)))
+		if err != nil {
+			return ""
+		}
+		text := strings.TrimSpace(string(data))
+		const maxLen = 800
+		if len(text) > maxLen {
+			text = text[:maxLen] + "... (truncated)"
+		}
+		return text
+	}
 
 	rowRC := map[int]int{}
 	if data, readErr := os.ReadFile(resultsPath); readErr == nil {
@@ -218,8 +276,12 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 
 	for i, p := range plans {
 		rc, ran := rowRC[i]
+		ppdPath := p.ppdFullPath
+		if ppdPath == "" {
+			ppdPath = ppdDestFor(p.ppdFilename)
+		}
 		result := canonBatchResult{
-			ppdPath:          ppdDestFor(p.ppdFilename),
+			ppdPath:          ppdPath,
 			queueName:        p.queueName,
 			deviceURI:        p.deviceURI,
 			defaultsWarnings: p.defaultsWarnings,
@@ -235,7 +297,11 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 				result.privilegedErr = fmt.Errorf("batched install/queue-create did not run for this row (unknown reason)")
 			}
 		case rc != 0:
-			result.privilegedErr = fmt.Errorf("batched install/queue-create failed (exit %d)", rc)
+			if errText := rowErrText(i); errText != "" {
+				result.privilegedErr = fmt.Errorf("batched install/queue-create failed (exit %d): %s", rc, errText)
+			} else {
+				result.privilegedErr = fmt.Errorf("batched install/queue-create failed (exit %d)", rc)
+			}
 		}
 		// A later, non-batched row needing this same package (e.g. one that
 		// fell through to the old per-row path for an unrelated reason)
@@ -544,6 +610,77 @@ func planKonicaMinoltaBatchRow(row printer.PrinterRow, variant driver.MacPPDVari
 		s.WriteString("true")
 	}
 	plan.installScript = s.String()
+	return plan, true
+}
+
+// planLexmarkBatchRow is PrepareBatch's own Lexmark-specific planner - the
+// same "just fold a plain full install into the shared batching" shape as
+// planRicohBatchRow/planSharpBatchRow. Lexmark's real download (confirmed
+// live, 2026-09-16) is a genuine Universal Print Driver - a single flat
+// sub-package (~8.7MB installed), exactly one PPD, no per-model choices to
+// select down at all - by far the simplest real shape batched here so far.
+func planLexmarkBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+	if row.Manufacturer != "Lexmark" {
+		return canonBatchRowPlan{}, false
+	}
+
+	plan := canonBatchRowPlan{row: row, packagePath: variant.PackagePath, ppdFilename: variant.Filename, queueName: sanitizeCUPSQueueName(row.Name), deviceURI: deviceURI}
+
+	ppdPath, cleanup, err := driver.PPDPathForDefaults("Lexmark", pkgPath, variant.Filename)
+	if err != nil {
+		return plan, true
+	}
+	*cleanups = append(*cleanups, cleanup)
+	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromPath(ppdPath, row.OneSided, row.Mono, row.Name)
+
+	var s strings.Builder
+	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
+		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		sharedQueuedThisBatch[variant.PackagePath] = true
+		plan.sharedInstalled = true
+	} else {
+		s.WriteString("true")
+	}
+	plan.installScript = s.String()
+	return plan, true
+}
+
+// planOpenPrintingBatchRow recognizes a row that has no real catalog-driven
+// driver at all (its caller only ever tries this once driver.MacVariantForDeploy
+// has already come back not-ok) but does resolve to a real OpenPrinting
+// fallback PPD - the identical resolution order resolveDriver's own
+// OpenPrinting branch already uses (deploy_darwin.go): row.Driver's own
+// exact label first (a technician's real, explicit pick beats a guess), then
+// row.Model as a fuzzy fallback. Unlike every manufacturer-specific planner
+// above, there is no install step at all - an OpenPrinting PPD is a loose
+// file under the Drivers folder, never a real installer package - so
+// installScript is always just a no-op, and the queue-create step points -P
+// directly at that file's own real path via ppdFullPath (never joined with
+// ppdResourcesDir, since nothing installs it there). Ken's own explicit ask
+// (2026-09-16): "we should only get 1 prompt for auth at all times" - before
+// this, any row resolved this way always fell to the old per-row path,
+// paying its own separate elevated call just to run one `lpadmin`.
+func planOpenPrintingBatchRow(catalog driver.MacCatalog, row printer.PrinterRow, deviceURI string) (canonBatchRowPlan, bool) {
+	var ppdPath string
+	var ok bool
+	if row.Driver != "" {
+		ppdPath, ok = driver.OpenPrintingPPDByLabel(catalog, row.Manufacturer, row.Driver)
+	}
+	if !ok {
+		ppdPath, ok = driver.ResolveOpenPrintingPPD(catalog, row.Manufacturer, row.Model)
+	}
+	if !ok {
+		return canonBatchRowPlan{}, false
+	}
+
+	plan := canonBatchRowPlan{
+		row:           row,
+		ppdFullPath:   ppdPath,
+		queueName:     sanitizeCUPSQueueName(row.Name),
+		deviceURI:     deviceURI,
+		installScript: "true",
+	}
+	plan.extraArgs, plan.defaultsWarnings = decidePrintDefaultsFromPath(ppdPath, row.OneSided, row.Mono, row.Name)
 	return plan, true
 }
 

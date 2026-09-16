@@ -649,13 +649,16 @@ const ppdResourcesPathFragment = "/PPDs/Contents/Resources/"
 // macSubPackagePPDFallback returns indexFamilyPackage's own content-based
 // PPD-extraction fallback for a manufacturer, or nil for every manufacturer
 // whose real PPDs are already found correctly by the fast, extension-based
-// glob (everyone except Ricoh, Xerox, Toshiba, and Konica Minolta today -
-// four real, independently confirmed cases of a manufacturer naming its own
-// real PPDs with no ".ppd" anywhere at all) - see ppdExtractionFallback's
-// own doc comment for the exact contract.
+// glob (everyone except Ricoh, Xerox, Toshiba, Konica Minolta, and Lexmark
+// today - five real, independently confirmed cases of a manufacturer naming
+// its own real PPDs with no ".ppd" anywhere at all; Lexmark's real
+// "Lexmark Universal Color.gz" - confirmed live, 2026-09-16 - lands under
+// the identical "/PPDs/Contents/Resources/" install-location shape the
+// other four already needed this for) - see ppdExtractionFallback's own doc
+// comment for the exact contract.
 func macSubPackagePPDFallback(manufacturer string) ppdExtractionFallback {
 	switch manufacturer {
-	case "Ricoh", "Xerox", "Toshiba", "Konica Minolta":
+	case "Ricoh", "Xerox", "Toshiba", "Konica Minolta", "Lexmark":
 		return pathFragmentPPDExtractionFallback
 	default:
 		return nil

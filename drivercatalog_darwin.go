@@ -64,7 +64,7 @@ func (a *App) Models(manufacturer, filterText string) []string {
 // the frontend's combobox wiring needs no platform branch at all). When
 // model resolves to a real driver.MacModelIndex entry (a manufacturer
 // macFamilyPreference lists, with a Model the technician has actually typed
-// or picked - Canon today), offers that model's own language-variant labels
+// or picked), offers that model's own language-variant labels
 // (driver.MacModelCandidates - "<model> (UFR II)"/"(PostScript)"/
 // "(Generic PPD)"), the same Model-narrows-Driver two-step Kyocera gets on
 // Windows. Otherwise, when manufacturer has a local installer package with
@@ -72,35 +72,45 @@ func (a *App) Models(manufacturer, filterText string) []string {
 // package resolves automatically (see
 // internal/printer/darwin/deploy_darwin.go's resolveDriver) - so this offers
 // its own label as the sole entry, fuzzy-filtered like everything else and
-// unaffected by model (nothing to narrow among one candidate); when there's
-// no package at all, falls back to every OpenPrinting PPD label for
-// manufacturer, narrowed/ranked by both model and filterText (see
-// OpenPrintingCandidates). When *none* of those three sources has anything
-// at all - confirmed live as a real scenario, not hypothetical: a real
-// vendor package existed but got correctly excluded by
+// unaffected by model (nothing to narrow among one candidate).
+//
+// Every OpenPrinting PPD label for manufacturer that matches model/filterText
+// (driver.OpenPrintingCandidates) is ALWAYS appended too, not just when
+// nothing else resolved - Ken's own explicit ask (2026-09-16): a technician
+// needs a way to override the auto-resolved real driver when it genuinely
+// doesn't cover their printer's real model, rather than being stuck with
+// only the one auto-picked option. Each carries its own trailing " (OP)"
+// marker (ppdMatchLabel, macresolve.go) precisely so it's never mistaken for
+// a real vendor driver once shown alongside one.
+//
+// Only when *nothing* resolves at all - no catalog/package match and no
+// OpenPrinting PPD either - confirmed live as a real scenario, not
+// hypothetical: a real vendor package existed but got correctly excluded by
 // filterToCurrentOSVersionFolder (a driver built for a different macOS
 // release than this machine is actually running, see MacPackage's own doc
-// comment) - falls all the way back to Apple's own bundled Generic
+// comment) - this falls all the way back to Apple's own bundled Generic
 // PostScript/PCL drivers (macgeneric.go), the one genuinely OS-version-proof
-// choice. Ken's own explicit scoping (2026-09-13): these only ever show up
-// here, when nothing else is available at all - never offered alongside a
-// real candidate, and never auto-picked (see resolveDriver's own doc
-// comment) - a technician has to explicitly choose one, since PostScript
-// vs. PCL is a real choice this codebase has no way to guess.
+// choice. Ken's own explicit scoping (2026-09-13, still true): these never
+// show up alongside a real candidate and are never auto-picked (see
+// resolveDriver's own doc comment) - a technician has to explicitly choose
+// one, since PostScript vs. PCL is a real choice this codebase has no way to
+// guess.
 func (a *App) DriverCandidates(manufacturer, model, filterText string) []string {
 	<-a.ready
 	catalog, modelIndex, _ := a.macCatalogSnapshot()
+
+	var out []string
 	if candidates := driver.MacModelCandidates(modelIndex, manufacturer, model, filterText); len(candidates) > 0 {
-		return candidates
-	}
-	if resolved := driver.ResolveMac(catalog, manufacturer); resolved != nil {
-		if driver.FuzzyMatchScore(resolved.Label, filterText) < 0 {
-			return nil
+		out = append(out, candidates...)
+	} else if resolved := driver.ResolveMac(catalog, manufacturer); resolved != nil {
+		if driver.FuzzyMatchScore(resolved.Label, filterText) >= 0 {
+			out = append(out, resolved.Label)
 		}
-		return []string{resolved.Label}
 	}
-	if candidates := driver.OpenPrintingCandidates(catalog, manufacturer, model, filterText); len(candidates) > 0 {
-		return candidates
+	out = append(out, driver.OpenPrintingCandidates(catalog, manufacturer, model, filterText)...)
+
+	if len(out) > 0 {
+		return out
 	}
 	return driver.GenericDriverCandidates(filterText)
 }

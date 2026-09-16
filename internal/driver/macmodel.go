@@ -25,7 +25,17 @@ var macLanguageDisplayNames = map[string]string{
 	"MacPS":   "Driver",
 	"Xerox":   "Driver",
 	"Toshiba": "Driver",
-	".pkg":    "Driver",
+	"Lexmark": "Driver",
+	// Konica Minolta's own family tokens (macfamily.go) are file extensions,
+	// not a real name substring - see that file's own doc comment for why.
+	// ".zip" is the one real Konica Minolta downloads actually classify as
+	// today (GitHub issue #11: scanMacPackages records the outer .zip
+	// itself, never a .pkg discovered only after eager extraction); ".pkg"/
+	// ".dmg" are kept as the same defensive fallback macFamilyPreference's
+	// own token list keeps them for.
+	".zip": "Driver",
+	".pkg": "Driver",
+	".dmg": "Driver",
 }
 
 func init() {

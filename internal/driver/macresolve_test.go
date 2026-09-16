@@ -80,8 +80,19 @@ func TestOpenPrintingCandidates_EmptyQueriesReturnsEverything(t *testing.T) {
 func TestOpenPrintingCandidates_ModelNarrows(t *testing.T) {
 	cat := testMacCatalog(t)
 	got := OpenPrintingCandidates(cat, "Ricoh", "MP C3003", "")
-	if len(got) != 1 || got[0] != "Ricoh MP C3003" {
-		t.Errorf("OpenPrintingCandidates(model=%q) = %v, want just [%q]", "MP C3003", got, "Ricoh MP C3003")
+	if len(got) != 1 || got[0] != "Ricoh MP C3003 (OP)" {
+		t.Errorf("OpenPrintingCandidates(model=%q) = %v, want just [%q]", "MP C3003", got, "Ricoh MP C3003 (OP)")
+	}
+}
+
+// TestPPDMatchLabel_MarksOpenPrintingOrigin is the direct regression test
+// for the "(OP)" suffix (Ken's own explicit ask, 2026-09-16) - a technician
+// picking a Driver from the dropdown couldn't otherwise tell a real vendor
+// driver apart from a generic community-maintained OpenPrinting fallback
+// PPD, confirmed live as a real point of confusion during a Lexmark deploy.
+func TestPPDMatchLabel_MarksOpenPrintingOrigin(t *testing.T) {
+	if got := ppdMatchLabel("/some/path/Lexmark_MC2500_Series.ppd"); got != "Lexmark MC2500 Series (OP)" {
+		t.Errorf("ppdMatchLabel = %q, want a trailing \" (OP)\" marker", got)
 	}
 }
 

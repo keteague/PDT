@@ -143,12 +143,25 @@ func OpenPrintingPPDByLabel(catalog MacCatalog, manufacturer, label string) (str
 
 // ppdMatchLabel turns a PPD's own filename into the space-separated form a
 // technician would actually type as a model name - see ResolveOpenPrintingPPD's
-// doc comment.
+// doc comment - with a trailing " (OP)" marking it as coming from the
+// OpenPrinting fallback bucket (community-maintained generic PPDs, never a
+// real vendor-branded driver package) rather than a real installed driver -
+// Ken's own explicit ask (2026-09-16), after a real Lexmark deploy used one
+// of these without anything in the Driver dropdown distinguishing it from a
+// genuine Lexmark driver. The single source of truth for this label - both
+// OpenPrintingCandidates (building the dropdown) and OpenPrintingPPDByLabel
+// (resolving a technician's own saved/committed pick back to a real PPD
+// path) call this same function, so the suffix round-trips correctly
+// without either side needing to know about it specially. Appending it here
+// (not just when displaying) does mean it's folded into the fuzzy-match text
+// FuzzyMatchScore ranks candidates by too - harmless, since every OpenPrinting
+// candidate carries the exact same suffix, so relative ranking between them
+// is unaffected.
 func ppdMatchLabel(path string) string {
 	base := filepath.Base(path)
 	base = strings.TrimSuffix(base, filepath.Ext(base))
 	if strings.HasSuffix(strings.ToLower(base), ".ppd") {
 		base = base[:len(base)-len(".ppd")]
 	}
-	return strings.ReplaceAll(base, "_", " ")
+	return strings.ReplaceAll(base, "_", " ") + " (OP)"
 }

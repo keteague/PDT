@@ -4,6 +4,57 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-16 (v0.9.22) - macOS: lazy zip extraction (issue #11), real Lexmark support, batched-OpenPrinting fallback, and a real Ricoh installer bug found live
+
+Two real, live-driven arcs in one overnight session: finishing the mac-side mirror of #10
+(driven by Ken deleting the same regenerated extracted folders by hand, twice), then - once
+Ken added a real Lexmark package and asked for it supported - a real live deploy immediately
+surfaced a genuine Ricoh installer bug that a same-night diagnostic fix made visible at all.
+
+### Added
+- **Issue #11**: `internal/driver/maczip.go`'s `ensureMacZipsExtracted` (eager, at every catalog
+  build, permanent sibling folder - confirmed live to regenerate ~2.6G/36 folders on a real
+  machine every single time) replaced with `resolveMacZipSource`: `scanMacPackages` now records
+  a `.zip` as its own catalog entry directly, resolving it on demand into a throwaway temp
+  directory only when something (cataloging, or a real Deploy) actually needs the real bytes.
+  Also proactively deletes any leftover pre-fix sibling folder still on disk (`ExtractedSiblingDirs`).
+  **Confirmed live**: Canon (475 models) and Konica Minolta (30 models, re-keyed from `.pkg` to
+  `.zip` provenance) both re-indexed correctly against Ken's own real packages; zero extracted
+  folders exist after the run, previously regenerated every time.
+- **Real Lexmark support**: Ken's own real download (`Universal_Color_Print.pkg`) is a genuine
+  Universal Print Driver - one PPD, no per-model list. Added `macFamilyPreference["Lexmark"]`,
+  the same content-based PPD-extraction fallback Ricoh/Xerox/Toshiba/Konica Minolta already
+  needed (no `.ppd` in the real filename), and `planLexmarkBatchRow` so it joins the shared
+  1-auth-prompt batch instead of always paying its own separate prompt. **Confirmed live**: a
+  real batched deploy installed Lexmark within the same one-second window as Canon/Kyocera/
+  Sharp/Toshiba/Xerox/Konica Minolta - one shared auth prompt, not a separate one.
+- Per-row stderr capture in `PrepareBatch` (`canonbatch_darwin.go`) - a failing batched row used
+  to report nothing but `"batched install/queue-create failed (exit 1)"`, no detail on why. Each
+  row's own subshell now redirects stderr to a per-row file, folded into the error message.
+  **This is what actually revealed the real Ricoh bug below** - without it, that failure would
+  still just read "(exit 1)".
+- OpenPrinting fallback PPDs (the community-maintained generic bucket, never a real
+  vendor-branded driver) now carry a trailing `" (OP)"` marker everywhere shown (`ppdMatchLabel`)
+  - confirmed live as a real point of confusion during a Lexmark deploy that used one with
+  nothing distinguishing it from a genuine driver. `DriverCandidates` now always offers matching
+  OpenPrinting PPDs alongside whatever real driver/catalog match already resolved (not just when
+  nothing else is available), so a technician can explicitly override an auto-resolved driver
+  that doesn't actually cover their model. A row resolving *only* via OpenPrinting now also joins
+  the shared batch (`planOpenPrintingBatchRow` - no install step, `lpadmin -P` straight against
+  the loose PPD's own path) instead of paying its own separate elevated call.
+
+### Found (not yet fixed - tracked as [issue #12](https://github.com/keteague/PDT/issues/12))
+- A real batched Ricoh deploy failed: `installer: Error - This update requires macOS version
+  15.0 or earlier.` - the real `installer` binary enforcing Ricoh's own `<installation-check>`
+  version-gate predicate against a macOS release newer than Ricoh validated this download
+  against. No supported flag bypasses this. Ken's own proposed fix: fall back to extracting the
+  PPD directly from the payload (bypassing `installer` and its version gate entirely) only when
+  the failure looks like this specific version check *and* the package's own `OSVersionFolder`
+  is macOS 14+ - not yet implemented; open design questions (detecting the failure reliably from
+  free-text stderr, and whether the PPD alone is enough or its own supporting filter files need
+  extracting too, the same way Canon/Kyocera's own selective install already does) are on the
+  issue itself.
+
 ## 2026-09-15 (v0.9.21) - Sync and Write to Flash Drive now ignore .DS_Store entirely
 
 macOS creates a `.DS_Store` (Finder's own per-folder metadata) in nearly every folder it browses,

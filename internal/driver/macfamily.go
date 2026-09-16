@@ -147,6 +147,24 @@ var macFamilyPreference = map[string][]string{
 	// No Japan-market-only convention found in any real *Product line.
 	"Toshiba": {"Toshiba"},
 
+	// Lexmark's real download (confirmed live, 2026-09-16, Ken's own
+	// "Universal_Color_Print.pkg" .dmg) is a genuine Universal Print
+	// Driver: exactly ONE PPD ("Lexmark Universal Color.gz"), no per-model
+	// *Product enumeration the way Toshiba/Konica Minolta's own generic
+	// PDL-variant PPDs have - it auto-configures against whatever real
+	// printer it talks to, rather than shipping one PPD per model. Still
+	// gets a macFamilyPreference entry despite there being only one real
+	// model to index: PrepareBatch's own batching only ever recognizes a
+	// row once driver.MacVariantForDeploy resolves it to a real catalog
+	// variant, which requires SOME model-index entry to exist - without
+	// this, Lexmark would keep falling through to the old per-row path
+	// forever, paying its own separate auth prompt every deploy (confirmed
+	// live: exactly what happened before this existed). The real filename
+	// contains "Lexmark" directly (unlike Konica Minolta), so a plain
+	// manufacturer-name token works the same simple way Kyocera/Xerox/
+	// Toshiba's own single tokens do.
+	"Lexmark": {"Lexmark"},
+
 	// Konica Minolta ships exactly one real driver line, but unlike every
 	// other single-line manufacturer here (Kyocera/Xerox/Toshiba), no real
 	// filename anywhere in the chain - not the outer .zip, not the real
@@ -159,15 +177,22 @@ var macFamilyPreference = map[string][]string{
 	// single stable model-number substring survives across all 3
 	// generations either (each ships a different lead model in its own
 	// filename) - classifyMacFamily's own basename-substring convention has
-	// nothing real and stable to key on. ".pkg" is used as the token
+	// nothing real and stable to key on. File-extension tokens are used
 	// instead: every MacPackage entry scanMacPackages ever creates already
-	// ends in ".pkg" or ".dmg" by construction (that's the whole scan
-	// filter), so ".pkg" reliably matches any real Konica Minolta package
-	// today without depending on an accidental, could-change-any-time
-	// substring the way relying on e.g. "C750i" specifically would -
-	// unlocks the catalog-driven model index the same way Kyocera's/
-	// Xerox's/Toshiba's own single tokens do, just keyed on file shape
-	// instead of manufacturer name. See konicaMinoltaCleanNickNames
+	// ends in ".zip", ".pkg", or ".dmg" by construction (that's the whole
+	// scan filter), so these three reliably match any real Konica Minolta
+	// package today without depending on an accidental, could-change-any-
+	// time substring the way relying on e.g. "C750i" specifically would.
+	// ".zip" is the one that actually matches every real download today -
+	// GitHub issue #11's own fix stopped eagerly extracting a manufacturer's
+	// .zip at catalog-build time, so scanMacPackages now records the outer
+	// .zip itself (see MacPackageZip), never the .pkg discovered after
+	// resolveMacZipSource's own on-demand extraction; ".pkg"/".dmg" are kept
+	// too only as a defensive fallback should Konica Minolta ever ship one
+	// of those directly, unwrapped, the way every other manufacturer here
+	// sometimes does. Unlocks the catalog-driven model index the same way
+	// Kyocera's/Xerox's/Toshiba's own single tokens do, just keyed on file
+	// shape instead of manufacturer name. See konicaMinoltaCleanNickNames
 	// (mackonicaminolta.go) for the real, needed NickName cleanup this
 	// still requires: stripping a generic, non-distinguishing " PS" suffix
 	// every real PPD carries, and dropping every "(S)" PPD entirely (Ken's
@@ -185,7 +210,7 @@ var macFamilyPreference = map[string][]string{
 	// (every real PPD named "KONICAMINOLTA<model>.gz", no ".ppd"
 	// anywhere). No Japan-market-only convention found across the 60 raw
 	// PPDs inspected.
-	"Konica Minolta": {".pkg"},
+	"Konica Minolta": {".zip", ".pkg", ".dmg"},
 }
 
 // classifyMacFamily returns which of tokens appears in path's own basename

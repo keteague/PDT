@@ -4,6 +4,28 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-15 (v0.9.21) - Sync and Write to Flash Drive now ignore .DS_Store entirely
+
+macOS creates a `.DS_Store` (Finder's own per-folder metadata) in nearly every folder it browses,
+including a Drivers folder synced to/from a Windows machine - confirmed live sitting in a Cloud
+Sync upload queue alongside real driver packages. Never real driver content, so nothing should
+ever transfer it.
+
+### Added
+New `driver.DSStoreFileName` constant (`internal/driver/extractedsiblings.go`), alongside the
+existing `PdtInfCacheDirName`, shared by every place that already had its own "what does Sync
+skip" exclusion list:
+- `copytree.go`'s `collectCopyJobs` - both flash-drive Sync directions and Write to Flash Drive
+  are built on this.
+- `internal/cloudsync/plan.go`'s `walkLocal` (the local side) and `listRemote` (the remote side -
+  a `.DS_Store` already sitting in the bucket from before this exclusion existed now disappears
+  from the plan entirely too, rather than showing as a spurious "Download" now that the local side
+  never lists one).
+
+New tests: `TestCopyTreeMerge_SkipsDSStore`, `TestListLocal_SkipsDSStore`,
+`TestListRemote_SkipsDSStore` (the last against a fake S3 listing response, since the exclusion
+happens while parsing that response, not in `diff()`).
+
 ## 2026-09-15 (v0.9.20) - Cloud Sync's tree mislabeled already-synced files as "Conflict"
 
 Found live: after a Cloud Sync run got interrupted (see the incomplete-transfer report just above),

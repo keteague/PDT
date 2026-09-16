@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/minio/minio-go/v7"
 
@@ -92,6 +93,14 @@ func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (m
 			if rel == "" {
 				continue
 			}
+			// Ignore any .DS_Store already sitting in the bucket from before
+			// this exclusion existed - walkLocal never lists one locally
+			// anymore (driver.DSStoreFileName), so leaving a stray one
+			// listed here would just make it look like a "Download" instead
+			// of correctly disappearing from the tree entirely.
+			if rel == driver.DSStoreFileName || strings.HasSuffix(rel, "/"+driver.DSStoreFileName) {
+				continue
+			}
 			out[rel] = remoteObject{size: obj.Size}
 		}
 		if !result.IsTruncated {
@@ -136,6 +145,9 @@ func walkLocal(absDir, relDir string, out map[string]int64) {
 	extractedSiblings := driver.ExtractedSiblingDirs(absDir, entries)
 	for _, entry := range entries {
 		if entry.IsDir() && (extractedSiblings[entry.Name()] || entry.Name() == driver.PdtInfCacheDirName) {
+			continue
+		}
+		if entry.Name() == driver.DSStoreFileName {
 			continue
 		}
 		childAbs := filepath.Join(absDir, entry.Name())

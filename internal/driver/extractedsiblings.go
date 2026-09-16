@@ -16,6 +16,15 @@ import (
 // browsing the folder directly, as "PDT's own, not a real driver".
 const PdtInfCacheDirName = ".pdt-infcache"
 
+// DSStoreFileName is Finder's own per-folder metadata file (icon
+// positions/view settings) - macOS creates one in nearly every folder it
+// browses, including a Drivers folder mounted from a Windows share or synced
+// from a Windows machine. Pure Finder chrome, never anything a deploy or a
+// catalog scan reads - Sync (both flash-drive and Cloud Sync) skips it
+// outright, on both the local and remote side, so it's never transferred at
+// all rather than round-tripped as if it were real driver content.
+const DSStoreFileName = ".DS_Store"
+
 // infCacheDestDir returns the .inf-only cache destination for archivePath
 // (found somewhere under root, possibly nested) -
 // root/PdtInfCacheDirName/<archivePath's own path relative to root, with its

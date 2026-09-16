@@ -1,6 +1,10 @@
 package cloudsync
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -134,5 +138,69 @@ func TestListLocal_SkipsPdtInfCacheFolder(t *testing.T) {
 		if filepath.Base(filepath.Dir(rel)) == driver.PdtInfCacheDirName || rel == "Canon/"+driver.PdtInfCacheDirName {
 			t.Errorf("expected nothing under %s to be listed, got %q", driver.PdtInfCacheDirName, rel)
 		}
+	}
+}
+
+// TestListLocal_SkipsDSStore guards Finder's own per-folder metadata
+// clutter (macOS creates a .DS_Store in nearly every folder it browses,
+// including a Drivers folder synced from/to a Windows machine) - never real
+// driver content, so Sync must never transfer it.
+func TestListLocal_SkipsDSStore(t *testing.T) {
+	root := t.TempDir()
+	canon := filepath.Join(root, "Canon")
+	if err := os.MkdirAll(canon, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canon, driver.DSStoreFileName), []byte("finder metadata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canon, "real.txt"), []byte("real file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sizes := listLocal(root)
+	if _, ok := sizes["Canon/real.txt"]; !ok {
+		t.Errorf("expected the unrelated real file to still be listed, got %v", sizes)
+	}
+	if _, ok := sizes["Canon/"+driver.DSStoreFileName]; ok {
+		t.Errorf("expected %s to be skipped entirely, got %v", driver.DSStoreFileName, sizes)
+	}
+}
+
+// TestListRemote_SkipsDSStore guards the remote side of the same rule - a
+// .DS_Store already sitting in the bucket from before this exclusion
+// existed must disappear from the plan entirely, not show as a spurious
+// "Download" now that the local side never lists one either. Uses a fake
+// S3 ListObjectsV2 endpoint (same pattern as cancel_hang_listing_test.go's
+// pagingForeverServer) since listRemote's own filtering happens while
+// parsing that response, not in diff().
+func TestListRemote_SkipsDSStore(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>test-bucket</Name>
+  <Prefix>Drivers/</Prefix>
+  <IsTruncated>false</IsTruncated>
+  <Contents><Key>Drivers/Canon/real.txt</Key><Size>10</Size></Contents>
+  <Contents><Key>Drivers/Canon/.DS_Store</Key><Size>4096</Size></Contents>
+  <Contents><Key>Drivers/.DS_Store</Key><Size>4096</Size></Contents>
+</ListBucketResult>`)
+	}))
+	defer srv.Close()
+	core := testCore(t, srv)
+
+	remote, err := listRemote(context.Background(), core, "test-bucket", "Drivers/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := remote["Canon/real.txt"]; !ok {
+		t.Errorf("expected the unrelated real file to still be listed, got %v", remote)
+	}
+	if _, ok := remote["Canon/"+driver.DSStoreFileName]; ok {
+		t.Errorf("expected Canon/%s to be skipped, got %v", driver.DSStoreFileName, remote)
+	}
+	if _, ok := remote[driver.DSStoreFileName]; ok {
+		t.Errorf("expected top-level %s to be skipped, got %v", driver.DSStoreFileName, remote)
 	}
 }

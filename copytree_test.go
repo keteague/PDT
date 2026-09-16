@@ -448,3 +448,30 @@ func TestCopyTreeMerge_SkipsPdtInfCacheFolder(t *testing.T) {
 		t.Errorf("expected %s to be skipped entirely, got err=%v", driver.PdtInfCacheDirName, err)
 	}
 }
+
+// TestCopyTreeMerge_SkipsDSStore guards Finder's own per-folder metadata
+// clutter (macOS creates a .DS_Store in nearly every folder it browses,
+// including a Drivers folder synced to/from a Windows machine) - never real
+// driver content, so both Sync and Write to Flash Drive (both built on
+// copyTreeMerge) must never transfer it.
+func TestCopyTreeMerge_SkipsDSStore(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, driver.DSStoreFileName), []byte("finder metadata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "real.txt"), []byte("real file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := copyTreeMerge(context.Background(), dest, src, nil); err != nil {
+		t.Fatalf("copyTreeMerge failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, "real.txt")); err != nil {
+		t.Errorf("expected the unrelated real file to still be copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, driver.DSStoreFileName)); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be skipped entirely, got err=%v", driver.DSStoreFileName, err)
+	}
+}

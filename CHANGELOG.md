@@ -4,6 +4,39 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-15 (v0.9.19) - Lexmark deploy failed with "SetupCopyOEMInf(...): The system cannot find the file specified"
+
+Found live via a full 9-manufacturer deploy test on v0.9.18 - every other manufacturer succeeded;
+Lexmark alone failed staging its driver.
+
+### Fixed
+Lexmark's real package is an outer self-extracting RAR whose own selective `.inf`-only extraction
+(`extractInfsFromSfxArchive`, GitHub issue #10) also pulls out several inner `.msi` files by
+design - needed to then find *their* own `.inf` entries in a second pass
+(`ensureMsiInfsExtracted`). That means `ArchEntry.ArchivePath` for a Lexmark driver found this way
+points at one of those inner `.msi` files, which already lives inside `.pdt-infcache` rather than
+being a normal sibling file in the manufacturer folder.
+
+`EnsureArchiveExtracted` (`internal/driver/lazyextract.go`) didn't account for that: its own
+"already extracted, skip" check computes a nested archive's destination the exact same way
+`infCacheDestDir` already does for it (a plain sibling, since it's already inside
+`PdtInfCacheDirName`) - so it found the `.inf`-only cache folder the catalog scan had already
+created there (containing just the cached `.inf`, none of the companion `.dll`/`.cat`/etc. files a
+real deploy needs alongside it), assumed that meant full extraction was already done, and handed
+that incomplete folder straight to `StageInf` - which then failed reading a companion file that
+was never actually there.
+
+Fixed by having `EnsureArchiveExtracted` recognize when `archivePath` lives inside
+`.pdt-infcache`, fully extract the *outer* archive first (recursively - handles any nesting
+depth), and re-resolve the nested archive to its own real position inside that now-complete
+extraction before extracting it in turn. Confirmed live against the real Lexmark package: the
+previously-failing `.inf` now lands alongside its full, real companion file set (`.cat`, several
+`.gd_`/`.gp_`/`.in_`/`.tx_` compressed siblings, and per-language subfolders) rather than sitting
+alone. New regression test:
+`TestEnsureArchiveExtracted_NestedArchiveInsideInfCache` (a synthetic zip-in-zip fixture -
+Lexmark's own real self-extracting-RAR-in-an-`.exe`/`.msi` shape needs 7z/msiexec to even
+construct a fixture for, but a zip-in-zip exercises the identical code path without either).
+
 ## 2026-09-15 (v0.9.18) - Settings > General's Browse ("...") button could silently do nothing, and macOS gets the same install-dir hardening Windows got in v0.9.17
 
 ### Fixed

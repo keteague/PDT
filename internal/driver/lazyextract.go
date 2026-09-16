@@ -27,6 +27,49 @@ import (
 // convention too: a repeat deploy of the same driver reuses the folder
 // instead of re-extracting.
 func EnsureArchiveExtracted(archivePath string) (string, error) {
+	// archivePath living inside .pdt-infcache means it's a NESTED archive an
+	// earlier .inf-only pass revealed from inside some outer archive - a
+	// real, live example: Lexmark's own package is an outer self-extracting
+	// RAR whose selective .inf-only extraction (extractInfsFromSfxArchive)
+	// also pulls out several inner .msi files by design (needed to then find
+	// *their* own .inf entries in turn - see ensureMsiInfsExtracted's own
+	// ordering comment in catalog.go), so ArchEntry.ArchivePath for a driver
+	// found that way points at one of those inner .msi files, which already
+	// sits inside .pdt-infcache.
+	//
+	// Extracting a nested archive as a plain sibling right where it
+	// currently sits (this function's own normal destDir rule, below) would
+	// collide with the exact same location the earlier .inf-only pass
+	// already created for it (infCacheDestDir's own "already inside
+	// PdtInfCacheDirName -> extract as plain sibling" rule computes the
+	// identical path) - confirmed as a real bug found live: the
+	// "already extracted, skip" check below then treated that incomplete
+	// .inf-only folder (containing just the cached .inf, none of the
+	// companion files a real deploy needs alongside it) as if it were
+	// already a full extraction, and StageInf failed with "The system cannot
+	// find the file specified" trying to read a companion file that was
+	// never actually there.
+	//
+	// Fixed by fully extracting the OUTER archive first (recursively, so
+	// this handles any nesting depth - findSourceArchive/
+	// EnsureArchiveExtracted are both already general enough), then
+	// re-resolving archivePath to its own real position inside that
+	// now-fully-extracted directory - the same relative path .inf-only
+	// extraction's own selective 7z filter (-r, recursive) already preserved
+	// against the cache, so it lines up with where a real, unfiltered
+	// extraction puts the same file.
+	if strings.Contains(archivePath, string(filepath.Separator)+PdtInfCacheDirName+string(filepath.Separator)) {
+		if outerArchive, markerDir := findSourceArchive(filepath.Dir(archivePath), ""); outerArchive != "" {
+			outerDir, err := EnsureArchiveExtracted(outerArchive)
+			if err != nil {
+				return "", fmt.Errorf("extracting outer archive %s for nested %s: %w", outerArchive, archivePath, err)
+			}
+			if rel, relErr := filepath.Rel(markerDir, archivePath); relErr == nil {
+				archivePath = filepath.Join(outerDir, rel)
+			}
+		}
+	}
+
 	name := filepath.Base(archivePath)
 
 	if m := kyoceraExeNameRe.FindStringSubmatch(name); m != nil {

@@ -938,6 +938,14 @@ table.grid td.checkbox-cell {
     border-color: #8f3f3f;
 }
 
+/* Muted/neutral, not green like an actionable upload - "already matches,
+   nothing to do" is a lower-priority signal than "will actually transfer",
+   and shouldn't draw the eye the same way. */
+.cst-action-synced {
+    color: #9fb3c8;
+    border-color: #3f5978;
+}
+
 .cst-children {
     margin-left: 18px;
 }

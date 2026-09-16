@@ -2463,17 +2463,30 @@ function folderCheckState(node) {
     return 'indeterminate';
 }
 
+// cloudSyncActionLabel used to fall through to "Conflict" for any action
+// that wasn't literally "upload" or "download" - a real bug found live: it
+// was written back when only those two plus "conflict" ever reached here,
+// but GetCloudSyncPlan actually returns every item BuildPlan produces,
+// "synced" included, so an already-matching file (nothing wrong with it at
+// all) got mislabeled with the same alarming red "Conflict" badge as a
+// genuine mismatch - confirmed by the dialog's own hint text right above the
+// tree ("Nothing to sync...") only ever showing when the real conflict count
+// is zero, which is exactly what was happening.
 function cloudSyncActionLabel(action) {
     if (action === 'upload') return { text: '↑ Upload', cls: 'cst-action-upload' };
     if (action === 'download') return { text: '↓ Download', cls: 'cst-action-download' };
+    if (action === 'synced') return { text: '✓ Synced', cls: 'cst-action-synced' };
     return { text: '⚠ Conflict', cls: 'cst-action-conflict' };
 }
 
 function renderCloudSyncLeaf(item) {
     const actionable = item.action === 'upload' || item.action === 'download';
+    const spacerTitle = item.action === 'synced'
+        ? 'Already in sync on both sides - nothing to do.'
+        : 'Sizes differ on each side - this needs to be looked at by hand before it can sync either direction';
     const checkboxHtml = actionable
         ? `<input type="checkbox" class="cst-leaf-check" data-relpath="${attr(item.relPath)}" ${cloudSyncSelection.get(item.relPath) ? 'checked' : ''}>`
-        : `<span class="cst-checkbox-spacer" title="Sizes differ on each side - this needs to be looked at by hand before it can sync either direction"></span>`;
+        : `<span class="cst-checkbox-spacer" title="${attr(spacerTitle)}"></span>`;
     const { text: actionText, cls: actionCls } = cloudSyncActionLabel(item.action);
     const sizeText = item.action === 'conflict'
         ? `${formatByteSize(item.localSize)} / ${formatByteSize(item.remoteSize)}`

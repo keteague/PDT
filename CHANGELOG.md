@@ -4,6 +4,24 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-15 (v0.9.20) - Cloud Sync's tree mislabeled already-synced files as "Conflict"
+
+Found live: after a Cloud Sync run got interrupted (see the incomplete-transfer report just above),
+reopening Cloud Sync showed every file in a manufacturer folder as a red "⚠ Conflict" - alarming,
+since a real conflict means local and remote genuinely differ and can't be resolved automatically.
+
+### Fixed
+Turned out none of it was real: the dialog's own hint text right above the tree ("Nothing to
+sync - this computer and the cloud repository already match.") only ever shows when the real
+conflict count is zero - which was true the whole time. `cloudSyncActionLabel` (`main.js`) was
+written back when only `"upload"`/`"download"`/`"conflict"` were expected to reach it, and fell
+through to the "Conflict" badge for anything else - but `GetCloudSyncPlan` actually returns every
+item `BuildPlan` produces, `"synced"` (already matching, nothing to do) included, so an
+already-synced file got the same alarming red badge as a genuine mismatch. Fixed with an explicit
+`"synced"` branch (a neutral "✓ Synced" badge, distinct styling from both Conflict and
+Upload/Download) plus a corrected tooltip on the non-actionable checkbox spacer, which was also
+unconditionally claiming "sizes differ" even for an already-matching file.
+
 ## 2026-09-15 (v0.9.19) - Lexmark deploy failed with "SetupCopyOEMInf(...): The system cannot find the file specified"
 
 Found live via a full 9-manufacturer deploy test on v0.9.18 - every other manufacturer succeeded;

@@ -1,0 +1,8 @@
+# Go tooling (go build/test/mod) always writes LF, regardless of any local
+# core.autocrlf setting - without this, Windows' common core.autocrlf=true
+# default fights the toolchain every time it touches go.mod/go.sum/*.go,
+# making Git report them as "modified" (a line-ending mismatch, not a real
+# content change) after nothing but a build or test run.
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf

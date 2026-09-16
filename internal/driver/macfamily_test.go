@@ -41,6 +41,25 @@ func TestResolveMacFamily_PreferredFamilyMatchesDirectly(t *testing.T) {
 	}
 }
 
+// TestResolveMacFamily_PopulatesOSVersionFolder guards a real gap found
+// live (2026-09-16, issue #12): this branch's own ResolvedMacPackage was
+// built by hand without setting OSVersionFolder at all, unlike ResolveMac's
+// own construction - silently defeating the installer-version-gate
+// fallback (OSVersionFolderAtLeast) for any manufacturer with a
+// macFamilyPreference entry whose model actually matches a family (as
+// opposed to the model-blank/no-match branches, which both already
+// delegate to ResolveMac and so were already correct).
+func TestResolveMacFamily_PopulatesOSVersionFolder(t *testing.T) {
+	cat := testFamilyCatalog(t)
+	resolved, _ := ResolveMacFamily(cat, "Canon", "Test Model A")
+	if resolved == nil {
+		t.Fatal("expected a resolved package")
+	}
+	if resolved.OSVersionFolder != "26-Tahoe" {
+		t.Errorf("OSVersionFolder = %q, want %q (the matched fixture's own real folder)", resolved.OSVersionFolder, "26-Tahoe")
+	}
+}
+
 func TestResolveMacFamily_FallsBackToSecondPreferenceWithNote(t *testing.T) {
 	cat := testFamilyCatalog(t)
 	resolved, note := ResolveMacFamily(cat, "Canon", "Test Model B")

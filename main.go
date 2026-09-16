@@ -3,6 +3,9 @@ package main
 import (
 	"embed"
 	"fmt"
+	"os"
+
+	"PDT/internal/driver"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -13,6 +16,16 @@ import (
 var assets embed.FS
 
 func main() {
+	// Hidden self-re-exec entrypoint - see versiongatefallback_cli.go's own
+	// doc comment for why this exists (issue #12's own performance fix,
+	// 2026-09-16). Checked before anything Wails/GUI-related so this stays
+	// as fast as the plain extraction work itself - never pays app-startup
+	// cost just to run a few seconds of file extraction from inside an
+	// already-elevated shell script.
+	if len(os.Args) > 1 && os.Args[1] == driver.MacVersionGateFallbackCLIArg {
+		os.Exit(runMacVersionGateFallbackCLI(os.Args[2:]))
+	}
+
 	// Create an instance of the app structure
 	app := NewApp()
 

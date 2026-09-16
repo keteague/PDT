@@ -14,6 +14,12 @@ type ResolvedMacPackage struct {
 	Path  string
 	Kind  MacPackageKind
 	Label string
+	// OSVersionFolder is the real, technician-placed OS-version folder Path
+	// was found under (MacPackage.OSVersionFolder's own doc comment) - used
+	// by the issue #12 installer-version-gate fallback (OSVersionFolderAtLeast)
+	// to decide whether that fallback is safe to attempt at all for this
+	// specific package.
+	OSVersionFolder string
 }
 
 // ResolveMac picks the installer package to use for manufacturer: the one
@@ -42,7 +48,24 @@ func ResolveMac(catalog MacCatalog, manufacturer string) *ResolvedMacPackage {
 			newest = p
 		}
 	}
-	return &ResolvedMacPackage{Path: newest.Path, Kind: newest.Kind, Label: PackageLabel(newest.Path)}
+	return &ResolvedMacPackage{Path: newest.Path, Kind: newest.Kind, Label: PackageLabel(newest.Path), OSVersionFolder: newest.OSVersionFolder}
+}
+
+// OSVersionFolderForPackagePath is the same OSVersionFolder lookup
+// ResolveMac already does internally, exposed for a caller that only has a
+// package's own Path in hand (PrepareBatch's batched planners - see
+// MacPPDVariant.PackagePath's own doc comment for why the variant itself
+// doesn't carry this) rather than a freshly-resolved ResolvedMacPackage.
+// Returns "" if manufacturer has no catalog entry matching packagePath at
+// all - callers treat that identically to an unparsable folder name (no
+// confident basis to apply the issue #12 version-gate fallback).
+func OSVersionFolderForPackagePath(catalog MacCatalog, manufacturer, packagePath string) string {
+	for _, p := range catalog.Packages[manufacturer] {
+		if p.Path == packagePath {
+			return p.OSVersionFolder
+		}
+	}
+	return ""
 }
 
 // ResolveOpenPrintingPPD is the fallback when manufacturer has no installer

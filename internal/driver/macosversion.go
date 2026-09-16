@@ -3,6 +3,7 @@ package driver
 import (
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -124,4 +125,30 @@ func filterToCurrentOSVersionFolder(packages []MacPackage) []MacPackage {
 		}
 	}
 	return matched
+}
+
+// OSVersionFolderAtLeast reports whether folderName's own leading version
+// number (osVersionFolderPrefix) is macOS major version minMajor or newer -
+// the issue #12 installer-version-gate fallback's own safety guardrail
+// (Ken's own explicit, conservative call, 2026-09-16): a driver package old
+// enough to still be filed under a legacy "10.x-Codename" folder is always
+// false here regardless of minMajor, since every such folder predates the
+// modern integer-major-version era (Big Sur/11 onward) this fallback is
+// scoped to. A folder name that doesn't match the recognized
+// <number>-<Codename> shape at all - or is missing entirely - is also
+// false, the same "no confident basis, don't apply the risky path" reasoning
+// filterToCurrentOSVersionFolder already uses for exclusion decisions.
+func OSVersionFolderAtLeast(folderName string, minMajor int) bool {
+	prefix, ok := osVersionFolderPrefix(folderName)
+	if !ok {
+		return false
+	}
+	if strings.HasPrefix(prefix, "10.") {
+		return false
+	}
+	major, err := strconv.Atoi(prefix)
+	if err != nil {
+		return false
+	}
+	return major >= minMajor
 }

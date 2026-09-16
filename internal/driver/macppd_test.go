@@ -188,6 +188,145 @@ func TestExtractPPDsFromExpandedPkg_RicohLegacyPathFragmentFallback(t *testing.T
 	}
 }
 
+// TestExtractDriverFootprint_MultiSubPackageRicohShape guards issue #12's
+// own fallback extraction against the real gap that motivated it: a real
+// Ricoh package (2026-09-16, ppds.pkg install-location
+// "/Library/Printers/PPDs/Contents/Resources/", CupsFilter.pkg
+// install-location "/Library/Printers/RICOH/Filters/") splits the PPD and
+// its own supporting filter binary across two separate sub-packages -
+// pathFragmentPPDExtractionFallback's own PPD-only extraction (used for
+// cataloging/defaults-reading) never touches the second one at all.
+// extractDriverFootprint must pull files from both qualifying sub-packages
+// into the same destDir, while leaving a third, non-driver-relevant
+// sub-package (UserAuthentication.pkg, a real Ricoh install-location
+// confirmed live, "/Applications/") untouched.
+func TestExtractDriverFootprint_MultiSubPackageRicohShape(t *testing.T) {
+	expandDir := t.TempDir()
+
+	ppdsPkg := filepath.Join(expandDir, "ppds.pkg")
+	if err := os.MkdirAll(ppdsPkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ppdsPkg, "PackageInfo"), []byte(
+		`<?xml version="1.0" encoding="UTF-8"?><pkg-info identifier="com.RICOH.print.IM_C3000.ppds.pkg" version="1.13.0" install-location="/Library/Printers/PPDs/Contents/Resources/"/>`,
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buildTestPayload(t, filepath.Join(ppdsPkg, "Payload"), map[string]string{
+		"RICOH IM C3000": "*PPD-Adobe: \"4.3\"\n*NickName: \"RICOH IM C3000 PS\"\n*cupsFilter: \"application/vnd.cups-postscript 0 /Library/Printers/RICOH/Filters/pstopsRV2.app/Contents/MacOS/pstopsRV2\"\n",
+	})
+
+	cupsFilterPkg := filepath.Join(expandDir, "CupsFilter.pkg")
+	if err := os.MkdirAll(cupsFilterPkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cupsFilterPkg, "PackageInfo"), []byte(
+		`<?xml version="1.0" encoding="UTF-8"?><pkg-info identifier="ricoh.cupsfilter.pkg" version="3.0.0" install-location="/Library/Printers/RICOH/Filters/"/>`,
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buildTestPayload(t, filepath.Join(cupsFilterPkg, "Payload"), map[string]string{
+		"pstopsRV2.app/Contents/MacOS/pstopsRV2": "#!/bin/sh\necho fake filter binary\n",
+	})
+
+	userAuthPkg := filepath.Join(expandDir, "UserAuthentication.pkg")
+	if err := os.MkdirAll(userAuthPkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(userAuthPkg, "PackageInfo"), []byte(
+		`<?xml version="1.0" encoding="UTF-8"?><pkg-info identifier="ricoh.userauthentication.pkg" version="1.0.0" install-location="/Applications/"/>`,
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buildTestPayload(t, filepath.Join(userAuthPkg, "Payload"), map[string]string{
+		"RicohUserAuthApp.app/Contents/MacOS/RicohUserAuthApp": "not driver/print-path-relevant\n",
+	})
+
+	destDir := t.TempDir()
+	if !extractDriverFootprint(expandDir, destDir) {
+		t.Fatal("extractDriverFootprint returned false, want true - two qualifying sub-packages should have yielded files")
+	}
+
+	if _, err := os.Stat(filepath.Join(destDir, "Library", "Printers", "PPDs", "Contents", "Resources", "RICOH IM C3000")); err != nil {
+		t.Errorf("the real PPD (ppds.pkg) was not extracted to its own real install-location-relative destination: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "Library", "Printers", "RICOH", "Filters", "pstopsRV2.app", "Contents", "MacOS", "pstopsRV2")); err != nil {
+		t.Errorf("the filter binary (CupsFilter.pkg, a *separate* sub-package from the PPD) was not extracted - this is the real gap issue #12's fallback exists to close: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "Applications", "RicohUserAuthApp.app")); err == nil {
+		t.Error("UserAuthentication.pkg's own content was extracted, want it left alone (install-location /Applications/ is not driver-relevant)")
+	}
+}
+
+// TestExtractDriverFootprint_WholeDriverInstallLocation guards the other
+// real shape confirmed live (2026-09-16, both Xerox and Sharp): a single
+// sub-package declaring install-location "/" itself, whose own payload
+// entries already carry their real absolute destination path baked in -
+// unlike the Ricoh shape above. printersPathFragment must still pick out
+// only the driver-relevant subset (Xerox's own real package also ships a
+// LaunchDaemon plist and an unrelated analytics framework in the very same
+// Payload, confirmed live) rather than extracting everything.
+func TestExtractDriverFootprint_WholeDriverInstallLocation(t *testing.T) {
+	expandDir := t.TempDir()
+	subPkg := filepath.Join(expandDir, "xerox_driver.pkg")
+	if err := os.MkdirAll(subPkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subPkg, "PackageInfo"), []byte(
+		`<?xml version="1.0" encoding="UTF-8"?><pkg-info identifier="com.xerox.drivers.pkg" version="5.19.3" install-location="/"/>`,
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buildTestPayload(t, filepath.Join(subPkg, "Payload"), map[string]string{
+		"Library/Printers/PPDs/Contents/Resources/Xerox C300 Color Printer.gz": "*PPD-Adobe: \"4.3\"\n",
+		"Library/Printers/Xerox/Filters/pstoxrps.app/Contents/MacOS/pstoxrps":  "#!/bin/sh\necho fake filter\n",
+		"Library/LaunchDaemons/com.xerox.AnalyticsAgent.plist":                 "<plist>not driver/print-path-relevant</plist>\n",
+		"Library/Frameworks/XeroxAnalytics.framework/XeroxAnalytics":           "not driver/print-path-relevant either\n",
+	})
+
+	destDir := t.TempDir()
+	if !extractDriverFootprint(expandDir, destDir) {
+		t.Fatal("extractDriverFootprint returned false, want true")
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "Library", "Printers", "PPDs", "Contents", "Resources", "Xerox C300 Color Printer.gz")); err != nil {
+		t.Errorf("the real PPD was not extracted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "Library", "Printers", "Xerox", "Filters", "pstoxrps.app", "Contents", "MacOS", "pstoxrps")); err != nil {
+		t.Errorf("the filter binary was not extracted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "Library", "LaunchDaemons")); err == nil {
+		t.Error("the unrelated LaunchDaemons entry was extracted, want it excluded (not under the Printers path fragment)")
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "Library", "Frameworks")); err == nil {
+		t.Error("the unrelated Frameworks entry was extracted, want it excluded (not under the Printers path fragment)")
+	}
+}
+
+// TestExtractDriverFootprint_NothingQualifies guards the "nothing sensible
+// to fall back to" case DriverFootprintForVersionGateFallback's own doc
+// comment relies on: a sub-package that isn't driver-relevant at all should
+// never cause extractDriverFootprint to report success.
+func TestExtractDriverFootprint_NothingQualifies(t *testing.T) {
+	expandDir := t.TempDir()
+	subPkg := filepath.Join(expandDir, "Unrelated.pkg")
+	if err := os.MkdirAll(subPkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subPkg, "PackageInfo"), []byte(
+		`<?xml version="1.0" encoding="UTF-8"?><pkg-info identifier="com.example.unrelated" version="1.0" install-location="/Applications/"/>`,
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	buildTestPayload(t, filepath.Join(subPkg, "Payload"), map[string]string{
+		"SomeApp.app/Contents/MacOS/SomeApp": "irrelevant\n",
+	})
+
+	destDir := t.TempDir()
+	if extractDriverFootprint(expandDir, destDir) {
+		t.Error("extractDriverFootprint returned true, want false - no sub-package here declares a driver-relevant install-location")
+	}
+}
+
 // TestPackagePPDEntriesFilteredFallback_ExpandRunsWhileFilesStillExist
 // guards a real, confirmed-live bug (2026-09-13): an earlier version of
 // this function's own caller (indexFamilyPackage) ran its expand hook

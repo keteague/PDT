@@ -717,3 +717,163 @@ func pathFragmentPPDExtractionFallback(pkgDir, payloadPath, destDir string) bool
 	removeNonPPDFiles(destDir)
 	return dirHasAnyFile(destDir)
 }
+
+// MacVersionGateFallbackCLIArg is the shared contract between the elevated
+// shell script wrapInstallerWithVersionGateFallback (canonbatch_darwin.go)
+// builds and PDT's own hidden self-re-exec entrypoint
+// (versiongatefallback_cli.go, package main) that script invokes - never
+// typed by a technician, only ever passed as PDT's own os.Args[1] when the
+// running app re-executes itself as a subprocess from inside an already-
+// elevated call. Lives here (not in package main) since both the shell-
+// script producer (internal/printer/darwin) and the CLI consumer (package
+// main) already depend on this package.
+const MacVersionGateFallbackCLIArg = "__macversiongatefallback"
+
+// printersPathFragment is extractDriverFootprint's own match fragment for a
+// sub-package whose own install-location is "/" - deliberately broader than
+// ppdResourcesPathFragment above. A real PPD commonly declares *cupsFilter
+// lines pointing at a vendor filter binary under
+// /Library/Printers/<Vendor>/Filters/... - confirmed live (2026-09-16)
+// against Ricoh, Xerox, and Sharp's own real packages - which a PPD-only
+// extraction (removeNonPPDFiles) would strip out entirely. Every driver-
+// relevant payload entry seen so far, across all three, sits somewhere
+// under "/Printers/" (PPDs/Contents/Resources, or a vendor's own Filters/
+// PDEs/Icons/Tools subtree beside it) - this fragment is the generalized
+// signal used instead of hardcoding any one vendor's own subtree names.
+const printersPathFragment = "/Printers/"
+
+// driverRelevantInstallLocation reports whether loc is an install-location
+// extractDriverFootprint should pull anything from at all - "/" (Xerox's
+// and Sharp's own single whole-driver sub-package, where printersPathFragment
+// still applies below) or anything under ppdResourcesOnlyInstallLocation's
+// own "/Library/Printers/" parent (Ricoh's own ppds.pkg, CupsFilter.pkg,
+// CommandFileFilter.pkg, etc. - confirmed live, several distinct
+// sub-packages all declaring their own install-location somewhere under
+// this same tree). A sub-package installing elsewhere entirely (e.g. a
+// UserAuthentication.pkg targeting /Applications/, confirmed present in
+// Ricoh's own real bundle) is deliberately left alone - not driver/print-
+// path-relevant, and copying it verbatim would risk placing files this
+// fallback has no real business placing.
+func driverRelevantInstallLocation(loc string) bool {
+	return loc == "/" || strings.HasPrefix(loc, "/Library/Printers/")
+}
+
+// extractDriverFootprint is DriverFootprintForVersionGateFallback's own
+// testable core - operates directly on an already-expanded expandDir tree
+// (pkgutil --expand's own output shape), the same convention
+// extractPPDsFromExpandedPkgFiltered's own tests already use to build a
+// synthetic expand tree by hand instead of needing a real flat .pkg
+// fixture on disk. filepath.WalkDir (not a plain top-level os.ReadDir) -
+// same reasoning as extractPPDsFromExpandedPkgFiltered's own walk: a
+// sub-package's Payload isn't guaranteed to sit exactly one level below
+// expandDir for every real package shape.
+//
+// Two real, independently confirmed shapes, the same distinction
+// pathFragmentPPDExtractionFallback's own doc comment already draws for the
+// narrower PPD-only case: a sub-package whose own install-location is "/",
+// OR declares no install-location at all (a real, confirmed-live gap in an
+// earlier version of this function - a legacy, non-flat Ricoh bundle
+// ("RicohPrinterDrivers.pkg", the exact package a real live deploy hit this
+// fallback against, 2026-09-16) declares no install-location whatsoever;
+// Apple's own installer treats that identically to an explicit "/", the
+// same "undeclared defaults to root" assumption pathFragmentPPDExtractionFallback's
+// own else-branch already relies on - treating !ok as "reject this
+// sub-package" instead silently produced zero files, which
+// DriverFootprintForVersionGateFallback's own caller then treats as
+// "nothing to fall back to," re-surfacing the original version-gate error
+// completely unfallback-attempted) - has every payload entry's own path
+// already carrying its real absolute destination baked in (e.g.
+// "./Library/Printers/Xerox/Filters/pstoxrps.app/..."), so
+// printersPathFragment can select the driver-relevant subset directly out
+// of it into destDir unchanged. A sub-package declaring its own real
+// /Library/Printers/... install-location (Ricoh's own modern ppds.pkg,
+// CupsFilter.pkg) instead ships entries as bare names *relative to that
+// location* - confirmed live, Ricoh's own ppds.pkg payload lists real PPDs
+// as flat entries like "RICOH IM C3000", no "/Printers/" substring anywhere
+// in them at all, so printersPathFragment would silently match nothing
+// there. Every entry in a Payload like that already belongs somewhere under
+// loc by definition (that's what install-location means), so it's extracted
+// in full (extractAllFromPayload, the same distinction
+// ppdResourcesOnlyInstallLocation's own branch already draws) into
+// destDir+loc, so the final privileged copy step still places it at its own
+// correct real absolute path.
+//
+// Returns whether anything at all was extracted into destDir.
+func extractDriverFootprint(expandDir, destDir string) bool {
+	_ = filepath.WalkDir(expandDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Name() != "Payload" {
+			return nil
+		}
+		subDir := filepath.Dir(path)
+		loc, ok := readPackageInfoInstallLocation(filepath.Join(subDir, "PackageInfo"))
+		if ok && !driverRelevantInstallLocation(loc) {
+			return nil
+		}
+		if !ok || loc == "/" {
+			// Undeclared install-location behaves exactly like an explicit
+			// "/" (Apple's own installer treats it that way) - either way,
+			// every payload entry's own path already carries its real
+			// absolute destination, so printersPathFragment picks out the
+			// driver-relevant subset directly.
+			extractPathContainingFromPayload(path, printersPathFragment, destDir)
+			return nil
+		}
+		dest := filepath.Join(destDir, loc)
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			return nil
+		}
+		extractAllFromPayload(path, dest)
+		return nil
+	})
+	return dirHasAnyFile(destDir)
+}
+
+// DriverFootprintForVersionGateFallback is the issue #12 installer-version-
+// gate fallback's own extraction: unlike pathFragmentPPDExtractionFallback
+// (PPD-only, used for cataloging/defaults-reading, where nothing but the PPD
+// itself is ever needed), this pulls every real driver file `installer`
+// would have placed under /Library/Printers/... - PPDs and their own
+// supporting filter/PDE/icon files alike - so a queue created from this
+// fallback's own output can actually print, not just look deployed. Walks
+// every immediate sub-package under pkgPath's own pkgutil --expand tree,
+// and for each one whose own declared install-location is
+// driverRelevantInstallLocation, extracts every printersPathFragment-
+// matching payload entry (extractPathContainingFromPayload, already proven
+// live for the narrower PPD-only case) into one shared stage directory -
+// deliberately no removeNonPPDFiles call here, since this mode wants
+// everything under that fragment, not just PPD-shaped files.
+//
+// Returns ok=false (with stageDir already cleaned up) when pkgPath fails to
+// expand at all, or when nothing was found anywhere - callers treat that as
+// "nothing sensible to fall back to," never attempting a fallback that could
+// only ever fail. Known, accepted gap (flagged on issue #12 itself, not
+// silent): anything a sub-package's own postinstall Scripts archive would
+// have done beyond placing these files - confirmed real for Xerox (a
+// LaunchDaemon plist for an analytics agent) - is not replicated here. Not
+// print-path-critical for any case inspected live so far, but a genuine gap
+// worth watching for the next manufacturer this gets applied to.
+func DriverFootprintForVersionGateFallback(pkgPath string) (stageDir string, cleanup func(), ok bool) {
+	noop := func() {}
+	tmpDir, err := os.MkdirTemp("", "pdt-versiongate-fallback-*")
+	if err != nil {
+		return "", noop, false
+	}
+	cleanup = func() { os.RemoveAll(tmpDir) }
+
+	expandDir := filepath.Join(tmpDir, "expand")
+	if err := exec.Command("pkgutil", "--expand", pkgPath, expandDir).Run(); err != nil {
+		cleanup()
+		return "", noop, false
+	}
+	stage := filepath.Join(tmpDir, "stage")
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		cleanup()
+		return "", noop, false
+	}
+
+	if !extractDriverFootprint(expandDir, stage) {
+		cleanup()
+		return "", noop, false
+	}
+	return stage, cleanup, true
+}

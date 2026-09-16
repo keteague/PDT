@@ -514,12 +514,9 @@ predicate against a macOS release newer than Ricoh validated this specific downl
 was only diagnosable at all because of a separate fix landed the same night: `PrepareBatch`'s own
 batch script now redirects each row's own subshell stderr to a per-row file (previously only an
 exit code ever survived - "batched install/queue-create failed (exit 1)" with zero detail on
-why). Tracked as [GitHub issue #12](https://github.com/keteague/PDT/issues/12) - not yet fixed;
-Ken's own proposed design is to fall back to extracting the PPD directly from the payload
-(bypassing `installer` and its version gate entirely) only when the failure looks like this
-specific version check *and* the failing package's own `OSVersionFolder` is macOS 14+ (a
-conservative floor - an older driver failing a version check on a much newer macOS is more likely
-to have a genuine incompatibility beyond just a stale predicate).
+why). Tracked as [GitHub issue #12](https://github.com/keteague/PDT/issues/12) - fixed and
+confirmed live the same night, see the v0.9.23 section immediately below for the full story
+(including two more real bugs the fix itself needed before it actually worked).
 
 **OpenPrinting fallback PPDs** (the community-maintained generic bucket, never a real
 vendor-branded driver) now carry a trailing `" (OP)"` marker everywhere they're shown
@@ -532,6 +529,54 @@ model. And a row that resolves *only* via an OpenPrinting fallback (no real inst
 all) now also joins the shared batch (`planOpenPrintingBatchRow` - no install step, `lpadmin -P`
 straight against the loose PPD's own real path) instead of always paying its own separate
 elevated call just to run one `lpadmin` command.
+
+### macOS: issue #12's installer-version-gate fallback, confirmed live end-to-end (v0.9.23, 2026-09-16)
+
+Same-night follow-through on the section above's own newly-filed issue #12. Live-inspected
+Ricoh's, Xerox's, and Sharp's real packages before writing any code: every one has a real PPD
+whose `*cupsFilter` line points at a vendor filter binary that installer places under
+`/Library/Printers/<Vendor>/Filters/...` - for Ricoh specifically, in a *separate* sub-package
+from the one the PPD itself lives in (`ppds.pkg` vs `CupsFilter.pkg`). A PPD-only fallback (Ken's
+own literal original wording) would have created a queue that looks deployed but can't actually
+print. `DriverFootprintForVersionGateFallback` (`macppd.go`) instead extracts every payload entry
+under a `/Printers/` path fragment from every sub-package whose own install-location is `/` or
+starts with `/Library/Printers/` - a shared, manufacturer-agnostic wrapper
+(`wrapInstallerWithVersionGateFallback`) applies it to all six "plain full install" planners plus
+the older non-batched fallback, guarded by `OSVersionFolderAtLeast(14)` (Ken's own conservative
+threshold) and a keyword match against the real failure text.
+
+Genuinely lazy, not just conditional: an early version of this fix called the extraction step
+*eagerly*, at plan time, for every row whose package merely sat in a 14+-OS-version folder -
+confirmed live to add ~29 seconds to an 8-row batch's own planning phase (Canon and Xerox alone
+cost 12+ seconds each), even though only one row in that batch actually needed it. Since batching
+plans its whole combined shell script before the one elevated call runs, there's no way to run
+more Go code partway through an already-running script - the fix is a hidden self-re-exec
+entrypoint (`PDT __macversiongatefallback`, `versiongatefallback_cli.go`) the elevated script
+invokes as a subprocess, but only *after* `installer` has actually failed with a matching error.
+Measured: a qualifying row's own plan-time cost dropped from ~12 seconds to single-digit
+microseconds.
+
+Two more real bugs found only by testing this against Ken's own real Ricoh package, in order:
+the extraction logic wrongly skipped a sub-package that declares no install-location at all
+(Apple's own installer treats that identically to an explicit `/`) - exactly the shape Ricoh's
+own real legacy bundle (`RicohPrinterDrivers.pkg`) uses, so the fallback found nothing to fall
+back to on the very package that motivated it. Once fixed, the fallback's own
+`chown -Rh root:admin /Library/Printers` swept the *entire* shared directory rather than just
+what it had extracted, and failed outright ("Operation not permitted", even running as root) on
+Canon's own already-installed, code-signed `autoSetupTool.app` sitting alongside it in the same
+directory - `scopedFallbackChown` now walks the fallback's own stage directory and chowns only
+the exact mirrored paths it actually placed. A real live deploy afterward installed Ricoh's own
+"RICOH imagio MP C7501 PS" queue successfully via the fallback path, confirming the whole chain
+end-to-end.
+
+Also found and fixed the same night: Lexmark's real PPD spells its color/mono option
+`*ColorMode` (values `TrueM`/`FalseM`, via self-describing `Color`/`Monochrome` labels), not the
+standard `*ColorModel` `findOption`'s own keyword allowlist was matching - a real deploy always
+warned "declares no ColorModel option" despite a driver that supports both; the existing
+label-matching machinery (already built for Sharp's similarly abbreviated values) needed no
+further change once the keyword itself was added. And `build-mac.sh` - `wails build` plus issue
+#9's own confirmed local-only re-sign workaround - since a plain `wails build` re-signs ad-hoc
+every time and silently re-triggers issue #9's own AMFI SIGKILL crash on the very next Deploy.
 
 **v0.9.2 - `catalog.<mfg>.json` now prunes a fully-removed/archived package too.** Moving a
 real vendor package into an `Archive` folder (or deleting it outright) always correctly

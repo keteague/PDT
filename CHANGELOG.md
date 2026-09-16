@@ -4,6 +4,48 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-16 (v0.9.23) - macOS: issue #12's installer-version-gate fallback, confirmed live end-to-end
+
+Same-night follow-through on v0.9.22's own newly-filed issue #12: designed, built, and - after
+three real live-deploy-driven bug fixes in a row - confirmed working end-to-end against Ken's
+own real, previously-failing Ricoh package.
+
+### Added
+- **Issue #12 fixed**: a batched row whose package fails `installer`'s own version-check
+  predicate (confirmed live: `This update requires macOS version 15.0 or earlier.`) now falls
+  back to extracting that package's own real driver footprint - not just the PPD, but its
+  supporting filter binaries/PDEs/icons too (confirmed necessary: Ricoh's own real filter lives
+  in a *separate* sub-package from its PPD) - and placing it by hand, bypassing `installer`'s own
+  version gate entirely. Guarded by Ken's own explicit threshold (only for a package sitting in a
+  macOS 14+ folder) and a keyword match against the real failure text, so an unrelated installer
+  failure still surfaces honestly. Applies to both the batched path (all six "plain full install"
+  planners) and the older non-batched fallback.
+- Genuinely lazy: the fallback's own extraction only runs *after* `installer` has actually
+  failed, deferred into the same already-authenticated elevated call via a hidden self-re-exec
+  subcommand (`PDT __macversiongatefallback`) - not built speculatively up front for every row
+  that merely sits in a 14+ folder. A real live regression this same night (an earlier, eager
+  version of this fix) added ~29 seconds to an 8-row batch's own planning phase, most of it spent
+  extracting packages that never needed the fallback at all; this version measures in
+  microseconds for a row that doesn't need it.
+- A local dev code-signing helper, `build-mac.sh` - `wails build` plus issue #9's own confirmed
+  local-only re-sign workaround, since a plain `wails build` re-signs ad-hoc every time and
+  silently re-triggers issue #9's own AMFI SIGKILL crash on the very next Deploy.
+
+### Fixed
+- Two real bugs found only by testing this live, in order: the fallback's own file-discovery
+  logic wrongly skipped a sub-package that declares no install-location at all (Apple's installer
+  treats that the same as "/") - the exact shape Ricoh's own real legacy bundle uses, so the
+  fallback never found anything to fall back to on the very package that motivated it. Then,
+  once that was fixed, the fallback's own `chown -Rh root:admin /Library/Printers` swept the
+  *entire* shared directory rather than just what it had extracted, and failed outright on
+  Canon's own already-installed, code-signed `autoSetupTool.app` ("Operation not permitted",
+  even running as root) - now scoped to chown only the exact files this fallback itself placed.
+- Lexmark's real PPD spells its color/mono option `*ColorMode` (values `TrueM`/`FalseM`, via
+  self-describing labels), not the standard `*ColorModel` PDT was matching - a real deploy always
+  warned "declares no ColorModel option" despite a driver that does support both. Added the
+  keyword; the existing label-matching machinery (already built for Sharp's similarly abbreviated
+  values) handles the rest with no further change.
+
 ## 2026-09-16 (v0.9.22) - macOS: lazy zip extraction (issue #11), real Lexmark support, batched-OpenPrinting fallback, and a real Ricoh installer bug found live
 
 Two real, live-driven arcs in one overnight session: finishing the mac-side mirror of #10

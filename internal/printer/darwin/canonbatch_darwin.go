@@ -155,27 +155,34 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 			continue
 		}
 
+		// osVersionFolder feeds the issue #12 installer-version-gate
+		// fallback (wrapInstallerWithVersionGateFallback) each of the six
+		// plain-full-install planners below applies - "" (not found) is
+		// treated identically to an unparsable folder name, never a
+		// confident basis to attempt that fallback.
+		osVersionFolder := driver.OSVersionFolderForPackagePath(d.Catalog, row.Manufacturer, variant.PackagePath)
+
 		plan, handled := planCanonBatchRow(ctx, row, variant, expandDir, expanded, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		if !handled {
 			plan, handled = planKyoceraBatchRow(ctx, row, variant, expandDir, expanded, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
-			plan, handled = planRicohBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+			plan, handled = planRicohBatchRow(row, variant, pkgPath, deviceURI, osVersionFolder, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
-			plan, handled = planSharpBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+			plan, handled = planSharpBatchRow(row, variant, pkgPath, deviceURI, osVersionFolder, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
-			plan, handled = planXeroxBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+			plan, handled = planXeroxBatchRow(row, variant, pkgPath, deviceURI, osVersionFolder, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
-			plan, handled = planToshibaBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+			plan, handled = planToshibaBatchRow(row, variant, pkgPath, deviceURI, osVersionFolder, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
-			plan, handled = planKonicaMinoltaBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+			plan, handled = planKonicaMinoltaBatchRow(row, variant, pkgPath, deviceURI, osVersionFolder, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
-			plan, handled = planLexmarkBatchRow(row, variant, pkgPath, deviceURI, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
+			plan, handled = planLexmarkBatchRow(row, variant, pkgPath, deviceURI, osVersionFolder, d.sharedComponentsInstalledThisRun, sharedQueuedThisBatch, &cleanups)
 		}
 		if !handled {
 			continue // not a recognized shape - not batched, falls back to the old per-row path
@@ -418,6 +425,154 @@ func planKyoceraBatchRow(ctx context.Context, row printer.PrinterRow, variant dr
 	return plan, true
 }
 
+// versionGateKeywordCase is the shell `case` pattern list
+// wrapInstallerWithVersionGateFallback matches a failed installCmd's own
+// lower-cased combined output against - Ken's own suggested keywords
+// (issue #12, 2026-09-16): narrow enough not to swallow a genuinely
+// different installer failure (a corrupt package, disk full, wrong
+// architecture) as if it were a version-check rejection, broad enough to
+// catch more than just Ricoh's own exact wording ("This update requires
+// macOS version 15.0 or earlier.") - a different vendor's own phrasing of
+// the identical standard installation-check predicate is expected to vary
+// in wording around these same two anchor phrases.
+const versionGateKeywordCase = `*"macos version"*|*"requires macos"*`
+
+// wrapInstallerWithVersionGateFallback is issue #12's own shared,
+// manufacturer-agnostic retry wrapper - Ken's own explicitly preferred
+// design (2026-09-16) over duplicating this in each of the six "just run a
+// plain full installer -pkg" planners below, since the risk itself
+// (a vendor's own installation-check predicate rejecting an otherwise-fine
+// package on a macOS release newer than it was validated against, with no
+// installer/pkgutil flag able to bypass it - confirmed live against a real
+// Ricoh deploy) is manufacturer-agnostic too.
+//
+// installCmd is the plain `installer -pkg ... -target /` fragment a
+// planner would otherwise use unwrapped. Returns it completely unchanged
+// when there's no confident, safe basis to attempt anything else -
+// osVersionFolder doesn't parse to macOS 14+ (OSVersionFolderAtLeast -
+// Ken's own conservative safety threshold: "let's be on the safe side and
+// say if the driver is for v14 or higher, use this fallback method"), or
+// when this process's own executable path can't be determined at all
+// (os.Executable failing is treated the same as "no confident basis").
+//
+// A real, confirmed-live performance bug in an earlier version of this
+// function (2026-09-16): it used to call
+// driver.DriverFootprintForVersionGateFallback *eagerly*, right here, for
+// every row whose package merely qualified by OS version - regardless of
+// whether the real `installer` run below would ever actually fail and need
+// it. A real 8-row batch showed this adding ~29 seconds to PrepareBatch's
+// planning phase (Canon and Xerox alone cost 12+ seconds each, from their
+// own large packages' extraction), even though only one row in that batch
+// genuinely needed the fallback at all. Batching plans its whole combined
+// script up front, before the one elevated call runs - there's no way to
+// run more Go code partway through an already-running shell script, so the
+// only way to make this genuinely lazy (extraction only happens *after*
+// installer has actually failed) is to have the elevated shell re-invoke
+// this same running PDT binary as a subprocess at that point, passing
+// driver.MacVersionGateFallbackCLIArg - see versiongatefallback_cli.go's
+// own doc comment for the receiving end. installCmd's own failure is
+// captured into $err/$rc once; only a failure whose combined output
+// matches versionGateKeywordCase re-invokes PDT itself to build (and then
+// copy into place) the fallback footprint - any other failure re-raises
+// the original error text completely unchanged, exactly as today, so the
+// existing per-row stderr capture (rowErrText) keeps reporting the real
+// underlying problem rather than a fallback's own unrelated failure.
+//
+// The fallback's own copy step deliberately runs no chmod pass, unlike
+// planCanonBatchRow/planKyoceraBatchRow's own staged-content copies: those
+// stage pure PPD/Recipe metadata with no executables in it, but this
+// fallback's own stage directory (DriverFootprintForVersionGateFallback)
+// commonly includes real vendor filter binaries inside .app bundles - a
+// blanket chmod 644 would strip their own required execute bit and silently
+// break printing worse than the version-gate failure this whole fallback
+// exists to route around. `cp -RX` (no `-p`) already preserves each source
+// file's own permission bits minus the root shell's own umask (POSIX cp
+// semantics - a typical root umask of 022 only strips group/other write
+// bits, never execute), which is enough on its own.
+func wrapInstallerWithVersionGateFallback(installCmd, pkgPath, osVersionFolder string) string {
+	if !driver.OSVersionFolderAtLeast(osVersionFolder, 14) {
+		return installCmd
+	}
+	selfExe, err := os.Executable()
+	if err != nil {
+		return installCmd
+	}
+
+	fallbackCmd := fmt.Sprintf(
+		`stageDir=$(%s %s %s 2>/dev/null); if [ -n "$stageDir" ] && [ -d "$stageDir" ]; then cp -RX "$stageDir/." / && %s; fbrc=$?; rm -rf "$stageDir"; if [ $fbrc -ne 0 ]; then echo "$err" >&2; exit $rc; fi; else echo "$err" >&2; exit $rc; fi`,
+		singleQuoteShellArg(selfExe), singleQuoteShellArg(driver.MacVersionGateFallbackCLIArg), singleQuoteShellArg(pkgPath), scopedFallbackChown(`"$stageDir"`),
+	)
+	return fmt.Sprintf(
+		`err=$(%s 2>&1); rc=$?; if [ $rc -ne 0 ]; then errlc=$(printf '%%s' "$err" | tr '[:upper:]' '[:lower:]'); case "$errlc" in %s) %s ;; *) echo "$err" >&2; exit $rc ;; esac; fi`,
+		installCmd, versionGateKeywordCase, fallbackCmd,
+	)
+}
+
+// scopedFallbackChown returns a shell fragment that chowns *only* the files
+// a version-gate fallback actually just placed (everything under
+// stageDirRef, mirrored to its own real destination under /) to
+// root:admin - never a blanket sweep of the whole shared /Library/Printers
+// tree. A real, confirmed-live bug in an earlier version of this fallback
+// (2026-09-16): `chown -Rh root:admin /Library/Printers` swept every
+// manufacturer's own pre-existing content in that shared directory, not
+// just what this run extracted - and choked outright on Canon's own
+// already-installed, code-signed `autoSetupTool.app` ("Operation not
+// permitted" on its own `_CodeSignature`/executable, even running as root -
+// macOS actively protects a signed bundle's own internals from exactly this
+// kind of blind re-chown). Walking stageDirRef's own real contents and
+// chowning only their mirrored destination paths never touches anything
+// this fallback didn't itself just place there.
+//
+// stageDirRef is however the caller wants to reference the stage directory
+// in shell text - a double-quoted "$stageDir" variable (the batched path,
+// wrapInstallerWithVersionGateFallback - the real stage directory's own
+// path is only known once the self-re-exec subcommand actually runs) or a
+// literal singleQuoteShellArg'd path (the non-batched path,
+// tryVersionGateFallback below - Go already has the real path in hand).
+func scopedFallbackChown(stageDirRef string) string {
+	return fmt.Sprintf(`(cd %s && find . -mindepth 1) | while IFS= read -r rel; do chown -h root:admin "/${rel#./}"; done`, stageDirRef)
+}
+
+// looksLikeVersionGateFailure is EnsureDriverInstalled's own non-batched,
+// Go-native mirror of versionGateKeywordCase's shell-level match - same two
+// keywords, same reasoning (see wrapInstallerWithVersionGateFallback's own
+// doc comment). Used by tryVersionGateFallback below.
+func looksLikeVersionGateFailure(errText string) bool {
+	lower := strings.ToLower(errText)
+	return strings.Contains(lower, "macos version") || strings.Contains(lower, "requires macos")
+}
+
+// tryVersionGateFallback is EnsureDriverInstalled's (install_darwin.go) own
+// non-batched application of the issue #12 fallback - see
+// wrapInstallerWithVersionGateFallback's own doc comment for the shared
+// design both this and the batched path apply. runPrivileged/
+// runPrivilegedShell's own confirmed-live behavior of embedding the real
+// `installer` stderr text into installErr's own message is what lets this
+// be detected here at all - the exact same signal the batched path's own
+// per-row stderr capture surfaces there.
+//
+// Returns true only when the fallback was both attempted and fully
+// succeeded - the caller then proceeds exactly as if the original install
+// had (the PPD-inventory diff that follows doesn't care how the files got
+// there). Any failure along this path (the OS-version guardrail not met,
+// nothing found to fall back to, or the fallback's own privileged copy
+// itself failing) returns false so the caller keeps surfacing installErr,
+// the original, honest problem - never the fallback's own unrelated
+// failure.
+func tryVersionGateFallback(ctx context.Context, pkgPath, osVersionFolder string, installErr error) bool {
+	if !driver.OSVersionFolderAtLeast(osVersionFolder, 14) || !looksLikeVersionGateFailure(installErr.Error()) {
+		return false
+	}
+	stageDir, cleanup, ok := driver.DriverFootprintForVersionGateFallback(pkgPath)
+	if !ok {
+		return false
+	}
+	defer cleanup()
+	fallbackCmd := fmt.Sprintf("cp -RX %s/. / && %s", singleQuoteShellArg(stageDir), scopedFallbackChown(singleQuoteShellArg(stageDir)))
+	_, err := runPrivilegedShell(ctx, fallbackCmd)
+	return err == nil
+}
+
 // planRicohBatchRow is PrepareBatch's own Ricoh-specific planner. Unlike
 // Canon/Kyocera, Ricoh's own real packages are small enough (a few hundred
 // KB to ~35MB total for the one legacy bundle - see macricoh.go) that
@@ -431,7 +586,7 @@ func planKyoceraBatchRow(ctx context.Context, row printer.PrinterRow, variant dr
 // package's own internal shape - unnecessary here, since a full install
 // works identically regardless of which of Ricoh's two real download shapes
 // (see macricoh.go) this row's own package turns out to be.
-func planRicohBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+func planRicohBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI, osVersionFolder string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
 	if row.Manufacturer != "Ricoh" {
 		return canonBatchRowPlan{}, false
 	}
@@ -447,7 +602,8 @@ func planRicohBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 
 	var s strings.Builder
 	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
-		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		installCmd := fmt.Sprintf("installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		s.WriteString(wrapInstallerWithVersionGateFallback(installCmd, pkgPath, osVersionFolder))
 		sharedQueuedThisBatch[variant.PackagePath] = true
 		plan.sharedInstalled = true
 	} else {
@@ -471,7 +627,7 @@ func planRicohBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 // entirely, each paying its own separate elevated prompt (confirmed live: a
 // real 2-row Sharp deploy triggered 3 separate prompts - one shared install,
 // plus one queue-create per row).
-func planSharpBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+func planSharpBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI, osVersionFolder string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
 	if row.Manufacturer != "Sharp" {
 		return canonBatchRowPlan{}, false
 	}
@@ -487,7 +643,8 @@ func planSharpBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 
 	var s strings.Builder
 	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
-		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		installCmd := fmt.Sprintf("installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		s.WriteString(wrapInstallerWithVersionGateFallback(installCmd, pkgPath, osVersionFolder))
 		sharedQueuedThisBatch[variant.PackagePath] = true
 		plan.sharedInstalled = true
 	} else {
@@ -516,7 +673,7 @@ func planSharpBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 // batching support only got its real timing confirmed after a live deploy,
 // not before. Watch the first real Xerox deploy's own log for how long the
 // install actually takes.
-func planXeroxBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+func planXeroxBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI, osVersionFolder string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
 	if row.Manufacturer != "Xerox" {
 		return canonBatchRowPlan{}, false
 	}
@@ -532,7 +689,8 @@ func planXeroxBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 
 	var s strings.Builder
 	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
-		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		installCmd := fmt.Sprintf("installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		s.WriteString(wrapInstallerWithVersionGateFallback(installCmd, pkgPath, osVersionFolder))
 		sharedQueuedThisBatch[variant.PackagePath] = true
 		plan.sharedInstalled = true
 	} else {
@@ -548,7 +706,7 @@ func planXeroxBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkg
 // the smallest of any manufacturer here (6649 KB installed, well under even
 // Sharp's own already-confirmed-fast package), so no selective-install
 // concern at all, unlike Xerox's own still-unconfirmed timing.
-func planToshibaBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+func planToshibaBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI, osVersionFolder string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
 	if row.Manufacturer != "Toshiba" {
 		return canonBatchRowPlan{}, false
 	}
@@ -564,7 +722,8 @@ func planToshibaBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, p
 
 	var s strings.Builder
 	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
-		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		installCmd := fmt.Sprintf("installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		s.WriteString(wrapInstallerWithVersionGateFallback(installCmd, pkgPath, osVersionFolder))
 		sharedQueuedThisBatch[variant.PackagePath] = true
 		plan.sharedInstalled = true
 	} else {
@@ -587,7 +746,7 @@ func planToshibaBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, p
 // "C751i (S)" - not a speed-vs-coverage tradeoff to pick between). Added
 // anyway: batching still strictly reduces the auth-prompt count regardless
 // of install duration.
-func planKonicaMinoltaBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+func planKonicaMinoltaBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI, osVersionFolder string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
 	if row.Manufacturer != "Konica Minolta" {
 		return canonBatchRowPlan{}, false
 	}
@@ -603,7 +762,8 @@ func planKonicaMinoltaBatchRow(row printer.PrinterRow, variant driver.MacPPDVari
 
 	var s strings.Builder
 	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
-		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		installCmd := fmt.Sprintf("installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		s.WriteString(wrapInstallerWithVersionGateFallback(installCmd, pkgPath, osVersionFolder))
 		sharedQueuedThisBatch[variant.PackagePath] = true
 		plan.sharedInstalled = true
 	} else {
@@ -619,7 +779,7 @@ func planKonicaMinoltaBatchRow(row printer.PrinterRow, variant driver.MacPPDVari
 // live, 2026-09-16) is a genuine Universal Print Driver - a single flat
 // sub-package (~8.7MB installed), exactly one PPD, no per-model choices to
 // select down at all - by far the simplest real shape batched here so far.
-func planLexmarkBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
+func planLexmarkBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, pkgPath, deviceURI, osVersionFolder string, sharedComponentsInstalledThisRun, sharedQueuedThisBatch map[string]bool, cleanups *[]func()) (canonBatchRowPlan, bool) {
 	if row.Manufacturer != "Lexmark" {
 		return canonBatchRowPlan{}, false
 	}
@@ -635,7 +795,8 @@ func planLexmarkBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, p
 
 	var s strings.Builder
 	if !sharedComponentsInstalledThisRun[variant.PackagePath] && !sharedQueuedThisBatch[variant.PackagePath] {
-		fmt.Fprintf(&s, "installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		installCmd := fmt.Sprintf("installer -pkg %s -target /", singleQuoteShellArg(pkgPath))
+		s.WriteString(wrapInstallerWithVersionGateFallback(installCmd, pkgPath, osVersionFolder))
 		sharedQueuedThisBatch[variant.PackagePath] = true
 		plan.sharedInstalled = true
 	} else {

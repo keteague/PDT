@@ -481,6 +481,64 @@ func TestDecidePrintDefaults_XeroxOutputColorAppliesGrayscaleAndColorCorrectly(t
 	}
 }
 
+// realLexmarkColorModePPDBlock is copied verbatim (2026-09-16) from the
+// real, installed Lexmark Universal Print Driver PPD (`gunzip -c
+// "Lexmark Universal Color.gz"` from the real
+// Lexmark_UC1_PrinterSoftware_04022026.dmg payload). Unlike Xerox's own
+// XROutputColor, Lexmark's own choice *values* ("TrueM"/"FalseM") are not
+// self-describing at all - this guards both findOption recognizing the
+// "ColorMode" keyword (it isn't "ColorModel") AND pickChoice's existing
+// label fallback correctly reading "Color"/"Monochrome" off each choice's
+// own label, the same shape Sharp's own ARCMode needed.
+const realLexmarkColorModePPDBlock = `*OpenUI *ColorMode/Color Mode: PickOne
+*OrderDependency: 13 AnySetup *ColorMode
+*DefaultColorMode: TrueM
+*ColorMode TrueM/Color: ""
+*ColorMode FalseM/Monochrome: ""
+*CloseUI: *ColorMode`
+
+// TestFindOption_MatchesLexmarkColorMode guards findOption's own
+// exact-keyword allowlist recognizing Lexmark's real ColorModel-equivalent
+// keyword - a real, confirmed-live gap (2026-09-16): a real deploy warned
+// "declares no ColorModel option" against this exact PPD before "colormode"
+// was added here.
+func TestFindOption_MatchesLexmarkColorMode(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realLexmarkColorModePPDBlock)
+	got, ok := findOption(opts, "colormodel", "cncolormode", "arcmode", "xroutputcolor", "colortype", "colormode")
+	if !ok || got.keyword != "ColorMode" {
+		t.Errorf("findOption(..., colormode) = %+v, %v, want ColorMode, true", got, ok)
+	}
+}
+
+// TestDecidePrintDefaults_LexmarkColorModeAppliesBothDirectionsViaLabel is
+// the full real-deploy-shaped regression: mono=true must pick "FalseM" (via
+// its own "Monochrome" label, since the bare value has no "mono"/"gray"
+// substring at all), mono=false must pick "TrueM" (via its own "Color"
+// label) - both with no warning.
+func TestDecidePrintDefaults_LexmarkColorModeAppliesBothDirectionsViaLabel(t *testing.T) {
+	opts := parsePPDOpenUIOptions(realLexmarkColorModePPDBlock)
+
+	toSet, warnings := decidePrintDefaults(opts, true, true, `row "Test"`)
+	if !containsSetting(toSet, "ColorMode=FalseM") {
+		t.Errorf("expected ColorMode=FalseM in toSet, got %v", toSet)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "ColorModel") || strings.Contains(w, "ColorMode") {
+			t.Errorf("did not expect a color-related warning (mono), got %q", w)
+		}
+	}
+
+	toSet, warnings = decidePrintDefaults(opts, true, false, `row "Test"`)
+	if !containsSetting(toSet, "ColorMode=TrueM") {
+		t.Errorf("expected ColorMode=TrueM in toSet, got %v", toSet)
+	}
+	for _, w := range warnings {
+		if strings.Contains(w, "ColorModel") || strings.Contains(w, "ColorMode") {
+			t.Errorf("did not expect a color-related warning (color), got %q", w)
+		}
+	}
+}
+
 func containsSetting(toSet []string, want string) bool {
 	for _, s := range toSet {
 		if s == want {

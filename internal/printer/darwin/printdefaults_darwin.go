@@ -268,7 +268,7 @@ func decidePrintDefaults(opts []ppdOption, oneSided, mono bool, subject string) 
 		warnings = append(warnings, fmt.Sprintf("%s's PPD declares no Duplex option; leaving duplex as-is", subject))
 	}
 
-	if colorModel, ok := findOption(opts, "colormodel", "cncolormode", "arcmode", "xroutputcolor", "colortype"); ok {
+	if colorModel, ok := findOption(opts, "colormodel", "cncolormode", "arcmode", "xroutputcolor", "colortype", "colormode"); ok {
 		if mono {
 			if choice, ok := pickChoice(colorModel.choices, []string{"gray", "grey", "mono", "black"}, nil); ok {
 				toSet = append(toSet, colorModel.keyword+"="+choice)
@@ -375,9 +375,17 @@ func PrintDefaultsForNewQueue(rowName, ppdPath string, oneSided, mono bool) (toS
 // so far, this one's own real ColorModel-equivalent option *is* spelled the
 // plain CUPS-standard "ColorModel" way, needing no keyword addition at all;
 // it's the Duplex side that needed one here, the reverse of every other
-// manufacturer's own real gap) - add a new exact spelling here if a future
-// vendor's PPD needs one, never widen this back to a suffix/substring
-// match.
+// manufacturer's own real gap), and Lexmark's own "ColorMode" (confirmed
+// live, 2026-09-16, against the real installed Lexmark Universal Print
+// Driver PPD's own `*OpenUI *ColorMode/...: PickOne` block - a real,
+// confirmed-live case where the keyword miss alone wasn't the whole story:
+// its own choice *values* are non-self-describing ("TrueM"/"FalseM"), the
+// same shape Sharp's own ARCMode needed label-matching for, but its own
+// labels ("Color"/"Monochrome") already are self-describing, so
+// pickChoice's existing label fallback handles it with no further change;
+// Lexmark's own Duplex keyword also needed no addition) - add a new exact
+// spelling here if a future vendor's PPD needs one, never widen this back
+// to a suffix/substring match.
 func findOption(opts []ppdOption, exactKeywordsLower ...string) (ppdOption, bool) {
 	for _, o := range opts {
 		lower := strings.ToLower(o.keyword)

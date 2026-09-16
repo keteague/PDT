@@ -2,6 +2,7 @@ package driver
 
 import (
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -41,6 +42,41 @@ func TestResolveMac_LabelFromRealPackageInfo(t *testing.T) {
 	}
 	if got.Label != "1.2.3" {
 		t.Errorf("Label = %q, want %q (from the fixture's real PackageInfo)", got.Label, "1.2.3")
+	}
+}
+
+// TestResolveMac_PopulatesOSVersionFolder guards issue #12's own dependency
+// on ResolvedMacPackage.OSVersionFolder (EnsureDriverInstalled's non-batched
+// application of the installer-version-gate fallback,
+// tryVersionGateFallback in canonbatch_darwin.go) - it must carry the real
+// picked package's own folder through, not just Path/Kind/Label.
+func TestResolveMac_PopulatesOSVersionFolder(t *testing.T) {
+	cat := testMacCatalog(t)
+	got := ResolveMac(cat, "Canon")
+	if got == nil {
+		t.Fatal("ResolveMac returned nil")
+	}
+	if got.OSVersionFolder != "26" {
+		t.Errorf("OSVersionFolder = %q, want %q (the newer package's own real folder)", got.OSVersionFolder, "26")
+	}
+}
+
+// TestOSVersionFolderForPackagePath guards PrepareBatch's own batched
+// lookup (issue #12 - the same OSVersionFolder ResolveMac already surfaces
+// on ResolvedMacPackage, exposed here for a caller that only has a package's
+// own Path in hand).
+func TestOSVersionFolderForPackagePath(t *testing.T) {
+	cat := testMacCatalog(t)
+	newer := filepath.Join("testdata_mac", "macOS", "Canon", "26", "CanonDriverNewer.pkg")
+	if got := OSVersionFolderForPackagePath(cat, "Canon", newer); got != "26" {
+		t.Errorf("OSVersionFolderForPackagePath(newer) = %q, want %q", got, "26")
+	}
+	older := filepath.Join("testdata_mac", "macOS", "Canon", "15", "CanonDriverOlder.dmg")
+	if got := OSVersionFolderForPackagePath(cat, "Canon", older); got != "15" {
+		t.Errorf("OSVersionFolderForPackagePath(older) = %q, want %q", got, "15")
+	}
+	if got := OSVersionFolderForPackagePath(cat, "Canon", "not-a-real-path.pkg"); got != "" {
+		t.Errorf("OSVersionFolderForPackagePath(unknown path) = %q, want empty string", got)
 	}
 }
 

@@ -350,7 +350,7 @@ func ResolveMacFamily(catalog MacCatalog, manufacturer, model string) (resolved 
 		if family != tokens[0] {
 			note = fmt.Sprintf("preferred %s family has no PPD matching model %q; using %s instead (matched %q).", tokens[0], model, family, nick)
 		}
-		return &ResolvedMacPackage{Path: pkg.Path, Kind: pkg.Kind, Label: PackageLabel(pkg.Path)}, note
+		return &ResolvedMacPackage{Path: pkg.Path, Kind: pkg.Kind, Label: PackageLabel(pkg.Path), OSVersionFolder: pkg.OSVersionFolder}, note
 	}
 
 	return ResolveMac(catalog, manufacturer), fmt.Sprintf(

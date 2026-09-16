@@ -42,6 +42,38 @@ func TestOsVersionFolderPrefix(t *testing.T) {
 	}
 }
 
+// TestOSVersionFolderAtLeast guards issue #12's own safety guardrail (Ken's
+// own explicit, conservative call, 2026-09-16): the installer-version-gate
+// fallback should only ever be attempted for a package sitting in a macOS
+// 14+ folder, never a legacy "10.x" one (predates the modern integer-major-
+// version era this fallback is scoped to) and never an unparsable/missing
+// folder name (no confident basis to take the risky path).
+func TestOSVersionFolderAtLeast(t *testing.T) {
+	tests := []struct {
+		folder   string
+		minMajor int
+		want     bool
+	}{
+		{"14-Sonoma", 14, true},
+		{"15-Sequoia", 14, true},
+		{"26-Tahoe", 14, true},
+		{"13-Ventura", 14, false},
+		{"12-Monterey", 14, false},
+		{"10.15-Catalina", 14, false},
+		{"10.15-Catalina", 11, false}, // legacy "10.x" is always false, even against a lower threshold
+		{"", 14, false},
+		{"Archive", 14, false},
+		{"CustomFolderName", 14, false},
+		{"14", 14, true}, // bare numeric, no codename
+	}
+	for _, tt := range tests {
+		got := OSVersionFolderAtLeast(tt.folder, tt.minMajor)
+		if got != tt.want {
+			t.Errorf("OSVersionFolderAtLeast(%q, %d) = %v, want %v", tt.folder, tt.minMajor, got, tt.want)
+		}
+	}
+}
+
 func TestFilterToCurrentOSVersionFolder_ExcludesMismatchedRelease(t *testing.T) {
 	t.Cleanup(func() { currentMacOSVersionPrefixFunc = detectCurrentMacOSVersionPrefix })
 	currentMacOSVersionPrefixFunc = func() string { return "26" }

@@ -53,8 +53,19 @@ func EnsureDriverInstalled(ctx context.Context, resolved *driver.ResolvedMacPack
 		return nil, fmt.Errorf("snapshotting installed PPDs before install: %w", err)
 	}
 
-	if _, err := runPrivileged(ctx, []string{"installer", "-pkg", pkgPath, "-target", "/"}); err != nil {
-		return nil, fmt.Errorf("installing %s: %w", pkgPath, err)
+	if _, installErr := runPrivileged(ctx, []string{"installer", "-pkg", pkgPath, "-target", "/"}); installErr != nil {
+		// issue #12: a real, confirmed-live case (Ricoh) of installer
+		// refusing outright on its own package's version-check predicate
+		// against a macOS release newer than it was validated against, no
+		// installer/pkgutil flag able to bypass it. tryVersionGateFallback
+		// (canonbatch_darwin.go - shared with PrepareBatch's own batched
+		// planners) only proceeds past this when installErr's own text
+		// looks like that specific failure and resolved's own
+		// OSVersionFolder clears Ken's own macOS-14+ safety threshold;
+		// anything else keeps returning the original, honest error below.
+		if !tryVersionGateFallback(ctx, pkgPath, resolved.OSVersionFolder, installErr) {
+			return nil, fmt.Errorf("installing %s: %w", pkgPath, installErr)
+		}
 	}
 
 	after, err := snapshotPPDs()

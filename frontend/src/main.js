@@ -3126,19 +3126,38 @@ function wireSettingsModal() {
 
     wireBackdropDismiss('settingsBackdrop', closeSettingsModal);
 
+    // Each Browse button's own App.PickFolder call can reject (e.g. Wails'
+    // own runtime.OpenDirectoryDialog refuses to even open when handed a
+    // starting directory that no longer exists - see app.go's own
+    // nearestExistingDir, which already guards against the one real way
+    // that happened live) - caught and logged rather than left to fail
+    // silently, since an uncaught rejection here previously looked exactly
+    // like "the button does nothing at all" with no visible sign of why.
     el('btnBrowseBasePath').addEventListener('click', async () => {
-        const result = await App.PickFolder(el('settingsBasePath').value);
-        if (!result.canceled) el('settingsBasePath').value = result.path;
+        try {
+            const result = await App.PickFolder(el('settingsBasePath').value);
+            if (!result.canceled) el('settingsBasePath').value = result.path;
+        } catch (err) {
+            logStatus('ERR', `Could not open the folder browser: ${err && err.message ? err.message : err}`);
+        }
     });
 
     el('btnBrowseDriversBasePath').addEventListener('click', async () => {
-        const result = await App.PickFolder(el('settingsDriversBasePath').value);
-        if (!result.canceled) el('settingsDriversBasePath').value = result.path;
+        try {
+            const result = await App.PickFolder(el('settingsDriversBasePath').value);
+            if (!result.canceled) el('settingsDriversBasePath').value = result.path;
+        } catch (err) {
+            logStatus('ERR', `Could not open the folder browser: ${err && err.message ? err.message : err}`);
+        }
     });
 
     el('btnBrowsePreinstallBasePath').addEventListener('click', async () => {
-        const result = await App.PickFolder(el('settingsPreinstallBasePath').value);
-        if (!result.canceled) el('settingsPreinstallBasePath').value = result.path;
+        try {
+            const result = await App.PickFolder(el('settingsPreinstallBasePath').value);
+            if (!result.canceled) el('settingsPreinstallBasePath').value = result.path;
+        } catch (err) {
+            logStatus('ERR', `Could not open the folder browser: ${err && err.message ? err.message : err}`);
+        }
     });
 
     el('btnAlphabetizeMfgOrder').addEventListener('click', (e) => {

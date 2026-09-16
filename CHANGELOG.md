@@ -4,6 +4,32 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-15 (v0.9.18) - Settings > General's Browse ("...") button could silently do nothing, and macOS gets the same install-dir hardening Windows got in v0.9.17
+
+### Fixed
+- **Settings > General's Browse button could silently do nothing at all**, for Configuration Files
+  Base Path and Preinstall Base Path specifically (Drivers Base Path was unaffected). Root cause:
+  Wails' own `runtime.OpenDirectoryDialog` refuses to even show the native folder picker when
+  handed a `DefaultDirectory` that doesn't exist on disk yet - it returns an error instead
+  (confirmed directly in `pkg/runtime/dialog.go`). Nothing auto-creates
+  `Documents\Preinstall`/`~/Documents/Preinstall` the way Drivers/Configs get scaffolded, and the
+  three Browse click handlers (`main.js`) had no `.catch()`, so that rejected promise vanished with
+  no visible sign of why - looking exactly like the button did nothing. Fixed with a new
+  `nearestExistingDir` (`app.go`) that walks up to the nearest ancestor that actually exists (e.g.
+  falls back to `Documents` if `Documents\Preinstall` isn't there yet) before handing a starting
+  directory to the dialog, so Browse always opens somewhere sensible instead of erroring out; all
+  three click handlers also now log a visible error on any future failure instead of failing
+  silently. New regression test: `TestNearestExistingDir`.
+- **macOS gets the same known-install-dir hardening `settings_windows.go` got in v0.9.17** (below):
+  a new `isKnownInstallDir` (`settings_darwin.go`) recognizes an installed `.app` bundle sitting
+  directly under `/Applications` or `~/Applications` (structurally - any bundle name, not a
+  hardcoded `PDT.app` literal), so a stray Drivers folder ending up next to the exe inside an
+  installed copy's own bundle can no longer get it silently reclassified as portable, the same real
+  gap already fixed on Windows. Lower real-world likelihood on macOS (nobody casually drops a
+  folder inside a `.app` bundle via Finder) but the same class of bug, so it gets the same fix for
+  parity. New regression test: `TestIsKnownInstallDir` (darwin-only - not run on this Windows
+  dev machine, verified via `GOOS=darwin go build`/`go vet` only).
+
 ## 2026-09-15 (v0.9.17) - Cloud Sync Cancel could still freeze on "Canceling...", and an installed copy's Drivers folder could get silently misdetected as portable
 
 Two real bugs found live, both Windows-only.

@@ -194,13 +194,45 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 	return a.settings, nil
 }
 
+// nearestExistingDir walks up from path (an absolute directory, already
+// resolveExeRelative'd) until it finds one that actually exists on disk,
+// returning "" if none of its ancestors do either (or path itself is
+// already "").
+//
+// PickFolder needs this because Wails' own runtime.OpenDirectoryDialog
+// refuses to even show the dialog at all when handed a DefaultDirectory
+// that doesn't exist - it returns an error instead
+// (pkg/runtime/dialog.go's own OpenDirectoryDialog) - confirmed as a real,
+// live bug: a Base Path/Preinstall Base Path that's never actually been
+// created yet (nothing scaffolds Documents\Preinstalls the way Drivers/
+// Configs get bootstrapped) silently broke that field's own Browse button
+// entirely, since the frontend's click handler has no .catch() to surface
+// the rejected promise - it just looked like the button did nothing.
+// Falling back to the nearest existing ancestor (rather than blank) also
+// means Browse still opens somewhere useful - e.g. right at the user's
+// Documents folder for a not-yet-created Documents\Preinstalls - not just
+// wherever Explorer's own dialog defaults to with no starting point at all.
+func nearestExistingDir(path string) string {
+	for path != "" {
+		if dirExists(path) {
+			return path
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return ""
+		}
+		path = parent
+	}
+	return ""
+}
+
 // PickFolder prompts for a directory, starting from currentPath, for the
 // Settings panel's Browse ("...") buttons. The actual dialog is shown by
 // platform-specific pickFolderDialog (pickfolder_windows.go/
 // pickfolder_darwin.go) - macOS can't use Wails' own runtime.OpenDirectoryDialog
 // here, see pickfolder_darwin.go's own doc comment.
 func (a *App) PickFolder(currentPath string) (PathResult, error) {
-	path, canceled, err := a.pickFolderDialog("Select Save File Base Path", resolveExeRelative(currentPath))
+	path, canceled, err := a.pickFolderDialog("Select Save File Base Path", nearestExistingDir(resolveExeRelative(currentPath)))
 	if err != nil || canceled {
 		return PathResult{Canceled: canceled}, err
 	}

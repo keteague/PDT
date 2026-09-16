@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // installedAppDataDir is ~/Library/Application Support/PDT - the macOS
@@ -18,6 +19,32 @@ func installedAppDataDir() string {
 		return ""
 	}
 	return filepath.Join(home, "Library", "Application Support", "PDT")
+}
+
+// isKnownInstallDir reports whether exeDir (the running .app bundle's own
+// Contents/MacOS folder) sits directly under one of macOS's two real
+// Applications folders (/Applications, or ~/Applications for a per-user
+// install) - mirroring settings_windows.go's own isKnownInstallDir
+// (%ProgramFiles%\PDT / %LocalAppData%\Programs\PDT) and the same real bug
+// it guards against there: an installed copy with a stray Drivers folder
+// sitting next to its own exe should never get silently reclassified as a
+// portable/flash-drive copy just because that folder happens to exist.
+// Structural (any *.app bundle placed directly under either Applications
+// folder), not a hardcoded "PDT.app" literal, so this keeps working even if
+// the bundle/product name ever changes.
+func isKnownInstallDir(exeDir string) bool {
+	bundleDir := filepath.Dir(filepath.Dir(exeDir)) // .../PDT.app/Contents/MacOS -> .../PDT.app
+	if !strings.EqualFold(filepath.Ext(bundleDir), ".app") {
+		return false
+	}
+	appsParent := filepath.Dir(bundleDir)
+	if strings.EqualFold(appsParent, "/Applications") {
+		return true
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.EqualFold(appsParent, filepath.Join(home, "Applications")) {
+		return true
+	}
+	return false
 }
 
 // defaultDriversBasePath and defaultSaveFileBasePath both apply the same
@@ -42,7 +69,8 @@ func installedAppDataDir() string {
 // Windows and a macOS machine.
 func defaultDriversBasePath() string {
 	if exe, err := os.Executable(); err == nil {
-		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {
+		exeDir := filepath.Dir(exe)
+		if !isKnownInstallDir(exeDir) && dirExists(filepath.Join(exeDir, "Drivers")) {
 			return "Drivers"
 		}
 	}
@@ -54,7 +82,8 @@ func defaultDriversBasePath() string {
 
 func defaultSaveFileBasePath() string {
 	if exe, err := os.Executable(); err == nil {
-		if dirExists(filepath.Join(filepath.Dir(exe), "Drivers")) {
+		exeDir := filepath.Dir(exe)
+		if !isKnownInstallDir(exeDir) && dirExists(filepath.Join(exeDir, "Drivers")) {
 			return "Configs"
 		}
 	}

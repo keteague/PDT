@@ -176,9 +176,23 @@ func collectByExt(root string, exts ...string) []string {
 // no *cupsFilter line in any of them - real Generic PostScript PPDs, not a
 // proprietary driver, so there's no installer to look for at all). Same
 // one-level-of-nesting mount convention as LocatePkg - checks the outer
-// mount first, then one level of nested .dmg. cleanup unmounts everything
-// this call mounted AND removes any temp extraction directory
-// resolveMacZipSource created; always call it, even after an error.
+// mount first, then one level of nested .dmg - but unlike LocatePkg, every
+// nested .dmg found gets mounted and collected, not just the first
+// (GitHub issue #6: Canon's own "PPD" bucket nests one .dmg per locale
+// variant side by side - PS_PPD/mac-ppd-v550-uken-16.dmg and
+// PS_PPD/mac-ppd-v550-usen-16.dmg, confirmed live, both containing the same
+// real model's own PPD under the same real filename - mounting only
+// "whichever happened to mount first" silently dropped every other
+// locale's own PPDs. Matches the older flat-folder-per-locale version of
+// this same package's own already-correct "collect everything" behavior -
+// the older PPDv5.35_mac.dmg has both locales' folders sitting right at
+// the top level, no nesting at all, so collectByExt's own first call
+// already found both). One bad nested .dmg (fails to mount) doesn't block
+// the others - best-effort,
+// same discipline every other multi-item walk in this codebase already
+// holds itself to. cleanup unmounts everything this call mounted AND
+// removes any temp extraction directory resolveMacZipSource created;
+// always call it, even after an error.
 func LocateLoosePPDs(path string) (ppdPaths []string, cleanup func(), err error) {
 	realPath, zipCleanup, zerr := resolveMacZipSource(path)
 	if zerr != nil {
@@ -210,15 +224,20 @@ func locateLoosePPDsFromRealPath(path string) (ppdPaths []string, cleanup func()
 		return found, cleanup, nil
 	}
 
-	if nested := findFirstByExt(mountPoint, ".dmg"); nested != "" {
-		nestedMount, nestedDetach, err := mountDmg(nested)
-		if err != nil {
-			return nil, cleanup, err
+	var nestedPPDs []string
+	for _, nested := range collectByExt(mountPoint, ".dmg") {
+		nestedMount, nestedDetach, mountErr := mountDmg(nested)
+		if mountErr != nil {
+			// Best-effort: one bad nested .dmg (a locale variant that
+			// happens not to mount) shouldn't block collecting PPDs from
+			// the others.
+			continue
 		}
 		detaches = append(detaches, nestedDetach)
-		if found := collectByExt(nestedMount, ".ppd", ".ppd.gz"); len(found) > 0 {
-			return found, cleanup, nil
-		}
+		nestedPPDs = append(nestedPPDs, collectByExt(nestedMount, ".ppd", ".ppd.gz")...)
+	}
+	if len(nestedPPDs) > 0 {
+		return nestedPPDs, cleanup, nil
 	}
 
 	return nil, cleanup, fmt.Errorf("no loose PPD files found inside %s", path)

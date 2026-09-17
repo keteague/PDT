@@ -4,6 +4,27 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-16 (v0.9.25) - macOS: fixed issue #6 - LocateLoosePPDs silently dropped every locale but one for Canon's own restructured PPD bucket
+
+Found while live-verifying issue #4 back in an earlier session, low-urgency and left for whenever
+`macmount.go` was next touched. `LocateLoosePPDs`'s nested-.dmg fallback (`findFirstByExt`) only
+ever mounted and indexed the *first* nested `.dmg` it found. Confirmed live against Canon's own
+real "PPD" bucket download (`PPDv5.50_mac.zip`): its own locale variants are two nested `.dmg`
+files side by side (`PS_PPD/mac-ppd-v550-uken-16.dmg`, `PS_PPD/mac-ppd-v550-usen-16.dmg`), both
+containing the same real model's own PPD under the same real filename
+(`CNADV529X1.PPD.gz`, "Canon iR-ADV 529") - "whichever mounts first" silently dropped the other
+locale's own entire PPD set, every time.
+
+### Fixed
+- `locateLoosePPDsFromRealPath` now mounts and collects PPDs from *every* nested `.dmg` found
+  (`collectByExt`, not `findFirstByExt`'s single match), matching the older flat-folder-per-locale
+  version of this same package's own already-correct "collect everything" behavior - both real
+  `PPDv5.50_mac.zip` locale variants now come back (confirmed live:
+  `CNADV529X1.PPD.gz` found twice, once per locale, matching the older `PPDv5.35_mac.zip`'s own
+  already-correct count). One bad nested `.dmg` (fails to mount) no longer blocks collecting PPDs
+  from the others - best-effort, same discipline every other multi-item walk in this codebase
+  already holds itself to.
+
 ## 2026-09-16 (v0.9.24) - Windows: issue #10's own portable-mode gap fixed - extraction falls back off a write-protected flash drive
 
 Issue #10 already shipped its own 3-increment rollout (Sync skipping extracted sprawl, catalog

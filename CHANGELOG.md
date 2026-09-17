@@ -4,6 +4,27 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-16 (v0.9.27) - Windows: fixed a cross-platform test gap in the write-protected-media fallback test, first Windows build since v0.9.22
+
+Pulled in v0.9.22 through v0.9.26 (macOS-side work: lazy zip extraction, real Lexmark support,
+the write-protected-media extraction fallback, an installer-version-gate fallback, a Canon PPD
+locale-bucket fix, and stale .dmg mount cleanup) - none of those releases had a Windows build
+attached, so this is the first Windows installer/exe published since v0.9.21.
+
+### Fixed
+`TestEnsureArchiveExtracted_FallsBackWhenArchiveDirIsWriteProtected`
+(`internal/driver/lazyextract_test.go`, added in v0.9.24) simulates a write-protected removable
+drive via `os.Chmod(dir, 0o555)` - which enforces real POSIX write-protection on macOS/Linux, but
+not on Windows: `os.Chmod` there only toggles the read-only file attribute, and doesn't block
+`MkdirAll`/file creation inside a directory the way Unix permission bits do. The primary
+extraction attempt inside the "protected" directory silently succeeded on Windows, so the
+fallback the test exists to verify never actually triggered, failing the test - the same class of
+platform gap the test already guarded against for root (which also bypasses Unix permission
+bits), just missing the Windows case. The underlying `extractWithFallback` logic itself is
+platform-agnostic and unaffected - a real write-protected flash drive genuinely fails the primary
+write on Windows too; this was purely a test-simulation gap. Fixed by skipping this test on
+Windows with an explanation, matching the existing root-skip's own style.
+
 ## 2026-09-16 (v0.9.26) - macOS: fixed issue #1 - stray .dmg mounts left behind by an interrupted catalog build
 
 A full audit of mountDmg/LocatePkgWithChain/LocateLoosePPDs and every one of their 6 real call

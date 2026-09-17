@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -135,6 +136,9 @@ func TestEnsureArchiveExtracted_NestedArchiveInsideInfCache(t *testing.T) {
 // extractZip's own os.MkdirAll for the sibling destDir fails with a
 // permission error.
 func TestEnsureArchiveExtracted_FallsBackWhenArchiveDirIsWriteProtected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod doesn't enforce POSIX-style write-protection on a directory on Windows (it only toggles the read-only file attribute, and only meaningfully for files) - MkdirAll/file creation inside \"protectedDir\" below succeeds regardless, so the primary attempt never actually fails and the fallback this test exists to verify never triggers. The underlying extractWithFallback logic itself is platform-agnostic (any error from the primary attempt triggers the fallback, regardless of cause) - this is a test-simulation gap, not a feature gap; a real write-protected removable medium on Windows does fail the primary write for real.")
+	}
 	if os.Getuid() == 0 {
 		t.Skip("running as root - permission bits don't block anything, can't simulate a write-protected directory this way")
 	}

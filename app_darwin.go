@@ -19,8 +19,18 @@ import (
 // Windows side's own ensureDriversScaffold), best-effort: a scaffold failure
 // (e.g. a read-only Drivers folder) shouldn't block startup any more than
 // the Windows side's own best-effort ensureDriversScaffold call does.
+//
+// Also sweeps for and detaches any stale mount an earlier, improperly-
+// terminated run left behind (GitHub issue #1, driver.ReconcileStaleMounts's
+// own doc comment for the full story) - before loadCatalog gets a chance to
+// mount anything new, both because a stray CANON_MAC left over from a
+// previous run would otherwise force a fresh mount of the same real volume
+// to rename itself CANON_MAC 1, and because there's no reason to leave a
+// leaked read-only mount sitting around a moment longer than it has to once
+// this run has the chance to clean it up.
 func (a *App) platformStartup() {
 	_ = ensureMacDriversScaffold(filepath.Join(driversRoot(), "macOS"))
+	driver.ReconcileStaleMounts(filepath.Join(driversRoot(), "macOS"))
 }
 
 // loadCatalog scans driversRoot for macOS driver packages (installer-

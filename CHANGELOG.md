@@ -4,6 +4,39 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-16 (v0.9.26) - macOS: fixed issue #1 - stray .dmg mounts left behind by an interrupted catalog build
+
+A full audit of mountDmg/LocatePkgWithChain/LocateLoosePPDs and every one of their 6 real call
+sites found no bug in the cleanup logic itself - every path correctly composes and calls its own
+detach func, including the nested-.dmg case and every error path. But a live check on this same
+machine found 3 real, currently-mounted stray volumes (a Canon UFR II outer+nested .dmg, a
+Toshiba .dmg.gz) with mounting process IDs that had long since exited - the leak is real, just not
+where the issue's own checklist pointed.
+
+**Root cause**: app.go's own `startup()` calls `loadCatalog` synchronously as part of Wails' own
+startup lifecycle, mounting real packages along the way. If the whole process is terminated (a
+crash, a force-quit, or an external SIGTERM arriving mid-build) before that call stack unwinds
+normally, no deferred cleanup ever runs - Go's `defer` only fires on a normal return within the
+same goroutine, not when the whole process is torn down out from under it.
+
+### Added
+- `driver.ReconcileStaleMounts` (`internal/driver/macmountreconcile.go`) - sweeps `hdiutil info`
+  for any real, currently-mounted volume this codebase's own `mountDmg` would have created but
+  never got a chance to unmount (an image-path either living under a `pdt-`-prefixed OS temp
+  directory - Canon's own zip-extraction detour, Toshiba's own gzip-decompression detour - or
+  directly under the real Drivers folder - every other manufacturer's own real `.dmg`, mounted
+  straight from its real location), and detaches them, nested-first. Wired into `platformStartup`,
+  before `loadCatalog` gets a chance to mount anything new - a stray `CANON_MAC` left over from a
+  previous run would otherwise force a fresh mount of the same real volume to rename itself
+  `CANON_MAC 1`, the exact symptom the issue itself first reported.
+- Never touches anything that isn't demonstrably this codebase's own - confirmed live and via a
+  dedicated safety test that a real, unrelated mount (something the user mounted themselves) is
+  never matched.
+
+Confirmed live end-to-end, twice: directly (recreating the real leak, then confirming
+`ReconcileStaleMounts` cleans it up) and through the real, signed app itself (launching `PDT.app`
+with the stray mounts present, confirming they're gone by the time startup completes).
+
 ## 2026-09-16 (v0.9.25) - macOS: fixed issue #6 - LocateLoosePPDs silently dropped every locale but one for Canon's own restructured PPD bucket
 
 Found while live-verifying issue #4 back in an earlier session, low-urgency and left for whenever

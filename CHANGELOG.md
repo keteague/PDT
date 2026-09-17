@@ -4,6 +4,37 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-16 (v0.9.24) - Windows: issue #10's own portable-mode gap fixed - extraction falls back off a write-protected flash drive
+
+Issue #10 already shipped its own 3-increment rollout (Sync skipping extracted sprawl, catalog
+scans no longer extracting eagerly, the Selective Rescan dialog) - but stayed open for one real
+gap its own "Portable-mode interaction" section flagged and left unresolved: on-demand extraction
+(`EnsureArchiveExtracted`) always writes as a sibling of the archive itself, wherever that archive
+happens to sit. Running PDT portably from a write-protected flash drive - Ken's own real
+field-deployment scenario, plugging into a client endpoint it's never touched before - made that
+write fail outright, with no fallback at all, breaking Deploy entirely for that whole scenario.
+
+### Added
+- `EnsureArchiveExtracted` now falls back to a throwaway local-disk scratch directory whenever
+  the normal sibling-of-the-archive extraction fails for any reason (`extractWithFallback`,
+  `internal/driver/lazyextract.go`) - deliberately doesn't try to distinguish *why* the first
+  attempt failed (a genuinely corrupt archive fails identically in both locations, at the cost of
+  one harmless extra attempt) rather than pattern-matching per-tool (7z/msiexec/archive/zip) error
+  text. Per Ken's own explicit call on the issue's own open design question: the fallback cache is
+  throwaway, not a persistent one keyed by archive identity - `EnsureArchiveExtracted` now returns
+  a `cleanup func()` (a no-op for the normal, persistent case) that `deploy_windows.go` calls once
+  done with a deploy, so a repeat deploy of the same driver from the same write-protected drive
+  re-extracts from scratch every time rather than leaving a footprint scattered across however
+  many different flash drives/sessions this ever runs from.
+- New tests, including one that genuinely reproduces the failure (removes write permission on a
+  real temp directory, confirms extraction still succeeds via the fallback and that `cleanup()`
+  actually removes it afterward) - `internal/driver/lazyextract_test.go`.
+
+Verified via `go build`/`go vet`/the full test suite, both natively and cross-compiled
+(`GOOS=windows`) - this machine can't run the real `.exe` to confirm live on real Windows/real
+flash-drive hardware, so that's still the honest next step before fully closing the loop, the
+same discipline this project already holds every Windows-side change to.
+
 ## 2026-09-16 (v0.9.23) - macOS: issue #12's installer-version-gate fallback, confirmed live end-to-end
 
 Same-night follow-through on v0.9.22's own newly-filed issue #12: designed, built, and - after

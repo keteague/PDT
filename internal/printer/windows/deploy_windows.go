@@ -425,10 +425,15 @@ func (d *Deployer) ensureDriverCurrent(ctx context.Context, resolved *driver.Res
 		// see EnsureArchiveExtracted's own doc comment. Cheap on a repeat
 		// deploy of the same driver - already-extracted is reused, not
 		// re-extracted.
-		extractedDir, err := driver.EnsureArchiveExtracted(resolved.ArchivePath)
+		extractedDir, cleanup, err := driver.EnsureArchiveExtracted(resolved.ArchivePath)
 		if err != nil {
 			return fmt.Errorf("extracting driver package for %q: %w", resolved.Name, err)
 		}
+		// A no-op for the normal case (the extracted sibling persists and is
+		// reused on a repeat deploy, unchanged); only actually removes
+		// anything for the write-protected-media fallback - see
+		// EnsureArchiveExtracted's own doc comment.
+		defer cleanup()
 		infPath = filepath.Join(extractedDir, resolved.InfRelPath)
 	}
 	if err := EnsureDriverInstalled(infPath, resolved.Name); err != nil {

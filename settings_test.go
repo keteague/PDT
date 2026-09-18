@@ -138,3 +138,53 @@ func TestReconcileManufacturerOrder_DropsUnknownAndDuplicates(t *testing.T) {
 		}
 	}
 }
+
+// TestMergeDirectDownloadURLs_FillsGapsWithoutClobbering guards the same
+// "one edited field doesn't blow away every other default" contract
+// ManufacturerURLs' own per-manufacturer merge in loadSettings already has
+// (GitHub issue #19) - here at the deeper family level: overwriting just
+// Canon's Windows PS URL must leave Canon's Windows PCL6/UFR II URLs, and
+// every other manufacturer/platform entirely, untouched.
+func TestMergeDirectDownloadURLs_FillsGapsWithoutClobbering(t *testing.T) {
+	dst := defaultDirectDownloadURLs()
+	originalPCL6 := dst["Canon"][driver.DirectDownloadPlatformWindows]["PCL6"]
+	if originalPCL6 == "" {
+		t.Fatal("expected a real default Canon Windows PCL6 URL to exist")
+	}
+
+	loaded := map[string]map[string]map[string]string{
+		"Canon": {
+			driver.DirectDownloadPlatformWindows: {
+				"PS": "https://example.com/my-own-custom-canon-ps.zip",
+			},
+		},
+	}
+	mergeDirectDownloadURLs(dst, loaded)
+
+	if got := dst["Canon"][driver.DirectDownloadPlatformWindows]["PS"]; got != "https://example.com/my-own-custom-canon-ps.zip" {
+		t.Errorf("expected the edited PS URL to win, got %q", got)
+	}
+	if got := dst["Canon"][driver.DirectDownloadPlatformWindows]["PCL6"]; got != originalPCL6 {
+		t.Errorf("expected Canon's own default Windows PCL6 URL to survive untouched, got %q (want %q)", got, originalPCL6)
+	}
+	if got := dst["Kyocera"][driver.DirectDownloadPlatformWindows]["KX"]; got == "" {
+		t.Error("expected an unrelated manufacturer's own default URL to survive untouched")
+	}
+}
+
+// TestMergeDirectDownloadURLs_BlankValueDoesNotOverwriteDefault mirrors
+// SaveSettings' own established "empty field means keep the default, not
+// erase it" contract for ManufacturerURLs (app.go).
+func TestMergeDirectDownloadURLs_BlankValueDoesNotOverwriteDefault(t *testing.T) {
+	dst := defaultDirectDownloadURLs()
+	originalKX := dst["Kyocera"][driver.DirectDownloadPlatformWindows]["KX"]
+
+	loaded := map[string]map[string]map[string]string{
+		"Kyocera": {driver.DirectDownloadPlatformWindows: {"KX": ""}},
+	}
+	mergeDirectDownloadURLs(dst, loaded)
+
+	if got := dst["Kyocera"][driver.DirectDownloadPlatformWindows]["KX"]; got != originalKX {
+		t.Errorf("expected a blank submitted value to leave the default in place, got %q (want %q)", got, originalKX)
+	}
+}

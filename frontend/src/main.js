@@ -163,7 +163,7 @@ const state = {
     rows: [],
     deploying: false,
     logLines: [],
-    settings: {saveFileBasePath: '', driversBasePath: '', manufacturerUrls: {}, manufacturerOrder: []},
+    settings: {saveFileBasePath: '', driversBasePath: '', manufacturerUrls: {}, directDownloadUrls: {}, manufacturerOrder: []},
     // Set while Deploy is running: the exact rows submitted, in submission
     // order, plus how many deploy-progress events have arrived so far - since
     // events arrive in that same order, this correlates each event to its
@@ -230,6 +230,7 @@ document.querySelector('#app').innerHTML = `
       <div class="tabs">
         <button type="button" class="tab-btn active" data-tab="general">General</button>
         <button type="button" class="tab-btn" data-tab="sites">Download Centers</button>
+        <button type="button" class="tab-btn" data-tab="directdownloads">Direct Downloads</button>
         <button type="button" class="tab-btn" data-tab="cloudsync">Cloud Sync</button>
         <button type="button" class="tab-btn" data-tab="about">About</button>
       </div>
@@ -265,6 +266,13 @@ document.querySelector('#app').innerHTML = `
           automatically, so "Download Center" in Defaults just opens the page below for the
           selected manufacturer.</p>
         <div id="settingsSitesPanel"></div>
+      </div>
+      <div class="tab-panel" data-tab-panel="directdownloads" hidden>
+        <p class="modal-hint">A real, direct file URL per manufacturer/platform/driver, rather than
+          just a general download page - used to automatically fetch or link to the exact driver a
+          row's own Driver field resolves to (GitHub issues #18/#15). Only manufacturers with at
+          least one configured family are listed; more can be added later.</p>
+        <div id="settingsDirectDownloadsPanel"></div>
       </div>
       <div class="tab-panel" data-tab-panel="cloudsync" hidden>
         <p class="modal-hint">Keeps this computer's Drivers folder in sync with the team's shared
@@ -1889,6 +1897,53 @@ function renderSettingsSitesPanel() {
     `).join('');
 }
 
+// Direct Downloads (GitHub issue #19): unlike the flat, one-URL-per-
+// manufacturer Sites panel above, this is a real three-level structure
+// (manufacturer -> Windows/macOS -> named driver family -> URL), driven
+// entirely by the backend's own driver.directDownloadFamilies table rather
+// than anything hardcoded here - so a manufacturer/family added there later
+// needs no frontend change at all. Builds structure and fills in each
+// field's current value in one pass (unlike renderSettingsSitesPanel,
+// called once at startup then re-populated separately on every modal open)
+// since this needs a handful of async App calls to even know which fields
+// to render at all - see openSettingsModal, its own one caller, for why
+// that's safe to await there.
+async function renderSettingsDirectDownloadsPanel() {
+    const manufacturers = await App.DirectDownloadManufacturers();
+    const urls = state.settings.directDownloadUrls || {};
+    const platforms = [
+        {key: 'Windows', label: 'Windows'},
+        {key: 'macOS', label: 'macOS'},
+    ];
+
+    const sections = await Promise.all(manufacturers.map(async mfg => {
+        const platformBlocks = await Promise.all(platforms.map(async p => {
+            const families = await App.DirectDownloadFamiliesFor(mfg, p.key);
+            if (families.length === 0) return '';
+            const fields = families.map(fam => {
+                const current = urls[mfg]?.[p.key]?.[fam] || '';
+                return `
+                    <label class="modal-field direct-download-field">
+                      ${escapeHtml(fam)}
+                      <input type="text" class="settings-direct-download-url"
+                             data-mfg="${attr(mfg)}" data-platform="${attr(p.key)}" data-family="${attr(fam)}"
+                             value="${attr(current)}">
+                    </label>`;
+            }).join('');
+            return `<div class="direct-download-platform">
+                      <div class="direct-download-platform-label">${escapeHtml(p.label)}</div>
+                      ${fields}
+                    </div>`;
+        }));
+        return `<div class="direct-download-mfg">
+                  <div class="direct-download-mfg-name">${escapeHtml(mfg)}</div>
+                  ${platformBlocks.join('')}
+                </div>`;
+    }));
+
+    el('settingsDirectDownloadsPanel').innerHTML = sections.join('');
+}
+
 // renderManufacturerOrderList + wireMfgOrderDragDrop: a plain HTML5
 // drag-and-drop reorderable list (no library) for Settings > General's
 // Manufacturer sort order - controls the Manufacturer dropdown's order in
@@ -3010,13 +3065,14 @@ async function confirmCloudSync() {
     }
 }
 
-function openSettingsModal() {
+async function openSettingsModal() {
     el('settingsBasePath').value = state.settings.saveFileBasePath;
     el('settingsDriversBasePath').value = state.settings.driversBasePath;
     el('settingsPreinstallBasePath').value = state.settings.preinstallBasePath;
     for (const input of el('settingsSitesPanel').querySelectorAll('.settings-url')) {
         input.value = state.settings.manufacturerUrls?.[input.dataset.mfg] || '';
     }
+    await renderSettingsDirectDownloadsPanel();
     renderManufacturerOrderList();
     const cs = state.settings.cloudSync || {};
     el('cloudSyncEndpoint').value = cs.endpoint || '';
@@ -3317,12 +3373,26 @@ function wireSettingsModal() {
         for (const input of el('settingsSitesPanel').querySelectorAll('.settings-url')) {
             manufacturerUrls[input.dataset.mfg] = input.value;
         }
+        // directDownloadUrls: manufacturer -> platform -> family -> URL,
+        // built from each field's own data-mfg/data-platform/data-family
+        // attributes (renderSettingsDirectDownloadsPanel) - an empty value
+        // is sent through as-is, same as manufacturerUrls above; SaveSettings
+        // (Go) fills any blank slot back in from its own defaults rather than
+        // leaving it genuinely empty.
+        const directDownloadUrls = {};
+        for (const input of el('settingsDirectDownloadsPanel').querySelectorAll('.settings-direct-download-url')) {
+            const {mfg, platform, family} = input.dataset;
+            directDownloadUrls[mfg] ??= {};
+            directDownloadUrls[mfg][platform] ??= {};
+            directDownloadUrls[mfg][platform][family] = input.value;
+        }
         const manufacturerOrder = currentManufacturerOrder();
         const saved = await App.SaveSettings({
             saveFileBasePath: el('settingsBasePath').value,
             driversBasePath: el('settingsDriversBasePath').value,
             preinstallBasePath: el('settingsPreinstallBasePath').value,
             manufacturerUrls,
+            directDownloadUrls,
             manufacturerOrder,
             cloudSync: {
                 endpoint: el('cloudSyncEndpoint').value,

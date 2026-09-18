@@ -18,7 +18,18 @@ type Settings struct {
 	PreinstallBasePath string            `json:"preinstallBasePath"`
 	ManufacturerURLs   map[string]string `json:"manufacturerUrls"`
 	ManufacturerOrder  []string          `json:"manufacturerOrder"`
-	CloudSync          CloudSyncSettings `json:"cloudSync"`
+	// DirectDownloadURLs: manufacturer -> platform ("Windows"/"macOS",
+	// driver.DirectDownloadPlatformWindows/Mac) -> family label (e.g.
+	// "PCL6", "UFR II" - driver.DirectDownloadFamiliesFor) -> a direct
+	// download URL for that exact driver - Settings > Direct Downloads
+	// (GitHub issue #19). Unlike ManufacturerURLs (one general download
+	// *page* per manufacturer, for a human to browse), each of these is
+	// meant to be a real, direct link to the file itself - what a future
+	// per-driver "Check for Update" button (issue #18) or site-survey
+	// export (issue #15) would fetch or print without a human navigating a
+	// vendor's own site first.
+	DirectDownloadURLs map[string]map[string]map[string]string `json:"directDownloadUrls"`
+	CloudSync          CloudSyncSettings                       `json:"cloudSync"`
 
 	// CloudSyncSecretKey is write-only, never persisted to settings.json and
 	// never echoed back by GetSettings - SaveSettings reads it, stores it in
@@ -131,6 +142,80 @@ func defaultManufacturerURLs() map[string]string {
 	}
 }
 
+// defaultDirectDownloadURLs seeds Settings > Direct Downloads (GitHub issue
+// #19) - a real, direct file URL per manufacturer/platform/family
+// (driver.DirectDownloadFamiliesFor names which families exist for each).
+// Ken's own real, hand-verified links (2026-09-18) for "the primary vendors
+// I work with... we can add more later" - adding a manufacturer or family
+// later is a driver.directDownloadFamilies entry plus one more URL here,
+// not a structural change.
+func defaultDirectDownloadURLs() map[string]map[string]map[string]string {
+	return map[string]map[string]map[string]string{
+		"Canon": {
+			driver.DirectDownloadPlatformWindows: {
+				"PCL6":   "https://downloads.canon.com/sss2026/drivers/Generic_Plus_PCL6_v3.50.zip",
+				"PS":     "https://downloads.canon.com/sss2026/drivers/Generic_Plus_PS3_v3.50.zip",
+				"UFR II": "https://downloads.canon.com/sss2026/drivers/Generic_Plus_UFRII_v3.50.zip",
+			},
+			driver.DirectDownloadPlatformMac: {
+				"PPD":    "https://downloads.canon.com/sss2026/drivers/PPDv5.50_mac.zip",
+				"PS":     "https://downloads.canon.com/sss2026/drivers/PS_v4.17.24_mac.zip",
+				"UFR II": "https://downloads.canon.com/sss2026/drivers/UFRII_v10.19.25_mac.zip",
+			},
+		},
+		"Kyocera": {
+			driver.DirectDownloadPlatformWindows: {
+				"KX": "https://www.kyoceradocumentsolutions.us/content/dam/download-center-americas-cf/us/drivers/drivers/KX_Print_Driver_exe.download.exe",
+			},
+			driver.DirectDownloadPlatformMac: {
+				"KPDL": "https://www.kyoceradocumentsolutions.us/content/dam/download-center-americas-cf/us/drivers/drivers/Mac56_2024_05_16_KDC_en_zip.download.dmg",
+			},
+		},
+		"Ricoh": {
+			driver.DirectDownloadPlatformWindows: {
+				"PCL6": "https://support.ricoh.com/bb/pub_e/dr_ut_e/0001346/0001346104/V44500/z07106L24.exe",
+				"PS":   "https://support.ricoh.com/bb/pub_e/dr_ut_e/0001346/0001346099/V44500/z07102L24.exe",
+			},
+			driver.DirectDownloadPlatformMac: {
+				"PPD": "https://updates.cdn-apple.com/2021/macos/071-46900-20211101-39324856-757E-4475-BAEC-0B2CA2488F71/RicohPrinterDrivers.dmg",
+			},
+		},
+		"Sharp": {
+			driver.DirectDownloadPlatformWindows: {
+				"UD3 PCL6": "https://global.sharp/restricted/print/mfpdl/sites/default/files/Global_Download_Data/19098/UD3_07_PCL6_2510a.zip",
+			},
+			driver.DirectDownloadPlatformMac: {
+				"PPD": "https://global.sharp/restricted/print/mfpdl/sites/default/files/Global_Download_Data/18415/MX-C55c_2512a_MacPS.dmg",
+			},
+		},
+	}
+}
+
+// mergeDirectDownloadURLs merges loaded onto dst one family URL at a time
+// (mirroring ManufacturerURLs' own per-manufacturer independent fallback in
+// loadSettings below) - a settings.json saved before a manufacturer/
+// platform/family existed, or with just one URL blanked out, still gets
+// sensible defaults for the rest rather than losing a whole manufacturer's
+// worth of URLs to one edited field.
+func mergeDirectDownloadURLs(dst, loaded map[string]map[string]map[string]string) {
+	for mfg, platforms := range loaded {
+		for platform, families := range platforms {
+			for family, url := range families {
+				if url == "" {
+					continue
+				}
+				if dst[mfg] == nil {
+					dst[mfg] = map[string]map[string]string{}
+				}
+				if dst[mfg][platform] == nil {
+					dst[mfg][platform] = map[string]string{}
+				}
+				dst[mfg][platform][family] = url
+			}
+		}
+	}
+}
+
 // reconcileManufacturerOrder returns a complete permutation of every
 // manufacturer in driver.Manufacturers: saved's entries first (in the order
 // the user last dragged them into, dropping any that no longer name a real
@@ -187,6 +272,7 @@ func loadSettings() Settings {
 		PreinstallBasePath: defaultPreinstallBasePath(),
 		ManufacturerURLs:   defaultManufacturerURLs(),
 		ManufacturerOrder:  reconcileManufacturerOrder(nil),
+		DirectDownloadURLs: defaultDirectDownloadURLs(),
 		CloudSync:          defaultCloudSyncSettings(),
 	}
 	path, err := settingsFilePath()
@@ -215,6 +301,7 @@ func loadSettings() Settings {
 			s.ManufacturerURLs[mfg] = url
 		}
 	}
+	mergeDirectDownloadURLs(s.DirectDownloadURLs, loaded.DirectDownloadURLs)
 	s.ManufacturerOrder = reconcileManufacturerOrder(loaded.ManufacturerOrder)
 	if loaded.CloudSync.Endpoint != "" {
 		s.CloudSync.Endpoint = loaded.CloudSync.Endpoint

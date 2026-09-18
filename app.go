@@ -176,6 +176,14 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 			s.ManufacturerURLs[mfg] = defaultURL
 		}
 	}
+	// Same "fill in only the gaps" merge loadSettings itself uses - starts
+	// from the seeded defaults, then overlays whatever the tech's own save
+	// actually sent (including a deliberately-blanked field, which simply
+	// leaves that one slot at its default rather than empty - matches
+	// ManufacturerURLs' own established behavior just above).
+	mergedDirectDownloads := defaultDirectDownloadURLs()
+	mergeDirectDownloadURLs(mergedDirectDownloads, s.DirectDownloadURLs)
+	s.DirectDownloadURLs = mergedDirectDownloads
 	s.ManufacturerOrder = reconcileManufacturerOrder(s.ManufacturerOrder)
 	if s.CloudSync.ConcurrentTransfers <= 0 {
 		s.CloudSync.ConcurrentTransfers = defaultConcurrentTransfers
@@ -453,6 +461,43 @@ func (a *App) AllManufacturers() []string {
 	out := append([]string(nil), driver.Manufacturers...)
 	sort.Strings(out)
 	return out
+}
+
+// DirectDownloadManufacturers lists, alphabetical like AllManufacturers,
+// only the manufacturers Settings > Direct Downloads (GitHub issue #19) has
+// a real entry for - the tab renders a section only for these, never an
+// empty one for a manufacturer with no configured families at all.
+func (a *App) DirectDownloadManufacturers() []string {
+	out := driver.DirectDownloadManufacturers()
+	sort.Strings(out)
+	return out
+}
+
+// DirectDownloadFamiliesFor lists manufacturer's own ordered family labels
+// for platform (driver.DirectDownloadPlatformWindows/Mac) - what Settings >
+// Direct Downloads renders one URL field per, for that manufacturer/
+// platform pair. []string{}, not nil, for a manufacturer/platform with no
+// entry - the frontend can range over this directly either way, the same
+// "never null across the Wails JSON bridge" discipline every other list
+// endpoint here already follows.
+func (a *App) DirectDownloadFamiliesFor(manufacturer, platform string) []string {
+	families := driver.DirectDownloadFamiliesFor(manufacturer, platform)
+	if families == nil {
+		return []string{}
+	}
+	return families
+}
+
+// MatchDirectDownloadFamily returns which of manufacturer's own Direct
+// Download families (for platform) driverOrLabel most likely belongs to -
+// "" if none matches or manufacturer/platform has no Direct Downloads entry
+// at all. Not called by anything in this app yet - exposed now for GitHub
+// issues #18 (a per-driver "Check for Update" button) and #15 (site-survey
+// export with direct download links), both of which need exactly this
+// lookup against whatever's actually sitting in a row's own Driver field.
+func (a *App) MatchDirectDownloadFamily(manufacturer, platform, driverOrLabel string) string {
+	family, _ := driver.MatchDirectDownloadFamily(manufacturer, platform, driverOrLabel)
+	return family
 }
 
 // applyManufacturerOrder reorders items (already filtered to whatever's

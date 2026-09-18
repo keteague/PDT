@@ -46,6 +46,14 @@ export function Deploy(arg1, arg2, arg3) {
   return window['go']['main']['App']['Deploy'](arg1, arg2, arg3);
 }
 
+export function DirectDownloadFamiliesFor(arg1, arg2) {
+  return window['go']['main']['App']['DirectDownloadFamiliesFor'](arg1, arg2);
+}
+
+export function DirectDownloadManufacturers() {
+  return window['go']['main']['App']['DirectDownloadManufacturers']();
+}
+
 export function DriverCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['DriverCandidates'](arg1, arg2, arg3);
 }
@@ -108,6 +116,10 @@ export function ListRescanTargets() {
 
 export function Manufacturers() {
   return window['go']['main']['App']['Manufacturers']();
+}
+
+export function MatchDirectDownloadFamily(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MatchDirectDownloadFamily'](arg1, arg2, arg3);
 }
 
 export function Models(arg1, arg2) {

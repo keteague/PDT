@@ -27,6 +27,10 @@ export function DefaultDriverFor(arg1:string):Promise<string>;
 
 export function Deploy(arg1:Array<printer.PrinterRow>,arg2:string,arg3:string):Promise<Array<main.DeployRowResult>>;
 
+export function DirectDownloadFamiliesFor(arg1:string,arg2:string):Promise<Array<string>>;
+
+export function DirectDownloadManufacturers():Promise<Array<string>>;
+
 export function DriverCandidates(arg1:string,arg2:string,arg3:string):Promise<Array<string>>;
 
 export function EnumerateLocalPrinters():Promise<Array<main.LocalPrinterCandidate>>;
@@ -58,6 +62,8 @@ export function ListRemovableDrives():Promise<main.ListDrivesResult>;
 export function ListRescanTargets():Promise<Array<driver.RescanManufacturer>>;
 
 export function Manufacturers():Promise<Array<string>>;
+
+export function MatchDirectDownloadFamily(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function Models(arg1:string,arg2:string):Promise<Array<string>>;
 

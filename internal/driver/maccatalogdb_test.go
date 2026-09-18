@@ -145,11 +145,25 @@ func TestMacManufacturerCatalog_IsCurrent(t *testing.T) {
 // absolute-path comparison which never could.
 func TestMacManufacturerCatalog_IsCurrent_DifferentDriversRoot(t *testing.T) {
 	now := time.Now()
-	windowsRoot := `C:\Users\Ken\AppData\Local\PDT\Drivers`
-	windowsPkg := MacPackage{Path: windowsRoot + `\macOS\Canon\UFRII_v10.19.25_mac.dmg`, ModTime: now, Size: 1000}
+	// The stored form a real Windows-run PDT actually writes - confirmed
+	// live during GitHub issue #13's own verification (a real
+	// catalog.kyocera.json this produced on Windows) to always be
+	// forward-slash-normalized, driversRoot-relative, with no drive letter.
+	// Hardcoded here rather than computed via relToDriversRoot("C:\...",
+	// ...) inside this test itself - confirmed live as a real bug (caught
+	// by real macOS CI, not guessed): that call runs using *whichever OS is
+	// executing this test*, and on a real Mac, filepath.Rel/ToSlash don't
+	// treat a Windows-style backslash string as having any directory
+	// structure at all (no forward slashes present) - it produced a
+	// nonsense "relative path" that could never match what IsCurrent then
+	// computes for a real Mac path, failing the very scenario this test
+	// means to prove works. The production code itself was never wrong -
+	// only this test's own attempt to simulate "what Windows would have
+	// written" from inside whichever process happens to run it.
+	storedPath := "macOS/Canon/UFRII_v10.19.25_mac.dmg"
 	cat := MacManufacturerCatalog{
 		Provenance: map[string]MacFamilyProvenance{
-			"UFRII": {Chain: []MacPackageRef{{Path: relToDriversRoot(windowsRoot, windowsPkg.Path), ModTime: now, Size: 1000}}},
+			"UFRII": {Chain: []MacPackageRef{{Path: storedPath, ModTime: now, Size: 1000}}},
 		},
 		Models: map[string][]MacCatalogVariant{},
 	}

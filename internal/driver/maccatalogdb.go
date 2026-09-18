@@ -175,6 +175,56 @@ func SaveMacManufacturerCatalog(path string, cat MacManufacturerCatalog) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+// relToDriversRoot converts absPath (expected to be under driversRoot, e.g.
+// a MacPackage.Path from a fresh BuildMacCatalog scan) into a
+// driversRoot-relative form for persisting into MacPackageRef.Path/
+// MacCatalogVariant.PackagePath/SourcePackagePath - GitHub issue #13: a
+// catalog.<mfg>.json travels with the portable Drivers folder itself, but an
+// absolute path baked in at index time is platform- and machine-specific
+// (a different drive letter, username, or OS entirely), so it can never
+// string-match what a *different* machine's own fresh scan computes for the
+// identical file - IsCurrent then never recognizes the catalog as current,
+// silently losing the whole point of caching it. Falls back to absPath
+// unchanged if it isn't actually under driversRoot (defensive - never worse
+// than the old, always-absolute behavior, just doesn't gain the fix for
+// that one entry).
+func relToDriversRoot(driversRoot, absPath string) string {
+	if absPath == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(driversRoot, absPath)
+	if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return absPath
+	}
+	// Stored slash-normalized (forward slash), never the native OS
+	// separator - confirmed live as a real bug before shipping this: a
+	// Windows-built relative path like "macOS\Kyocera\x.dmg" stores fine on
+	// Windows, but filepath.Join on a real Mac treats a literal backslash as
+	// just another filename character, not a separator, so it would never
+	// resolve to the real nested file there. Forward slash works as a valid
+	// separator on both platforms (Windows' own filepath package already
+	// accepts it as an alternate separator natively), so this is the one
+	// storage form that's actually portable either direction. See
+	// absFromDriversRoot's own FromSlash conversion on the way back.
+	return filepath.ToSlash(rel)
+}
+
+// absFromDriversRoot is relToDriversRoot's own inverse, used when reading a
+// persisted value back into something a live caller can actually open.
+// Critically: relPath already being absolute (a catalog.<mfg>.json written
+// before this fix existed, when every path was stored absolute) is left
+// unchanged rather than wrongly re-joined with driversRoot - old entries
+// just keep exhibiting the pre-fix cross-machine-mismatch behavior (one
+// harmless re-index), never a wrong or garbled path. No schema/version bump
+// needed: the field is still a plain string, only what it means changed,
+// and this function is the one place both meanings are accepted.
+func absFromDriversRoot(driversRoot, relPath string) string {
+	if relPath == "" || filepath.IsAbs(relPath) {
+		return relPath
+	}
+	return filepath.Join(driversRoot, filepath.FromSlash(relPath))
+}
+
 // IsCurrent reports whether cat already has provenance recorded for family
 // whose outermost chain entry exactly matches pkg (Path, ModTime, and Size
 // all equal) - the cheap, mount-free check that lets BuildMacModelIndex
@@ -184,13 +234,20 @@ func SaveMacManufacturerCatalog(path string, cat MacManufacturerCatalog) error {
 // silently modified in place, so path+modtime+size is already as good as a
 // hash here, without needing to read the package's own tens/hundreds of MB
 // to compute one.
-func (cat MacManufacturerCatalog) IsCurrent(family string, pkg MacPackage) bool {
+//
+// Compares on the driversRoot-relative form (relToDriversRoot(driversRoot,
+// pkg.Path)), not pkg.Path directly - see relToDriversRoot's own doc
+// comment (GitHub issue #13). A pre-fix catalog file's own outer.Path is
+// still absolute; comparing it against a freshly-relativized value simply
+// never matches, which is exactly the safe, backward-compatible "treat as
+// stale, re-index once" degrade every other pre-fix entry already gets.
+func (cat MacManufacturerCatalog) IsCurrent(family string, pkg MacPackage, driversRoot string) bool {
 	prov, ok := cat.Provenance[family]
 	if !ok || len(prov.Chain) == 0 {
 		return false
 	}
 	outer := prov.Chain[0]
-	return outer.Path == pkg.Path && outer.ModTime.Equal(pkg.ModTime) && outer.Size == pkg.Size
+	return outer.Path == relToDriversRoot(driversRoot, pkg.Path) && outer.ModTime.Equal(pkg.ModTime) && outer.Size == pkg.Size
 }
 
 // ModelsForFamily returns cat's own already-recorded variants whose
@@ -232,14 +289,17 @@ func (cat MacManufacturerCatalog) ModelsForFamilyPackage(family, sourcePackagePa
 // IsCurrentForPackage is IsCurrent's own sibling for one specific,
 // intentionally-kept OLDER package within a family (see ExtraProvenance's
 // own doc comment) - identical check, just against
-// cat.ExtraProvenance[family][pkg.Path] instead of cat.Provenance[family].
-func (cat MacManufacturerCatalog) IsCurrentForPackage(family string, pkg MacPackage) bool {
-	prov, ok := cat.ExtraProvenance[family][pkg.Path]
+// cat.ExtraProvenance[family][relPkgPath] instead of cat.Provenance[family].
+// ExtraProvenance is itself keyed by the driversRoot-relative form (GitHub
+// issue #13), same as cat.Provenance[family].Chain[0].Path.
+func (cat MacManufacturerCatalog) IsCurrentForPackage(family string, pkg MacPackage, driversRoot string) bool {
+	relPkgPath := relToDriversRoot(driversRoot, pkg.Path)
+	prov, ok := cat.ExtraProvenance[family][relPkgPath]
 	if !ok || len(prov.Chain) == 0 {
 		return false
 	}
 	outer := prov.Chain[0]
-	return outer.Path == pkg.Path && outer.ModTime.Equal(pkg.ModTime) && outer.Size == pkg.Size
+	return outer.Path == relPkgPath && outer.ModTime.Equal(pkg.ModTime) && outer.Size == pkg.Size
 }
 
 // DiffModels compares the model names cat already had recorded for family

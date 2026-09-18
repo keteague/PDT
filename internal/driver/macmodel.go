@@ -249,9 +249,17 @@ func macSubPackageRestrictor(manufacturer string) func(expandDir string) (map[st
 	return nil
 }
 
-func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir string, restrict func(expandDir string) (map[string]bool, bool), ppdFallback ppdExtractionFallback, expand func([]ppdEntry) []ppdEntry) (map[string][]MacPPDVariant, MacFamilyProvenance) {
+func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir string, restrict func(expandDir string) (map[string]bool, bool), ppdFallback ppdExtractionFallback, expand func([]ppdEntry) []ppdEntry, driversRoot string) (map[string][]MacPPDVariant, MacFamilyProvenance) {
 	out := map[string][]MacPPDVariant{}
-	outerRef := MacPackageRef{Path: pkg.Path, ModTime: pkg.ModTime, Size: pkg.Size}
+	// Path is stored driversRoot-relative (GitHub issue #13) - see
+	// relToDriversRoot's own doc comment for why a persisted absolute path
+	// can never match a different machine's/platform's own fresh scan of the
+	// identical file. MacPPDVariant.PackagePath/SourcePackagePath below stay
+	// pkg.Path (absolute) unchanged - those are the live, in-memory values
+	// deploy-time code reads directly, only what gets *persisted* into
+	// MacCatalogVariant changes (BuildMacModelIndex's own job, not this
+	// function's).
+	outerRef := MacPackageRef{Path: relToDriversRoot(driversRoot, pkg.Path), ModTime: pkg.ModTime, Size: pkg.Size}
 
 	pkgPath, chain, pkgCleanup, pkgErr := LocatePkgWithChain(pkg.Path)
 	if pkgErr == nil {
@@ -293,7 +301,11 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 		}
 		refs := []MacPackageRef{outerRef}
 		for _, p := range chain[1:] { // chain[0] duplicates pkg.Path/outerRef
-			refs = append(refs, MacPackageRef{Path: p})
+			// Interior chain entries are purely informational/display (see
+			// MacPackageRef's own doc comment - never compared against on a
+			// later run), but relativized anyway so a portable catalog.json
+			// never bakes in a local absolute path unnecessarily.
+			refs = append(refs, MacPackageRef{Path: relToDriversRoot(driversRoot, p)})
 		}
 		for _, s := range subs {
 			refs = append(refs, MacPackageRef{Path: s.Name, Version: s.Version})
@@ -342,16 +354,23 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 // MacPPDVariant BuildMacModelIndex returns, for a family a cached catalog
 // entry is being reused for (IsCurrent matched, no re-inspection needed).
 // Label is recomputed here rather than persisted - see MacCatalogVariant's
-// own doc comment for why.
-func toMacPPDVariant(model string, v MacCatalogVariant) MacPPDVariant {
+// own doc comment for why. PackagePath/SourcePackagePath are resolved back
+// to a real, absolute, directly-openable path via absFromDriversRoot
+// (GitHub issue #13) - every real deploy-time consumer (installVariant,
+// canonbatch_darwin.go, LocatePkg) needs one, and this is the one place a
+// persisted (driversRoot-relative, or pre-fix absolute) value gets turned
+// back into that form. LooseCachedPPDPath is untouched - always
+// per-machine-absolute already, never relativized (see MacCatalogVariant's
+// own doc comment).
+func toMacPPDVariant(model string, v MacCatalogVariant, driversRoot string) MacPPDVariant {
 	return MacPPDVariant{
 		Language:           v.Language,
 		Label:              macVariantLabel(model, v.Language, v.Filename, ""),
 		NickName:           v.NickName,
 		Filename:           v.Filename,
-		PackagePath:        v.PackagePath,
+		PackagePath:        absFromDriversRoot(driversRoot, v.PackagePath),
 		LooseCachedPPDPath: v.LooseCachedPPDPath,
-		SourcePackagePath:  v.SourcePackagePath,
+		SourcePackagePath:  absFromDriversRoot(driversRoot, v.SourcePackagePath),
 		PackageModTime:     v.PackageModTime,
 	}
 }
@@ -506,6 +525,14 @@ func cachedVariantFilesExist(variants map[string][]MacCatalogVariant) bool {
 func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist bool) (MacModelIndex, []string) {
 	index := MacModelIndex{}
 	var changes []string
+	// driversRoot is always macRoot's own parent by construction, at both
+	// real call sites (app_windows.go/app_darwin.go's loadCatalog) - derived
+	// here rather than added as a new parameter, so nothing outside this
+	// package needs to change. Everything persisted into catalog.<mfg>.json
+	// (MacPackageRef.Path, MacCatalogVariant.PackagePath/SourcePackagePath)
+	// is stored relative to this, not absolute - see relToDriversRoot's own
+	// doc comment (GitHub issue #13).
+	driversRoot := filepath.Dir(macRoot)
 	for mfg, tokens := range macFamilyPreference {
 		packages := catalog.Packages[mfg]
 		mfgFolder := strings.ReplaceAll(mfg, " ", "")
@@ -554,15 +581,20 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 
 			for i, pkg := range all {
 				newest := i == 0 // packagesInFamily is newest-first
+				// Computed once per package, used everywhere below a
+				// comparison against a *persisted* path is needed (GitHub
+				// issue #13) - pkg.Path itself (absolute) is still used
+				// unchanged wherever a real, live file needs opening.
+				relPkgPath := relToDriversRoot(driversRoot, pkg.Path)
 
 				var cached bool
 				if newest {
-					cached = cat.IsCurrent(family, pkg)
+					cached = cat.IsCurrent(family, pkg, driversRoot)
 				} else {
-					cached = cat.IsCurrentForPackage(family, pkg)
+					cached = cat.IsCurrentForPackage(family, pkg, driversRoot)
 				}
 				if cached {
-					cachedModels := cat.ModelsForFamilyPackage(family, pkg.Path)
+					cachedModels := cat.ModelsForFamilyPackage(family, relPkgPath)
 					// len(cachedModels) > 0 is required, not just
 					// cachedVariantFilesExist (which is vacuously true for an
 					// empty map) - confirmed live as a real bug: a catalog
@@ -577,7 +609,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 					if len(cachedModels) > 0 && cachedVariantFilesExist(cachedModels) {
 						for model, variants := range cachedModels {
 							for _, v := range variants {
-								byModel[model] = append(byModel[model], toMacPPDVariant(model, v))
+								byModel[model] = append(byModel[model], toMacPPDVariant(model, v, driversRoot))
 							}
 						}
 						continue
@@ -595,7 +627,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 					// version reachable.
 					famCacheDir = filepath.Join(ppdCacheDir, mfg, family, packageCacheKey(pkg.Path))
 				}
-				variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir, macSubPackageRestrictor(mfg), macSubPackagePPDFallback(mfg), macPPDEntryExpander(mfg))
+				variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir, macSubPackageRestrictor(mfg), macSubPackagePPDFallback(mfg), macPPDEntryExpander(mfg), driversRoot)
 				if len(variants) == 0 {
 					continue
 				}
@@ -606,10 +638,15 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 				current := map[string][]MacCatalogVariant{}
 				for model, vs := range variants {
 					for _, v := range vs {
+						// v.PackagePath/SourcePackagePath are absolute (the
+						// live values indexFamilyPackage just built) -
+						// relativized here, at the one point they cross into
+						// the persisted MacCatalogVariant shape (GitHub
+						// issue #13).
 						current[model] = append(current[model], MacCatalogVariant{
 							Language: v.Language, NickName: v.NickName, Filename: v.Filename,
-							PackagePath: v.PackagePath, LooseCachedPPDPath: v.LooseCachedPPDPath,
-							SourcePackagePath: v.SourcePackagePath, PackageModTime: v.PackageModTime,
+							PackagePath: relToDriversRoot(driversRoot, v.PackagePath), LooseCachedPPDPath: v.LooseCachedPPDPath,
+							SourcePackagePath: relToDriversRoot(driversRoot, v.SourcePackagePath), PackageModTime: v.PackageModTime,
 						})
 					}
 				}
@@ -649,7 +686,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 				for model, vs := range cat.Models {
 					kept := vs[:0]
 					for _, v := range vs {
-						isThisPackage := v.SourcePackagePath == pkg.Path || (newest && v.SourcePackagePath == "")
+						isThisPackage := v.SourcePackagePath == relPkgPath || (newest && v.SourcePackagePath == "")
 						if !(v.Language == family && isThisPackage) {
 							kept = append(kept, v)
 						}
@@ -672,7 +709,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 					if cat.ExtraProvenance[family] == nil {
 						cat.ExtraProvenance[family] = map[string]MacFamilyProvenance{}
 					}
-					cat.ExtraProvenance[family][pkg.Path] = prov
+					cat.ExtraProvenance[family][relPkgPath] = prov
 				}
 				dirty = true
 			}
@@ -693,7 +730,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 			// dedup fix alone).
 			currentPaths := make(map[string]bool, len(all))
 			for _, pkg := range all {
-				currentPaths[pkg.Path] = true
+				currentPaths[relToDriversRoot(driversRoot, pkg.Path)] = true
 			}
 			for model, vs := range cat.Models {
 				kept := vs[:0]

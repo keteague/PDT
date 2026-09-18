@@ -4,6 +4,20 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-18 (v0.9.32) - retag after v0.9.30/v0.9.31's own CI runs failed on real macOS
+
+### Fixed
+- **`TestMacManufacturerCatalog_IsCurrent_DifferentDriversRoot` failed on real macOS CI**, blocking
+  the v0.9.30 and v0.9.31 releases (no GitHub Release was ever published for either). The test
+  simulated "what a Windows-run PDT would have stored" by calling `relToDriversRoot("C:\...", ...)`
+  directly inside the test function - but that call runs using whichever OS is actually executing
+  the test, and real macOS's own `filepath.Rel`/`ToSlash` don't treat a backslash-style string as
+  having any directory structure, so the "simulated" value was nonsense and never matched. The
+  production `relToDriversRoot`/`absFromDriversRoot`/`IsCurrent` code was never wrong - only the
+  test's own attempt to simulate a foreign OS's output from inside whichever process runs it.
+  Replaced with a hardcoded literal matching the real forward-slash-normalized form confirmed
+  during issue #13's own verification.
+
 ## 2026-09-18 (v0.9.31) - Settings > Direct Downloads
 
 ### Added

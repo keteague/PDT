@@ -4,8 +4,8 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -220,6 +220,37 @@ func InspectDmg(path string) (found []string, err error) {
 	return found, nil
 }
 
+// InspectPkg is InspectDmg's own sibling for the expandPkg seam
+// (macpkgexpand_darwin.go/macpkgexpand_windows.go, GitHub issue #3 Phase 2) -
+// expands pkgPath into a caller-owned temp dir (removed via the returned
+// cleanup) and returns every file it actually wrote (Distribution plus each
+// component's own PackageInfo/Payload - see macPkgExpandWant), for
+// cmd/pdtdebug's own "macpkg" subcommand to hand-test against a real .pkg
+// before BuildMacCatalog/BuildMacModelIndex depend on it. No real codepath
+// uses this - packagePPDEntriesFilteredFallback and friends call expandPkg
+// directly and go straight on to cpio-extracting PPDs out of the result.
+func InspectPkg(pkgPath string) (files []string, cleanup func(), err error) {
+	tmpDir, err := os.MkdirTemp("", "pdt-debug-pkg-*")
+	if err != nil {
+		return nil, func() {}, err
+	}
+	cleanup = func() { os.RemoveAll(tmpDir) }
+	if err := expandPkg(pkgPath, tmpDir); err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	_ = filepath.WalkDir(tmpDir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			rel, relErr := filepath.Rel(tmpDir, p)
+			if relErr == nil {
+				files = append(files, rel)
+			}
+		}
+		return nil
+	})
+	return files, cleanup, nil
+}
+
 // LocatePkg resolves path (a .pkg or .dmg found by BuildMacCatalog) to an
 // actual, on-disk .pkg ready for `installer -pkg`/`pkgutil --expand-full`. A
 // .pkg passes through unchanged with a no-op cleanup. A .dmg is mounted, and
@@ -328,11 +359,18 @@ func locatePkgWithChainFromRealPath(path string) (pkgPath string, chain []string
 // its extension) when that's missing/unhelpful - callers needing to pick the
 // newest of several candidates should sort by file modification time, not by
 // this label (see ResolveMac).
+//
+// Uses expandPkg (GitHub issue #3 Phase 2 - plain `pkgutil --expand` on
+// darwin, a native Go xar parse on Windows), not `--expand-full` as this
+// used to call directly: a flat package's own PackageInfo already sits
+// right at the expand tree's own root either way - `--expand-full`'s only
+// extra work over a plain expand is decompressing Payload too, never needed
+// just to read one PackageInfo attribute.
 func PackageLabel(pkgPath string) string {
 	tmpDir, err := os.MkdirTemp("", "pdt-pkginfo-*")
 	if err == nil {
 		defer os.RemoveAll(tmpDir)
-		if err := exec.Command("pkgutil", "--expand-full", pkgPath, filepath.Join(tmpDir, "expand")).Run(); err == nil {
+		if err := expandPkg(pkgPath, filepath.Join(tmpDir, "expand")); err == nil {
 			if v, ok := readPackageInfoVersion(filepath.Join(tmpDir, "expand", "PackageInfo")); ok {
 				return v
 			}

@@ -170,6 +170,12 @@ func main() {
 			os.Exit(1)
 		}
 		err = cmdMacLocatePkg(os.Args[2])
+	case "macpkg":
+		if len(os.Args) != 3 {
+			usage()
+			os.Exit(1)
+		}
+		err = cmdMacPkg(os.Args[2])
 	default:
 		usage()
 		os.Exit(1)
@@ -222,7 +228,10 @@ Commands:
   maclocatepkg <path>       driver.LocatePkg against a real .zip/.dmg/.pkg (the
                             actual codepath BuildMacModelIndex uses) - exercises
                             the outer .zip unwrap and any nested .dmg walk on top
-                            of the Phase 1 openDmg seam`)
+                            of the Phase 1 openDmg seam
+  macpkg <path>             expand a real .pkg via the Windows-side expandPkg/xar
+                            seam (GitHub issue #3 Phase 2) and list the resulting
+                            tree plus each component's own PackageInfo version`)
 }
 
 func cmdEnumPrinters() error {
@@ -806,5 +815,27 @@ func cmdMacLocatePkg(path string) error {
 		fmt.Println(" ", c)
 	}
 	fmt.Println("resolved .pkg:", pkgPath)
+	return nil
+}
+
+// cmdMacPkg exercises driver.InspectPkg (and, underneath it, the Windows-side
+// expandPkg/xar seam - macpkgexpand_windows.go/macxar.go) against a real
+// .pkg by hand, before BuildMacCatalog/BuildMacModelIndex depend on it
+// (GitHub issue #3, Phase 2's own "give yourself a test hook" step). No 7z.exe
+// involved at all for this layer - the xar parser is pure Go.
+func cmdMacPkg(path string) error {
+	files, cleanup, err := driver.InspectPkg(path)
+	defer cleanup()
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		fmt.Println("expandPkg wrote nothing - either not a real xar file, or nothing in it matched Distribution/PackageInfo/Payload")
+		return nil
+	}
+	for _, f := range files {
+		fmt.Println(f)
+	}
+	fmt.Printf("(%d file(s) written)\n", len(files))
 	return nil
 }

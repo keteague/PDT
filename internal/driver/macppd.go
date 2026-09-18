@@ -197,7 +197,7 @@ func packagePPDEntriesFilteredFallback(pkgPath string, restrict func(expandDir s
 	defer os.RemoveAll(tmpDir)
 
 	expandDir := filepath.Join(tmpDir, "expand")
-	if err := exec.Command("pkgutil", "--expand", pkgPath, expandDir).Run(); err != nil {
+	if err := expandPkg(pkgPath, expandDir); err != nil {
 		return nil, nil, fmt.Errorf("expanding %s: %w", pkgPath, err)
 	}
 
@@ -597,7 +597,7 @@ func PPDPathForDefaults(manufacturer, pkgPath, ppdFilename string) (ppdPath stri
 	cleanup = func() { os.RemoveAll(tmpDir) }
 
 	expandDir := filepath.Join(tmpDir, "expand")
-	if err := exec.Command("pkgutil", "--expand", pkgPath, expandDir).Run(); err != nil {
+	if err := expandPkg(pkgPath, expandDir); err != nil {
 		cleanup()
 		return "", noop, fmt.Errorf("expanding %s: %w", pkgPath, err)
 	}
@@ -861,7 +861,7 @@ func DriverFootprintForVersionGateFallback(pkgPath string) (stageDir string, cle
 	cleanup = func() { os.RemoveAll(tmpDir) }
 
 	expandDir := filepath.Join(tmpDir, "expand")
-	if err := exec.Command("pkgutil", "--expand", pkgPath, expandDir).Run(); err != nil {
+	if err := expandPkg(pkgPath, expandDir); err != nil {
 		cleanup()
 		return "", noop, false
 	}

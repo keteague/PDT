@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -186,11 +185,8 @@ func ExtractKyoceraPPD(ppdInstallerPkgPath, ppdFilename, destDir string) error {
 		return err
 	}
 
-	cmd := exec.Command("cpio", "-idm", "--quiet", "./"+ppdFilename)
-	cmd.Dir = destDir
-	cmd.Stdin = gz
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("extracting %s from %s: %w: %s", ppdFilename, ppdInstallerPkgPath, err, strings.TrimSpace(string(out)))
+	if err := cpioExtractGlob(gz, destDir, []string{"./" + ppdFilename}); err != nil {
+		return fmt.Errorf("extracting %s from %s: %w", ppdFilename, ppdInstallerPkgPath, err)
 	}
 	if _, err := os.Stat(filepath.Join(destDir, ppdFilename)); err != nil {
 		return fmt.Errorf("cpio extracted nothing for %q from %s - the PPD installer's own layout may have changed", ppdFilename, ppdInstallerPkgPath)

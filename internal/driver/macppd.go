@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -372,10 +371,7 @@ func extractPPDsFromExpandedPkgFiltered(expandDir, destDir string, allow map[str
 		// patterns silently dropped 73% of Kyocera's own real model
 		// coverage, discovered only once the model count came back
 		// suspiciously low against the real BOM's own 460-file count).
-		cmd := exec.Command("cpio", "-idm", "--quiet", "*.ppd", "*.PPD", "*.ppd.gz", "*.PPD.gz")
-		cmd.Dir = sub
-		cmd.Stdin = gz
-		_ = cmd.Run()
+		_ = cpioExtractGlob(gz, sub, []string{"*.ppd", "*.PPD", "*.ppd.gz", "*.PPD.gz"})
 
 		if !dirHasAnyFile(sub) && ppdFallback != nil {
 			ppdFallback(pkgDir, path, sub)
@@ -407,10 +403,7 @@ func extractAllFromPayload(payloadPath, destDir string) {
 		return
 	}
 	defer gz.Close()
-	cmd := exec.Command("cpio", "-idm", "--quiet")
-	cmd.Dir = destDir
-	cmd.Stdin = gz
-	_ = cmd.Run()
+	_ = cpioExtractAll(gz, destDir)
 }
 
 // listPayloadEntries re-opens payloadPath fresh and lists every entry's own
@@ -429,18 +422,9 @@ func listPayloadEntries(payloadPath string) []string {
 		return nil
 	}
 	defer gz.Close()
-	cmd := exec.Command("cpio", "-it", "--quiet")
-	cmd.Stdin = gz
-	out, err := cmd.Output()
+	entries, err := cpioListEntries(gz)
 	if err != nil {
 		return nil
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	entries := make([]string, 0, len(lines))
-	for _, l := range lines {
-		if l = strings.TrimSpace(l); l != "" {
-			entries = append(entries, l)
-		}
 	}
 	return entries
 }
@@ -473,11 +457,7 @@ func extractPathContainingFromPayload(payloadPath, fragment, destDir string) {
 		return
 	}
 	defer gz.Close()
-	args := append([]string{"-idm", "--quiet"}, matches...)
-	cmd := exec.Command("cpio", args...)
-	cmd.Dir = destDir
-	cmd.Stdin = gz
-	_ = cmd.Run()
+	_ = cpioExtractGlob(gz, destDir, matches)
 }
 
 // dirHasAnyFile reports whether root (recursively) contains at least one

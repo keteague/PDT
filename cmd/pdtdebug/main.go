@@ -176,6 +176,12 @@ func main() {
 			os.Exit(1)
 		}
 		err = cmdMacPkg(os.Args[2])
+	case "macppds":
+		if len(os.Args) != 4 {
+			usage()
+			os.Exit(1)
+		}
+		err = cmdMacPPDs(os.Args[2], os.Args[3])
 	default:
 		usage()
 		os.Exit(1)
@@ -231,7 +237,11 @@ Commands:
                             of the Phase 1 openDmg seam
   macpkg <path>             expand a real .pkg via the Windows-side expandPkg/xar
                             seam (GitHub issue #3 Phase 2) and list the resulting
-                            tree plus each component's own PackageInfo version`)
+                            tree plus each component's own PackageInfo version
+  macppds <path> <mfg>      driver.PackagePPDNickNames against a real .pkg - the
+                            full real chain (expandPkg + cpioExtractGlob, Phases
+                            2+3 together) BuildMacModelIndex itself uses to find
+                            every real PPD's own *NickName`)
 }
 
 func cmdEnumPrinters() error {
@@ -837,5 +847,24 @@ func cmdMacPkg(path string) error {
 		fmt.Println(f)
 	}
 	fmt.Printf("(%d file(s) written)\n", len(files))
+	return nil
+}
+
+// cmdMacPPDs exercises driver.PackagePPDNickNames - the real, full chain
+// (expandPkg + cpioExtractGlob, GitHub issue #3 Phases 2+3 together)
+// BuildMacModelIndex itself uses - against a real .pkg by hand.
+func cmdMacPPDs(path, manufacturer string) error {
+	names, err := driver.PackagePPDNickNames(path, manufacturer)
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		fmt.Println("no PPDs found")
+		return nil
+	}
+	for _, n := range names {
+		fmt.Println(n)
+	}
+	fmt.Printf("(%d PPD(s) found)\n", len(names))
 	return nil
 }

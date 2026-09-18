@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -92,15 +91,13 @@ func ExtractCanonDeviceFiles(devicePkgPath, ppdFilename, destDir string) error {
 	}
 
 	base := CanonPPDBaseName(ppdFilename)
-	cmd := exec.Command("cpio", "-idm", "--quiet",
-		"*/"+ppdFilename,
-		"*/Recipe/"+base+".bundle/*",
-		"*/Recipe/"+base+".rcp",
-	)
-	cmd.Dir = destDir
-	cmd.Stdin = gz
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("extracting %s from %s: %w: %s", ppdFilename, devicePkgPath, err, strings.TrimSpace(string(out)))
+	patterns := []string{
+		"*/" + ppdFilename,
+		"*/Recipe/" + base + ".bundle/*",
+		"*/Recipe/" + base + ".rcp",
+	}
+	if err := cpioExtractGlob(gz, destDir, patterns); err != nil {
+		return fmt.Errorf("extracting %s from %s: %w", ppdFilename, devicePkgPath, err)
 	}
 
 	if !dirHasAnyFile(destDir) {

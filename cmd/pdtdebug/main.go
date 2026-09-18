@@ -771,7 +771,15 @@ func cmdTimedCreate(driverName, ip string) error {
 // assets of its own, so it just reuses whatever the real app already cached
 // on this machine; run PDT itself at least once first if that cache doesn't
 // exist yet.
-func cmdMacDmg(path string) error {
+// ensureDebugSevenZip points driver.SevenZipPath at the same per-machine
+// cache the real app writes to (sevenZipToolsDir/ensureSevenZipExtracted,
+// sevenzip_windows.go) rather than re-extracting the embedded copy - this
+// debug CLI has no embedded 7-Zip assets of its own, so it just reuses
+// whatever the real app already cached on this machine; run PDT itself at
+// least once first if that cache doesn't exist yet. Shared by every mac*
+// subcommand that (directly or via LocatePkg/InspectDmg) touches a real
+// .dmg.
+func ensureDebugSevenZip() error {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
 		return fmt.Errorf("resolving the per-machine 7-Zip cache dir: %w", err)
@@ -779,6 +787,13 @@ func cmdMacDmg(path string) error {
 	driver.SevenZipPath = filepath.Join(cacheDir, "PDT", "tools", "7zip", "7z.exe")
 	if _, err := os.Stat(driver.SevenZipPath); err != nil {
 		return fmt.Errorf("%s not found - run PDT itself at least once first so it caches 7z.exe: %w", driver.SevenZipPath, err)
+	}
+	return nil
+}
+
+func cmdMacDmg(path string) error {
+	if err := ensureDebugSevenZip(); err != nil {
+		return err
 	}
 
 	found, err := driver.InspectDmg(path)
@@ -806,13 +821,8 @@ func cmdMacDmg(path string) error {
 // (.zip -> .dmg -> nested .dmg -> .pkg) resolves correctly on Windows, not
 // just a single openDmg call in isolation.
 func cmdMacLocatePkg(path string) error {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return fmt.Errorf("resolving the per-machine 7-Zip cache dir: %w", err)
-	}
-	driver.SevenZipPath = filepath.Join(cacheDir, "PDT", "tools", "7zip", "7z.exe")
-	if _, err := os.Stat(driver.SevenZipPath); err != nil {
-		return fmt.Errorf("%s not found - run PDT itself at least once first so it caches 7z.exe: %w", driver.SevenZipPath, err)
+	if err := ensureDebugSevenZip(); err != nil {
+		return err
 	}
 
 	pkgPath, chain, cleanup, err := driver.LocatePkgWithChain(path)
@@ -854,7 +864,16 @@ func cmdMacPkg(path string) error {
 // (expandPkg + cpioExtractGlob, GitHub issue #3 Phases 2+3 together)
 // BuildMacModelIndex itself uses - against a real .pkg by hand.
 func cmdMacPPDs(path, manufacturer string) error {
-	names, err := driver.PackagePPDNickNames(path, manufacturer)
+	if err := ensureDebugSevenZip(); err != nil {
+		return err
+	}
+
+	pkgPath, cleanup, err := driver.LocatePkg(path)
+	defer cleanup()
+	if err != nil {
+		return fmt.Errorf("LocatePkg: %w", err)
+	}
+	names, err := driver.PackagePPDNickNames(pkgPath, manufacturer)
 	if err != nil {
 		return err
 	}

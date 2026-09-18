@@ -61,6 +61,17 @@ jobs:
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@"${WAILS_CLI_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # wails.json's frontend:install/frontend:build wire up npm - wails
+      # build itself installs frontend deps, builds the frontend, generates
+      # bindings, and compiles/packages PDT.exe, all in this one step. Must
+      # run before "Build and test" below: main.go's `//go:embed
+      # all:frontend/dist` needs frontend/dist to actually exist with real
+      # files, and it's gitignored - a bare `go build` on a fresh checkout,
+      # before anything has built the frontend, fails outright with
+      # "pattern all:frontend/dist: no matching files found" (confirmed
+      # live - this exact ordering bug broke this workflow's first real run).
+      - name: wails build
+        run: wails build
       # README's own "Building / testing" commands - cmd/pdtdebugmac is
       # darwin-only (its own //go:build tag), so it contributes no files
       # here and needs no exclusion the way cmd/pdtdebug does on macOS below.
@@ -70,11 +81,6 @@ jobs:
           go build ./...
           go vet ./...
           go test ./...
-      # wails.json's frontend:install/frontend:build wire up npm - wails
-      # build itself installs frontend deps, builds the frontend, generates
-      # bindings, and compiles/packages PDT.exe, all in this one step.
-      - name: wails build
-        run: wails build
       # Not preinstalled on windows-latest - the README's own "Building the
       # installer" section names Inno Setup 6 as a prerequisite.
       - name: Install Inno Setup
@@ -121,28 +127,33 @@ jobs:
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@"${WAILS_CLI_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      # Same as the Windows job's "Build and test" step, except cmd/pdtdebug
-      # is the one excluded here instead - it's Windows-only (imports
-      # internal/printer/windows and golang.org/x/sys/windows directly, with
-      # no build tag of its own to make that implicit), so building ./...
-      # unmodified fails on a macOS runner. cmd/pdtdebugmac (this platform's
-      # own equivalent throwaway debug CLI) builds and vets normally.
+      # Must run before "Build and test" below - see the Windows job's own
+      # comment on this same ordering (main.go's `//go:embed all:frontend/dist`
+      # needs frontend/dist to exist, and only wails build's own pipeline
+      # produces it; it's gitignored, so it doesn't exist on a fresh checkout).
+      - name: wails build
+        run: wails build
+      # Same as the Windows job's "Build and test" step, but with explicit
+      # package paths instead of ./... - cmd/pdtdebug is Windows-only
+      # (imports internal/printer/windows and golang.org/x/sys/windows
+      # directly, with no build tag of its own to make that implicit), so
+      # ./... unmodified fails on a macOS runner. Listing the paths that
+      # actually matter here (rather than computing "./... minus
+      # cmd/pdtdebug" dynamically via `go list`) sidesteps a real bash 3.2
+      # bug confirmed live on this exact runner: an array built via a read
+      # loop, then referenced as "${pkgs[@]}" under `set -u`, raised
+      # "unbound variable" - macOS's system /bin/bash is still 3.2, and this
+      # class of empty/populated-array-under-set-u bug is exactly why
+      # go-list-based approaches (mapfile, this) aren't safe to assume work
+      # here the way they would on a modern bash. cmd/pdtdebugmac (this
+      # platform's own equivalent throwaway debug CLI) builds and vets
+      # normally, so it's included rather than excluded.
       - name: Build and test
         run: |
           set -euo pipefail
-          # A plain array via `mapfile`/`readarray` needs bash 4+, which
-          # macOS's own ancient system /bin/bash (3.2, still what `run:`
-          # resolves to without an explicit newer shell) doesn't have - this
-          # read loop works on bash 3 too.
-          pkgs=()
-          while IFS= read -r pkg; do
-            pkgs+=("$pkg")
-          done < <(go list ./... 2>/dev/null | grep -v '^PDT/cmd/pdtdebug$')
-          go build "${pkgs[@]}"
-          go vet "${pkgs[@]}"
-          go test "${pkgs[@]}"
-      - name: wails build
-        run: wails build
+          go build . ./internal/... ./cmd/pdtdebugmac/...
+          go vet . ./internal/... ./cmd/pdtdebugmac/...
+          go test . ./internal/... ./cmd/pdtdebugmac/...
       # Deliberately NOT build-mac.sh: that script's extra re-sign step
       # exists only for issue #9's own local-only "PDT Local Dev" self-signed
       # identity, generated once by hand on Ken's own machine - it can't

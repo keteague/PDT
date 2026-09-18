@@ -4,6 +4,30 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-18 (v0.9.31) - Settings > Direct Downloads
+
+### Added
+- **Settings > Direct Downloads tab (GitHub issue #19)**, positioned after Download Centers - a
+  real, direct file download URL per manufacturer/platform/driver-family (e.g. Canon Windows
+  PCL6/PS/UFR II, Canon macOS PPD/PS/UFR II, Kyocera KX/KPDL, Ricoh PCL6/PS/PPD, Sharp UD3
+  PCL6/PPD), unlike Download Centers' own one general download *page* per manufacturer. Seeded
+  with Ken's own real, hand-verified links. Extensible by design:
+  `driver.directDownloadFamilies` (`internal/driver/directdownload.go`) is the one place a
+  manufacturer or family gets added later - the tab itself renders entirely from that table via
+  three new Wails methods, no frontend change needed to add one.
+- **`MatchDirectDownloadFamily`** - maps a real Driver-field string (whatever a row's own Driver
+  field/dropdown actually shows) to the right Direct Downloads family, using the same
+  substring-token-matching discipline `default.go`'s own `defaultDriverTokens` already
+  established. Researched against this codebase's own real `.inf` test fixtures rather than
+  guessed; also traced macOS's own real *displayed* Driver-field text
+  (`macLanguageDisplayNames`), which differs from the internal classification token
+  ("PostScript"/"Generic PPD", not "PS"/"PPD") - the matcher needed to account for that. Caught
+  and fixed a real false-positive during testing: a bare "PS" token for Canon's own PS family
+  matched "LIPS4" (a genuinely real Canon printer language containing "ps" as a plain substring) -
+  narrowed to "PS3". Not consumed by anything yet - exposed for GitHub issues #18 (a per-driver
+  "Check for Update" button) and #15 (site-survey export with direct download links), both of
+  which need exactly this lookup.
+
 ## 2026-09-18 (v0.9.30) - Windows can now catalog macOS driver packages, cross-platform catalog portability, Export Configs file selection, and UI renames
 
 ### Added

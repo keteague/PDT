@@ -127,12 +127,21 @@ jobs:
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@"${WAILS_CLI_VERSION}"
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # -platform darwin/universal (not a plain `wails build`, which only
+      # targets this runner's own arm64) compiles amd64 and arm64
+      # separately, then lipo-combines them into one fat Mach-O binary -
+      # confirmed live (lipo -info: "x86_64 arm64") this is a real single
+      # .app, not two builds bundled side by side, so it runs natively on
+      # both Intel and Apple Silicon Macs with no separate download or
+      # user-facing choice. Costs roughly 2x the compiled binary's size and
+      # build time versus a single-arch build.
+      #
       # Must run before "Build and test" below - see the Windows job's own
       # comment on this same ordering (main.go's `//go:embed all:frontend/dist`
       # needs frontend/dist to exist, and only wails build's own pipeline
       # produces it; it's gitignored, so it doesn't exist on a fresh checkout).
       - name: wails build
-        run: wails build
+        run: wails build -platform darwin/universal
       # Same as the Windows job's "Build and test" step, but with explicit
       # package paths instead of ./... - cmd/pdtdebug is Windows-only
       # (imports internal/printer/windows and golang.org/x/sys/windows

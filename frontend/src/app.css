@@ -1091,8 +1091,8 @@ table.grid td.checkbox-cell {
     font-size: 12px;
 }
 
-/* Per-row DEVMODE button - unset looks like any other button; once a
-   DEVMODE is captured/assigned it turns green (button.primary's own
+/* Per-row Settings button - unset looks like any other button; once
+   Settings is captured/assigned it turns green (button.primary's own
    colors), same visual language used for "this row is fully set up"
    elsewhere. */
 .row-devmode.set {

@@ -923,10 +923,10 @@ useful if you keep other, unsupported manufacturers' packages in the same Driver
 
 **Every manufacturer is offered regardless of whether its drivers are present locally.** The Defaults
 panel's Manufacturer dropdown (and each grid row's) lists all of `driver.Manufacturers`
-(`App.Manufacturers()`), same set Settings > External Sites uses (`App.AllManufacturers()`, just
+(`App.Manufacturers()`), same set Settings > Download Centers uses (`App.AllManufacturers()`, just
 alphabetical instead of the user's own drag/drop order there) - deliberately not filtered down to
 `driver.ManufacturersWithDrivers`, so a brand-new install with an empty Drivers folder can still pick
-a manufacturer and use **Check for Updates** to reach its download page (see the banner PDT shows on
+a manufacturer and use **Download Center** to reach its download page (see the banner PDT shows on
 launch when no manufacturer has any driver present yet). Picking a manufacturer with nothing in its
 Drivers folder just leaves the Driver field with no candidates to offer yet - not an error, just
 nothing to deploy from until a driver package is downloaded there.
@@ -1301,15 +1301,15 @@ might be restricted.
 ### Settings (gear icon, top-right)
 
 A modal with four tabs: **General** (Save File Base Path, plus a drag-and-drop **Manufacturer sort
-order** list - see below), **External Sites** (one editable URL field per manufacturer - every
+order** list - see below), **Download Centers** (one editable URL field per manufacturer - every
 manufacturer PDT knows about, not just ones with drivers currently on disk; see "Drivers folder
 layout" above - seeded with `defaultManufacturerURLs` in `settings.go`, saved together with the rest
 of Settings), **Cloud Sync** (R2 bucket connection details - see below), and **About** (version,
 author, a clickable GitHub link, and **Check for Updates** - see below). The modal is a fixed size
-regardless of which tab is showing or how many manufacturers there are - both External Sites and the
+regardless of which tab is showing or how many manufacturers there are - both Download Centers and the
 sort-order list scroll internally rather than growing the window once they're taller than that fixed
 size. The Defaults panel's own
-**Check for Updates** button (a different one - printer driver updates, not app updates) opens the
+**Download Center** button (a different one - printer driver updates, not app updates) opens the
 currently-selected manufacturer's configured URL in the system browser (`OpenManufacturerURL` ->
 `runtime.BrowserOpenURL`) - no vendor exposes an API to actually check the latest driver version, so
 this only ever hands a human the page to look at themselves; true automated version-checking would
@@ -1326,7 +1326,7 @@ in the frontend). Saving triggers `refreshManufacturerDropdowns()`, which re-fet
 and rebuilds every already-rendered Manufacturer `<select>`'s options in place - the Defaults panel's
 and each existing grid row's - preserving each one's current selection rather than resetting it.
 
-**Settings > External Sites is deliberately exempt** - it's always alphabetical
+**Settings > Download Centers is deliberately exempt** - it's always alphabetical
 (`App.AllManufacturers()` sorts it every time), regardless of this custom order, since its job is
 finding a specific manufacturer to edit a URL for, not deployment convenience.
 
@@ -1557,8 +1557,8 @@ That said, here's what to grab when you go looking for updated drivers, to have 
 with PDT.
 
 To start: the **Defaults** section of the main PDT window has a **Manufacturer** dropdown with a
-**Check for Updates** button next to it. Clicking **Check for Updates** takes you straight to the
-selected manufacturer's download page. Those URLs are configured in **Settings > External Sites**
+**Download Center** button next to it. Clicking **Download Center** takes you straight to the
+selected manufacturer's download page. Those URLs are configured in **Settings > Download Centers**
 - the goal is just to make it easy to get to the right starting point.
 
 ### Canon

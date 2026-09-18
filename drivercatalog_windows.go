@@ -17,7 +17,7 @@ func (a *App) catalogSnapshot() (driver.Catalog, map[string]map[string][]string,
 
 // RefreshDriverCatalog re-scans the Drivers folder in place - the toolbar's
 // Refresh button, for picking up a driver package dropped in (or downloaded
-// via Check for Updates) without restarting PDT, which was previously the
+// via Download Center) without restarting PDT, which was previously the
 // only way (BuildCatalog only ever ran once, at startup). This calls the
 // exact same driver.BuildCatalog startup already does (via loadCatalog), so
 // it also re-runs every auto-extraction step (zip/self-extracting-archive/

@@ -121,6 +121,7 @@ func (a *App) startup(ctx context.Context) {
 	a.settings = loadSettings()
 	currentDriversBasePath = a.settings.DriversBasePath
 	currentConfigsBasePath = a.settings.SaveFileBasePath
+	currentPreinstallBasePath = a.settings.PreinstallBasePath
 
 	// Whatever this platform needs done once, before the driver catalog is
 	// scanned (Windows: 7-Zip extraction, stale-update cleanup, the Drivers
@@ -147,7 +148,7 @@ func (a *App) GetSettings() Settings {
 // An empty SaveFileBasePath, or an empty URL for any manufacturer, is
 // replaced with its own default rather than saved as literally empty, so
 // clearing a field and saving can't leave a file dialog with no starting
-// directory, or "Check for Updates" with nowhere to go.
+// directory, or "Download Center" with nowhere to go.
 //
 // s.CloudSyncSecretKey, if non-empty, is the one field never written to
 // settings.json at all - see its own doc comment - saved to the OS keychain
@@ -191,6 +192,7 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 	a.settings = s
 	currentDriversBasePath = s.DriversBasePath
 	currentConfigsBasePath = s.SaveFileBasePath
+	currentPreinstallBasePath = s.PreinstallBasePath
 	return a.settings, nil
 }
 
@@ -239,8 +241,23 @@ func (a *App) PickFolder(currentPath string) (PathResult, error) {
 	return PathResult{Path: path}, nil
 }
 
-// OpenManufacturerURL opens manufacturer's configured External Sites URL
-// (Settings) in the system default browser - the "Check for Updates" button.
+// PickPreinstallFolder is PickFolder's own sibling for the Preinstall Base
+// Path field specifically - the one Settings base path resolved via
+// resolveHomeRelative, not resolveExeRelative (see preinstallBasePath's own
+// doc comment), so it needs its own starting-directory resolution rather
+// than sharing PickFolder's. The result (always a real, OS-resolved
+// absolute path once the tech actually picks something) is returned exactly
+// as chosen - never collapsed back to a home-relative form.
+func (a *App) PickPreinstallFolder(currentPath string) (PathResult, error) {
+	path, canceled, err := a.pickFolderDialog("Select Preinstall Base Path", nearestExistingDir(resolveHomeRelative(currentPath)))
+	if err != nil || canceled {
+		return PathResult{Canceled: canceled}, err
+	}
+	return PathResult{Path: path}, nil
+}
+
+// OpenManufacturerURL opens manufacturer's configured Download Centers URL
+// (Settings) in the system default browser - the "Download Center" button.
 // No vendor exposes an API to actually check the latest driver version, so
 // this only ever hands the page to a human to look at themselves.
 func (a *App) OpenManufacturerURL(manufacturer string) {
@@ -290,6 +307,14 @@ func (a *App) OpenRepoURL() {
 // reflected, not automatically on save; Settings' own tooltip says so.
 var currentDriversBasePath string
 var currentConfigsBasePath string
+
+// currentPreinstallBasePath is currentDriversBasePath's own sibling for
+// PreinstallBasePath - same "cache the live Settings value, refresh on
+// SaveSettings" reasoning, but resolved via resolveHomeRelative (below), not
+// resolveExeRelative - PreinstallBasePath names a folder on the technician's
+// own laptop, not something that travels with wherever PDT.exe currently
+// runs from.
+var currentPreinstallBasePath string
 
 // driversRoot returns the Drivers folder PDT actually uses - Settings'
 // "Drivers Base Path", defaulting to defaultDriversBasePath() if that's
@@ -346,6 +371,43 @@ func resolveExeRelative(path string) string {
 	return filepath.Join(filepath.Dir(exe), path)
 }
 
+// preinstallBasePath returns the Preinstall folder PDT actually uses -
+// Settings' "Preinstall Base Path", defaulting to defaultPreinstallBasePath()
+// if somehow still unset - resolved against the current user's own home
+// directory if it's a relative path (see resolveHomeRelative). Unlike
+// driversRoot/configsRoot, deliberately NOT resolveExeRelative - this names
+// a folder that stays put on the technician's own laptop regardless of
+// which flash drive PDT is currently running from (Export Configs' whole
+// point is copying files *off* a flash drive *onto* this fixed location).
+func preinstallBasePath() string {
+	if currentPreinstallBasePath != "" {
+		return resolveHomeRelative(currentPreinstallBasePath)
+	}
+	return resolveHomeRelative(defaultPreinstallBasePath())
+}
+
+// resolveHomeRelative is resolveExeRelative's own sibling for
+// PreinstallBasePath (GitHub issue: absolute paths audit, 2026-09-18) -
+// identical shape, anchored on the current user's own home directory
+// (os.UserHomeDir - %UserProfile% on Windows, $HOME on macOS) instead of the
+// exe's own directory. An absolute path (the tech's own explicit Browse
+// pick, or anything outside their home folder entirely - a network share,
+// a different drive) is returned unchanged; only a relative value (the
+// computed default, "Documents/Preinstall") gets resolved against home.
+// Slash-normalized on the way in (filepath.FromSlash) since the stored form
+// is always forward-slash (see defaultPreinstallBasePath's own doc comment)
+// regardless of which OS is resolving it right now.
+func resolveHomeRelative(path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, filepath.FromSlash(path))
+}
+
 // CatalogStatus reports whether the driver catalog loaded at startup, and
 // its error if not - the frontend surfaces this once on load rather than
 // silently showing zero drivers with no explanation. HasDrivers is a
@@ -373,7 +435,7 @@ type CatalogStatus struct {
 // alphabetical order. Deliberately not filtered to manufacturers with a
 // local driver present: a brand-new install has none yet, and still needs
 // to offer every manufacturer here so the Defaults panel's "pick a
-// Manufacturer, then Check for Updates" bootstrap workflow (see the
+// Manufacturer, then Download Center" bootstrap workflow (see the
 // no-drivers banner in init()) works before any driver has been downloaded.
 // A manufacturer with nothing in the local Drivers folder simply offers no
 // Driver candidates yet (see DriverCandidates) - not itself an error.
@@ -384,7 +446,7 @@ func (a *App) Manufacturers() []string {
 
 // AllManufacturers is every manufacturer PDT knows about - the same set
 // Manufacturers returns, just always alphabetical rather than the user's
-// custom drag/drop order. Settings > External Sites uses this instead of
+// custom drag/drop order. Settings > Download Centers uses this instead of
 // Manufacturers since it's about finding a specific manufacturer's URL to
 // edit, not deployment convenience.
 func (a *App) AllManufacturers() []string {

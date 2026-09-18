@@ -76,11 +76,11 @@ type DevModeResult struct {
 // silently swallowed rather than surfaced as this call's own error.
 func (a *App) CaptureDevModeForPrinter(salesChainID, printerName string) DevModeResult {
 	if strings.TrimSpace(salesChainID) == "" {
-		return DevModeResult{Error: "Set a SalesChain ID before capturing a DEVMODE - the saved filename depends on it."}
+		return DevModeResult{Error: "Set a SalesChain ID before capturing Settings - the saved filename depends on it."}
 	}
 	p, err := pdtwin.OpenPrinter(printerName, pdtwin.PrinterAccessUse)
 	if err != nil {
-		return DevModeResult{Error: fmt.Sprintf("no local printer named %q was found to capture a DEVMODE from: %v", printerName, err)}
+		return DevModeResult{Error: fmt.Sprintf("no local printer named %q was found to capture Settings from: %v", printerName, err)}
 	}
 	defer p.Close()
 
@@ -91,7 +91,7 @@ func (a *App) CaptureDevModeForPrinter(salesChainID, printerName string) DevMode
 
 	fileName, err := saveDevModeToConfigsFolder(salesChainID, printerName, data)
 	if err != nil {
-		return DevModeResult{Error: fmt.Sprintf("captured the DEVMODE but could not save it: %v", err)}
+		return DevModeResult{Error: fmt.Sprintf("captured Settings but could not save it: %v", err)}
 	}
 
 	if values, derr := pdtwin.EnumPrinterDataEx(p.Handle, pdtwin.PrinterDriverDataKeyName); derr == nil && len(values) > 0 {
@@ -108,11 +108,11 @@ func (a *App) CaptureDevModeForPrinter(salesChainID, printerName string) DevMode
 // convention-based fallback the same as a live capture would be.
 func (a *App) BrowseDevModeFile(salesChainID, printerName string) DevModeResult {
 	if strings.TrimSpace(salesChainID) == "" {
-		return DevModeResult{Error: "Set a SalesChain ID before assigning a DEVMODE - the saved filename depends on it."}
+		return DevModeResult{Error: "Set a SalesChain ID before assigning Settings - the saved filename depends on it."}
 	}
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:   "Select a captured DEVMODE file",
-		Filters: []runtime.FileFilter{{DisplayName: "DEVMODE Files (*.bin)", Pattern: "*.bin"}},
+		Title:   "Select a captured Settings file",
+		Filters: []runtime.FileFilter{{DisplayName: "Settings Files (*.bin)", Pattern: "*.bin"}},
 	})
 	if err != nil || path == "" {
 		return DevModeResult{Canceled: path == ""}

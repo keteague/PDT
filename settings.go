@@ -88,23 +88,32 @@ const defaultConcurrentTransfers = 3
 // drive between a Windows and a macOS machine never sees it look "wrong" on
 // one side or the other.
 
-// defaultPreinstallBasePath is Documents\Preinstall under the current user's
-// home directory on THIS computer - created on demand by the OS folder-
-// picker dialog if it doesn't already exist, never eagerly by this tool
-// itself. Unlike SaveFileBasePath, this is never exe-relative: it names a
-// technician's own site-survey notes folder, which lives on their laptop
-// regardless of which flash drive PDT happens to be running from.
+// defaultPreinstallBasePath is "Documents/Preinstall" - resolved against the
+// current user's own home directory at read time (see resolveHomeRelative,
+// app.go), never baked into an absolute string here. Unlike SaveFileBasePath
+// (exe-relative), this is home-relative: it names a technician's own
+// site-survey notes folder, which lives on their laptop regardless of which
+// flash drive PDT happens to be running from - but it must still never be a
+// literal absolute path, since that would only ever be correct for whichever
+// one computer (and OS) it was first resolved on. Ken's own explicit ask
+// (2026-09-18): a tech using both a Windows and a macOS laptop needs the same
+// configured value to resolve correctly on either one - %UserProfile% on
+// Windows, $HOME on macOS - the same reasoning resolveExeRelative's own doc
+// comment already gives for DriversBasePath/SaveFileBasePath, just anchored
+// on the user's home directory instead of the exe's own. Forward-slash
+// stored (matching relToDriversRoot's own convention, GitHub issue #13) so
+// the identical value means the same thing regardless of which OS resolves
+// it. A folder-picker result (always a real, OS-resolved absolute path) is
+// left exactly as the tech chose it, never collapsed back to this relative
+// form - "techs can point it wherever they want" (Ken's own words) is a
+// deliberate, explicit choice this never second-guesses.
 func defaultPreinstallBasePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, "Documents", "Preinstall")
+	return "Documents/Preinstall"
 }
 
-// defaultManufacturerURLs seeds the Settings > External Sites tab - each
+// defaultManufacturerURLs seeds the Settings > Download Centers tab - each
 // manufacturer's own driver download/support page, for the Defaults panel's
-// "Check for Updates" button to open. No vendor here exposes an API to check
+// "Download Center" button to open. No vendor here exposes an API to check
 // the latest driver version automatically, so this only ever opens the page
 // for a human to look at - these are just the starting points, editable in
 // Settings since a vendor can relocate its own download page at any time.

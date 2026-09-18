@@ -54,8 +54,8 @@ export function EnumerateLocalPrinters() {
   return window['go']['main']['App']['EnumerateLocalPrinters']();
 }
 
-export function ExportConfigs(arg1, arg2, arg3) {
-  return window['go']['main']['App']['ExportConfigs'](arg1, arg2, arg3);
+export function ExportConfigs(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ExportConfigs'](arg1, arg2, arg3, arg4);
 }
 
 export function ForceQuit() {
@@ -140,6 +140,10 @@ export function OpenSevenZipHomepage() {
 
 export function PickFolder(arg1) {
   return window['go']['main']['App']['PickFolder'](arg1);
+}
+
+export function PickPreinstallFolder(arg1) {
+  return window['go']['main']['App']['PickPreinstallFolder'](arg1);
 }
 
 export function Platform() {

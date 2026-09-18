@@ -20,7 +20,7 @@ import {EventsOn} from '../wailsjs/runtime/runtime';
 // control - defaults, grid headers, and each row's own fields - carries the
 // same explanation.
 const TIP = {
-    salesChainId: 'Used to name saved configuration/DEVMODE files for this job. Letters, numbers, hyphen, and underscore only.',
+    salesChainId: 'Used to name saved configuration/Settings files for this job. Letters, numbers, hyphen, and underscore only.',
     manufacturer: 'Printer manufacturer - determines which drivers are offered.',
     driver: 'Driver to install/use for this printer. Type to fuzzy-search; multiple local versions of the same driver appear as separate dated entries - for a model-specific driver name (Kyocera, mainly), typing part of the model narrows the list the same way.',
     model: 'Printer model - optional, free text. Narrows the Driver list the same way typing it there does; a dropdown of known models only appears when that data is actually available (Kyocera, today).',
@@ -39,10 +39,10 @@ const TIP = {
     ip: 'Printer\'s IP address, or "NUL" to bind permanently to the local NUL: port.',
     lpdQueue: 'Optional LPD queue name (macOS deploys only - Windows carries this through for portability but never uses it). Most manufacturers ignore it and respond to any/no queue name; HP ("raw") and Xerox ("lp") are the two known exceptions, auto-filled when you pick that Manufacturer - blank is fine for everyone else.',
     selectAllHeader: 'Check/uncheck every row.',
-    saveFileBasePath: 'Where PDT keeps saved JSON configs and captured DEVMODE/Device Settings files, and where Open/Save Configuration start from by default. Defaults to Configs alongside PDT itself when running portably, or a per-user PDT data folder for an installed copy.',
+    saveFileBasePath: 'Where PDT keeps saved JSON configs and captured Settings/Device Settings files, and where Open/Save Configuration start from by default. Defaults to Configs alongside PDT itself when running portably, or a per-user PDT data folder for an installed copy.',
     driversBasePath: 'Where PDT looks for printer drivers (Drivers\\Windows\\<version>\\<Manufacturer>\\... on Windows, Drivers/macOS/<Manufacturer>/<version>/... on macOS) - click Refresh (or restart PDT) after changing this to rescan the new location. Defaults to Drivers alongside PDT itself when running portably, or a per-user PDT data folder for an installed copy.',
-    preinstallBasePath: 'Where site-survey "<SaveID> - <Client> - <Address>" subfolders live - Export Configs looks here for the one matching the current Save ID.',
-    manufacturerOrder: 'Drag to reorder - controls the Manufacturer dropdown\'s order in Defaults and in the grid. Settings > External Sites is always alphabetical regardless of this order.',
+    preinstallBasePath: 'Where site-survey "<SaveID> - <Client> - <Address>" subfolders live - Export Configs looks here for the one matching the current Save ID. Stays fixed on this computer regardless of which flash drive PDT is running from. Defaults to Documents/Preinstall under your own user profile - resolved fresh on whichever computer (Windows or macOS) you\'re using, so the same setting works on both. Browse to pick anywhere else instead.',
+    manufacturerOrder: 'Drag to reorder - controls the Manufacturer dropdown\'s order in Defaults and in the grid. Settings > Download Centers is always alphabetical regardless of this order.',
 };
 
 // HTML-attribute-escapes a string for use inside title="..." - every tooltip
@@ -181,7 +181,7 @@ document.querySelector('#app').innerHTML = `
     <button id="btnOpenConfig" title="Load a previously saved JSON configuration (rows + Save ID).">Open Configuration</button>
     <button id="btnSaveConfig" title="Save the current rows and Save ID to a JSON configuration file.">Save Configuration</button>
     <button id="btnResetConfig" title="Reset PDT to its default settings - clears every row, the Save ID, and the Defaults panel.">Reset Configuration</button>
-    <button id="btnExportConfigs" title="Copy this Save ID's Configs files (saved JSON config, captured DEVMODE/Device Settings) to its Preinstall subfolder on this computer.">Export Configs</button>
+    <button id="btnExportConfigs" title="Copy this Save ID's Configs files (saved JSON config, captured Settings/Device Settings) to its Preinstall subfolder on this computer.">Export Configs</button>
     <div class="dropdown platform-windows-only" id="spoolerDropdown">
       <button id="btnSpooler" title="Control the Windows Print Spooler service.">Spooler &#9662;</button>
       <div class="dropdown-menu" id="spoolerMenu" hidden>
@@ -229,7 +229,7 @@ document.querySelector('#app').innerHTML = `
       <h3>Settings</h3>
       <div class="tabs">
         <button type="button" class="tab-btn active" data-tab="general">General</button>
-        <button type="button" class="tab-btn" data-tab="sites">External Sites</button>
+        <button type="button" class="tab-btn" data-tab="sites">Download Centers</button>
         <button type="button" class="tab-btn" data-tab="cloudsync">Cloud Sync</button>
         <button type="button" class="tab-btn" data-tab="about">About</button>
       </div>
@@ -262,7 +262,7 @@ document.querySelector('#app').innerHTML = `
       </div>
       <div class="tab-panel" data-tab-panel="sites" hidden>
         <p class="modal-hint">Pages to check for driver updates - no vendor offers a way to check
-          automatically, so "Check for Updates" in Defaults just opens the page below for the
+          automatically, so "Download Center" in Defaults just opens the page below for the
           selected manufacturer.</p>
         <div id="settingsSitesPanel"></div>
       </div>
@@ -335,8 +335,8 @@ document.querySelector('#app').innerHTML = `
         checked by default; software printers (PDF, XPS, fax, etc.) are not - override either as
         needed.</p>
       <div id="importPrintersList" class="import-printers-list"></div>
-      <label class="modal-field-inline" title="Immediately capture each imported printer's current DEVMODE (print defaults) and Device Settings after import.">
-        <input type="checkbox" id="importPrintersGetDevmode" checked> Get DEVMODE
+      <label class="modal-field-inline" title="Immediately capture each imported printer's current Settings (print defaults) and Device Settings after import.">
+        <input type="checkbox" id="importPrintersGetDevmode" checked> Get Settings
       </label>
       <div class="modal-actions">
         <button id="btnImportPrintersCancel">Cancel</button>
@@ -347,12 +347,28 @@ document.querySelector('#app').innerHTML = `
 
   <div class="modal-backdrop" id="exportFolderBackdrop" hidden>
     <div class="modal">
-      <h3>Select Preinstall Folder</h3>
-      <p class="modal-hint">More than one Preinstall subfolder matches this Save ID. Choose which one to export to.</p>
+      <h3>Confirm Preinstall Folder</h3>
+      <p class="modal-hint">Export Configs will copy this Save ID's files to the Preinstall subfolder below. Confirm it's the right one - an old Save ID's folder can still be sitting there even if you haven't created today's yet.</p>
       <div id="exportFolderList" class="import-printers-list"></div>
       <div class="modal-actions">
         <button id="btnExportFolderCancel">Cancel</button>
         <button class="primary" id="btnExportFolderConfirm">Select</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="exportFilesBackdrop" hidden>
+    <div class="modal">
+      <h3>Select Files to Export</h3>
+      <p class="modal-hint" id="exportFilesHint"></p>
+      <label class="import-printer-item">
+        <input type="checkbox" id="exportFilesSelectAll" checked>
+        <span class="import-printer-name"><strong>Select All</strong></span>
+      </label>
+      <div id="exportFilesList" class="import-printers-list"></div>
+      <div class="modal-actions">
+        <button id="btnExportFilesCancel">Cancel</button>
+        <button class="primary" id="btnExportFilesConfirm">Export</button>
       </div>
     </div>
   </div>
@@ -477,7 +493,7 @@ document.querySelector('#app').innerHTML = `
   </div>
 
   <div class="no-drivers-banner" id="noDriversBanner" hidden>
-    No printer drivers are installed yet. Pick a Manufacturer below, then click <strong>Check for Updates</strong> to open its download page - once a driver package is downloaded into the Drivers folder, press the Refresh button (&#128260;) to make it available.
+    No printer drivers are installed yet. Pick a Manufacturer below, then click <strong>Download Center</strong> to open its download page - once a driver package is downloaded into the Drivers folder, press the Refresh button (&#128260;) to make it available.
   </div>
 
   <div class="defaults-panel">
@@ -486,7 +502,7 @@ document.querySelector('#app').innerHTML = `
       <div class="defaults-body">
         <div class="defaults-row">
           <label title="${tip('manufacturer')}">Manufacturer <select id="defMfg" title="${tip('manufacturer')}"></select></label>
-          <button type="button" id="btnCheckUpdates" title="Open the selected manufacturer's driver page (configured in Settings &gt; External Sites).">Check for Updates</button>
+          <button type="button" id="btnCheckUpdates" title="Open the selected manufacturer's driver page (configured in Settings &gt; Download Centers).">Download Center</button>
           <label class="driver-label" title="${tip('driver')}">Driver <div class="combo"><input type="text" id="defDriver" title="${tip('driver')}"><div class="combo-list" id="defDriverList" hidden></div></div></label>
         </div>
         <fieldset class="defaults-sub">
@@ -517,7 +533,7 @@ document.querySelector('#app').innerHTML = `
     <button id="btnNewCsv" title="Create a blank CSV file with the correct column headers to fill in externally.">New CSV</button>
     <button id="btnImportCsv" title="Import printer rows from a CSV file.">Import CSV</button>
     <button id="btnImportPrinters" class="platform-windows-only" title="Import already-configured printers from this computer.">Import Printers</button>
-    <button id="btnGetDevmode" class="platform-windows-only" title="Capture the current DEVMODE (print defaults) and Device Settings from every checked row's local printer.">Get DEVMODE</button>
+    <button id="btnGetDevmode" class="platform-windows-only" title="Capture the current Settings (print defaults) and Device Settings from every checked row's local printer.">Get Settings</button>
     <span class="spacer"></span>
     <button class="primary" id="btnDeploy" title="Deploy every checked row: create/update ports, drivers, and printer objects, then apply print configuration.">Deploy Checked Printers</button>
     <button class="danger" id="btnStop" disabled title="Stop after the row currently in progress finishes - no further row will start.">STOP</button>
@@ -538,7 +554,7 @@ document.querySelector('#app').innerHTML = `
           <th title="${tip('mono')}">Mono</th>
           <th title="${tip('oneSided')}">1-side</th>
           <th class="platform-windows-only" title="${tip('useExistingPort')}">UEP</th>
-          <th class="platform-windows-only" title="Capture or browse to this row's DEVMODE (print defaults) and Device Settings, applied last during Deploy."></th>
+          <th class="platform-windows-only" title="Capture or browse to this row's Settings (print defaults) and Device Settings, applied last during Deploy."></th>
           <th title="Double-click to remove this one row, without needing to check it first."></th>
         </tr>
       </thead>
@@ -679,10 +695,10 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 // the machine, rescanning the Drivers folder in place, and opening it in
 // File Explorer all have nothing to do with one particular Save ID);
 // the Defaults panel's Manufacturer dropdown and
-// Check for Updates button (also job-independent - picking a manufacturer
+// Download Center button (also job-independent - picking a manufacturer
 // and opening its configured download page touches no SalesChain-ID-named
 // file, and this is exactly how the no-drivers banner's own bootstrap
-// workflow - pick a Manufacturer, Check for Updates, Refresh - is meant to
+// workflow - pick a Manufacturer, Download Center, Refresh - is meant to
 // work on a fresh install, before there's any job to name yet) - each along
 // with
 // everything inside its own modal/dropdown, so it stays fully usable, not
@@ -1243,11 +1259,11 @@ function rowHtml(r) {
 
 function devModeButtonHtml(r) {
     const set = !!r.devModeFile;
-    const label = set ? 'DEVMODE SET' : 'Get DEVMODE';
+    const label = set ? 'SETTINGS SET' : 'Get Settings';
     const cls = set ? 'row-devmode set' : 'row-devmode';
     const title = set
         ? `Captured from ${attr(r.devModeFile)}. Click to replace it.`
-        : 'Capture this row\'s DEVMODE and Device Settings from a local printer of the same name, or browse to an existing .bin file.';
+        : 'Capture this row\'s Settings and Device Settings from a local printer of the same name, or browse to an existing .bin file.';
     return `<button type="button" class="${cls}" title="${title}">${label}</button>`;
 }
 
@@ -1454,14 +1470,14 @@ function patchRowDevModeButton(row) {
     wireDevModeButton(tr, row);
 }
 
-// Per-row DEVMODE button click handler: try a live capture from a local
+// Per-row Settings button click handler: try a live capture from a local
 // printer of the same name first (the reference-machine case this feature
 // exists for); if none is found, fall back to browsing for an existing
 // .bin file instead (e.g. one captured elsewhere). Re-clicking an
-// already-"DEVMODE SET" row replaces it the same way.
+// already-"SETTINGS SET" row replaces it the same way.
 async function captureOrBrowseDevMode(row) {
     if (!state.salesChainId) {
-        logStatus('WARN', 'Set a Save ID before capturing a DEVMODE.');
+        logStatus('WARN', 'Set a Save ID before capturing Settings.');
         return;
     }
     const tr = document.querySelector(`tr[data-id="${row._id}"]`);
@@ -1473,16 +1489,16 @@ async function captureOrBrowseDevMode(row) {
             result = await App.BrowseDevModeFile(state.salesChainId, row.name);
         }
         if (result.canceled) {
-            logStatus('INFO', 'DEVMODE capture canceled.');
+            logStatus('INFO', 'Settings capture canceled.');
             return;
         }
         if (result.error) {
-            logStatus('ERR', `Could not capture DEVMODE for "${row.name}": ${result.error}`);
+            logStatus('ERR', `Could not capture Settings for "${row.name}": ${result.error}`);
             return;
         }
         row.devModeFile = result.fileName;
         patchRowDevModeButton(row);
-        logStatus('OK', `Captured DEVMODE for "${row.name}".`);
+        logStatus('OK', `Captured Settings for "${row.name}".`);
     } finally {
         if (btn) btn.disabled = false;
     }
@@ -1666,7 +1682,7 @@ function wireEvents() {
             return;
         }
         if (!state.salesChainId) {
-            logStatus('WARN', 'Set a Save ID before capturing DEVMODE configs.');
+            logStatus('WARN', 'Set a Save ID before capturing Settings.');
             return;
         }
         let captured = 0;
@@ -1678,7 +1694,7 @@ function wireEvents() {
                 captured++;
             }
         }
-        logStatus('OK', `Captured DEVMODE for ${captured} of ${selected.length} checked row(s).`);
+        logStatus('OK', `Captured Settings for ${captured} of ${selected.length} checked row(s).`);
     });
 
     el('btnOpenConfig').addEventListener('click', async () => {
@@ -1953,7 +1969,7 @@ function renderImportPrintersList() {
 
 // Adds a grid row for each checked candidate (Name/IP/Manufacturer/Driver
 // carried over from the local printer object itself), then - if "Get
-// DEVMODE" is also checked - immediately captures each new row's DEVMODE,
+// Settings" is also checked - immediately captures each new row's Settings,
 // the same call the per-row/bulk buttons use, so an already-configured
 // reference printer's print defaults are captured in the same step it's
 // imported rather than needing a second pass.
@@ -1978,7 +1994,7 @@ async function confirmImportPrinters() {
         return;
     }
     if (!state.salesChainId) {
-        logStatus('WARN', `Imported ${newRows.length} printer(s). Set a Save ID to capture DEVMODE configs.`);
+        logStatus('WARN', `Imported ${newRows.length} printer(s). Set a Save ID to capture Settings.`);
         return;
     }
     let captured = 0;
@@ -1990,7 +2006,7 @@ async function confirmImportPrinters() {
             captured++;
         }
     }
-    logStatus('OK', `Imported ${newRows.length} printer(s), captured DEVMODE for ${captured}.`);
+    logStatus('OK', `Imported ${newRows.length} printer(s), captured Settings for ${captured}.`);
 }
 
 // --- Export Configs ---
@@ -2000,8 +2016,11 @@ function baseName(path) {
     return parts[parts.length - 1] || path;
 }
 
-// Shows the "more than one Preinstall subfolder matches" picker and resolves
-// to the chosen full path, or null if canceled.
+// Shows the Preinstall subfolder(s) matching this Save ID for confirmation
+// and resolves to the chosen full path, or null if canceled - always shown,
+// even for a single match (Ken's own explicit ask, 2026-09-18): an old Save
+// ID's own subfolder can still be sitting there if the tech hasn't created
+// today's new one yet, so a single match is never auto-trusted silently.
 function pickExportFolder(folders) {
     return new Promise((resolve) => {
         el('exportFolderList').innerHTML = folders.map((f, i) => `
@@ -2027,6 +2046,57 @@ function pickExportFolder(folders) {
         function onCancel() { cleanup(null); }
         confirmBtn.addEventListener('click', onConfirm);
         cancelBtn.addEventListener('click', onCancel);
+    });
+}
+
+// Shows every Configs file that would be exported, each with its own
+// checkbox (all checked by default - Ken's own explicit ask, 2026-09-18:
+// exporting everything is the common case, deselecting a file is the
+// exception), plus a "select all" checkbox that stays in sync with whether
+// every individual box is currently checked (same pattern selectAllHeader
+// already uses for the main printer grid). Resolves to the array of
+// selected filenames (possibly empty, if the tech unchecks everything), or
+// null if canceled.
+function pickExportFiles(files) {
+    return new Promise((resolve) => {
+        el('exportFilesHint').textContent = `${files.length} file(s) found for this Save ID. Uncheck any you don't want to export.`;
+        el('exportFilesList').innerHTML = files.map((f, i) => `
+            <label class="import-printer-item">
+              <input type="checkbox" class="exportFileChoice" value="${i}" checked>
+              <span class="import-printer-name">${escapeHtml(f)}</span>
+            </label>
+        `).join('');
+        const selectAll = el('exportFilesSelectAll');
+        selectAll.checked = true;
+        el('exportFilesBackdrop').hidden = false;
+
+        const fileChoices = () => Array.from(el('exportFilesList').querySelectorAll('.exportFileChoice'));
+        function syncSelectAllState() {
+            selectAll.checked = fileChoices().every(cb => cb.checked);
+        }
+        function onFileToggle() { syncSelectAllState(); }
+        function onSelectAllToggle(e) {
+            for (const cb of fileChoices()) cb.checked = e.target.checked;
+        }
+
+        const confirmBtn = el('btnExportFilesConfirm');
+        const cancelBtn = el('btnExportFilesCancel');
+        function cleanup(result) {
+            el('exportFilesBackdrop').hidden = true;
+            confirmBtn.removeEventListener('click', onConfirm);
+            cancelBtn.removeEventListener('click', onCancel);
+            selectAll.removeEventListener('change', onSelectAllToggle);
+            el('exportFilesList').removeEventListener('change', onFileToggle);
+            resolve(result);
+        }
+        function onConfirm() {
+            cleanup(fileChoices().filter(cb => cb.checked).map(cb => files[Number(cb.value)]));
+        }
+        function onCancel() { cleanup(null); }
+        confirmBtn.addEventListener('click', onConfirm);
+        cancelBtn.addEventListener('click', onCancel);
+        selectAll.addEventListener('change', onSelectAllToggle);
+        el('exportFilesList').addEventListener('change', onFileToggle);
     });
 }
 
@@ -2087,11 +2157,10 @@ async function exportConfigs() {
         return;
     }
 
-    let destFolder = listResult.folders[0];
-    if (listResult.folders.length > 1) {
-        destFolder = await pickExportFolder(listResult.folders);
-        if (!destFolder) return;
-    }
+    // Always confirmed, even for exactly one match - see pickExportFolder's
+    // own doc comment for why.
+    const destFolder = await pickExportFolder(listResult.folders);
+    if (!destFolder) return;
 
     const collisionResult = await App.CheckExportCollisions(state.salesChainId, destFolder);
     if (collisionResult.error) {
@@ -2103,13 +2172,23 @@ async function exportConfigs() {
         return;
     }
 
+    const selectedFiles = await pickExportFiles(collisionResult.sourceFiles);
+    if (!selectedFiles) return;
+    if (selectedFiles.length === 0) {
+        logStatus('WARN', 'No files selected - nothing exported.');
+        return;
+    }
+
+    // Only the files actually still selected need an overwrite decision -
+    // a deselected file's own collision (if any) is irrelevant now.
+    const collidingSelected = collisionResult.colliding.filter(f => selectedFiles.includes(f));
     let mode = 'into';
-    if (collisionResult.colliding.length > 0) {
-        mode = await resolveExportCollision(collisionResult.colliding);
+    if (collidingSelected.length > 0) {
+        mode = await resolveExportCollision(collidingSelected);
         if (!mode) return;
     }
 
-    const result = await App.ExportConfigs(state.salesChainId, destFolder, mode);
+    const result = await App.ExportConfigs(state.salesChainId, destFolder, mode, selectedFiles);
     if (result.error) {
         logStatus('ERR', `Export Configs failed: ${result.error}`);
         return;
@@ -3216,7 +3295,11 @@ function wireSettingsModal() {
 
     el('btnBrowsePreinstallBasePath').addEventListener('click', async () => {
         try {
-            const result = await App.PickFolder(el('settingsPreinstallBasePath').value);
+            // PickPreinstallFolder, not PickFolder - this field resolves its
+            // current value against the user's own home directory, not the
+            // exe's own location (see preinstallBasePath's own doc comment,
+            // app.go), so it needs its own starting-directory resolution.
+            const result = await App.PickPreinstallFolder(el('settingsPreinstallBasePath').value);
             if (!result.canceled) el('settingsPreinstallBasePath').value = result.path;
         } catch (err) {
             logStatus('ERR', `Could not open the folder browser: ${err && err.message ? err.message : err}`);

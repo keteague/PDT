@@ -31,7 +31,7 @@ export function DriverCandidates(arg1:string,arg2:string,arg3:string):Promise<Ar
 
 export function EnumerateLocalPrinters():Promise<Array<main.LocalPrinterCandidate>>;
 
-export function ExportConfigs(arg1:string,arg2:string,arg3:string):Promise<main.ExportResult>;
+export function ExportConfigs(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<main.ExportResult>;
 
 export function ForceQuit():Promise<void>;
 
@@ -74,6 +74,8 @@ export function OpenRepoURL():Promise<void>;
 export function OpenSevenZipHomepage():Promise<void>;
 
 export function PickFolder(arg1:string):Promise<main.PathResult>;
+
+export function PickPreinstallFolder(arg1:string):Promise<main.PathResult>;
 
 export function Platform():Promise<string>;
 

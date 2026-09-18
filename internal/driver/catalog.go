@@ -30,7 +30,7 @@ func foldMatchIgnoringSpaces(a, b string) bool {
 // HasDrivers signal (the frontend's first-run "go get some drivers" banner) -
 // the Manufacturer dropdowns themselves (App.Manufacturers) deliberately
 // offer every manufacturer regardless, so a zero-driver install can still
-// pick one and use Check for Updates to go find its download page.
+// pick one and use Download Center to go find its download page.
 func ManufacturersWithDrivers(catalog Catalog) []string {
 	// []string{}, not "var out []string" (a nil slice) - a nil slice
 	// marshals to JSON `null`, not `[]`, across the Wails/JS bridge. Kept

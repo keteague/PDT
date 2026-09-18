@@ -29,7 +29,7 @@ type PreinstallFoldersResult struct {
 // tech which one to use when there's more than one.
 func (a *App) ListPreinstallFolders(salesChainID string) PreinstallFoldersResult {
 	<-a.ready
-	base := a.settings.PreinstallBasePath
+	base := preinstallBasePath()
 	folders, err := matchingPreinstallFolders(base, salesChainID)
 	if err != nil {
 		return PreinstallFoldersResult{Error: fmt.Sprintf("could not read Preinstall Base Path %q: %v", base, err)}
@@ -127,16 +127,35 @@ type ExportResult struct {
 	Error    string   `json:"error"`
 }
 
-// ExportConfigs copies every Configs/<SalesChainID>* file to destFolder's PDT
-// subfolder. mode "into" writes (and overwrites) directly into
-// "<destFolder>\PDT"; mode "new" writes into a freshly timestamped
-// "<destFolder>\PDT\<yyyy-mm-dd_hhmm>" instead, so declining an overwrite
-// can't accidentally clobber anything.
-func (a *App) ExportConfigs(salesChainID, destFolder, mode string) ExportResult {
+// ExportConfigs copies each of selectedFiles (the tech's own checkbox
+// selection from the frontend's file-picker step - see pickExportFiles,
+// main.js) to destFolder's PDT subfolder. mode "into" writes (and
+// overwrites) directly into "<destFolder>\PDT"; mode "new" writes into a
+// freshly timestamped "<destFolder>\PDT\<yyyy-mm-dd_hhmm>" instead, so
+// declining an overwrite can't accidentally clobber anything.
+//
+// selectedFiles is intersected against a fresh matchingConfigFiles scan
+// rather than trusted verbatim - the same "verify, don't just trust what the
+// frontend already claims to have shown the user" discipline every other
+// real file-selection surface in this codebase already applies, and it
+// means a file that disappeared between the picker step and this call
+// (deleted, or Configs itself changed) is silently skipped rather than
+// erroring out the whole export.
+func (a *App) ExportConfigs(salesChainID, destFolder, mode string, selectedFiles []string) ExportResult {
 	<-a.ready
-	names, err := matchingConfigFiles(configsRoot(), salesChainID)
+	available, err := matchingConfigFiles(configsRoot(), salesChainID)
 	if err != nil {
 		return ExportResult{Error: err.Error()}
+	}
+	availableSet := make(map[string]bool, len(available))
+	for _, n := range available {
+		availableSet[n] = true
+	}
+	names := make([]string, 0, len(selectedFiles))
+	for _, n := range selectedFiles {
+		if availableSet[n] {
+			names = append(names, n)
+		}
 	}
 	if len(names) == 0 {
 		return ExportResult{Error: fmt.Sprintf("no Configs files found for SalesChain ID %q", salesChainID)}

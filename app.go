@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -409,11 +410,21 @@ func resolveHomeRelative(path string) string {
 	if path == "" || filepath.IsAbs(path) {
 		return path
 	}
+	rel := filepath.FromSlash(path)
+	// "Documents/..." is anchored on the real Documents folder, not
+	// <home>\Documents - OneDrive Known Folder Move / folder redirection
+	// puts it elsewhere (see userDocumentsDir), and the default value is
+	// exactly this form.
+	if first, rest, _ := strings.Cut(rel, string(filepath.Separator)); strings.EqualFold(first, "Documents") {
+		if docs := userDocumentsDir(); docs != "" {
+			return filepath.Join(docs, rest)
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return path
 	}
-	return filepath.Join(home, filepath.FromSlash(path))
+	return filepath.Join(home, rel)
 }
 
 // CatalogStatus reports whether the driver catalog loaded at startup, and

@@ -4,6 +4,19 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-18 (v0.9.33) - default Preinstall Base Path follows a redirected Documents folder
+
+### Fixed
+- **Default Preinstall Base Path (`Documents/Preinstall`) resolved to a nonexistent folder when
+  Documents is redirected**, e.g. by OneDrive Known Folder Move, where the real Documents lives at
+  `C:\Users\<user>\OneDrive - <Org>\Documents` and `%UserProfile%\Documents` doesn't exist. Export
+  Configs then found no Preinstall subfolders even though they were sitting in the tech's actual
+  Documents folder. `resolveHomeRelative` now anchors a leading `Documents` segment on the real
+  Documents folder (`userDocumentsDir`: the shell's `FOLDERID_Documents` on Windows, `~/Documents`
+  on macOS), falling back to the old home-relative guess only if the shell can't answer. The stored
+  and displayed value is unchanged (still `Documents/Preinstall`), and a Browse-picked absolute path
+  is still used exactly as chosen.
+
 ## 2026-09-18 (v0.9.32) - retag after v0.9.30/v0.9.31's own CI runs failed on real macOS
 
 ### Fixed

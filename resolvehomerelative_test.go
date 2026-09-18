@@ -43,7 +43,23 @@ func TestResolveHomeRelative_RelativePathResolvedAgainstHomeDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := home + string(os.PathSeparator) + "Documents" + string(os.PathSeparator) + "Preinstall"
+	want := home + string(os.PathSeparator) + "Reports" + string(os.PathSeparator) + "Preinstall"
+	if got := resolveHomeRelative("Reports/Preinstall"); got != want {
+		t.Errorf(`resolveHomeRelative("Reports/Preinstall") = %q, want %q`, got, want)
+	}
+}
+
+// TestResolveHomeRelative_DocumentsUsesRealDocumentsFolder: "Documents/..."
+// resolves against the shell's actual Documents folder, which OneDrive Known
+// Folder Move / folder redirection can put somewhere other than
+// <home>\Documents (the bug this guards: default Preinstall Base Path
+// pointing at a nonexistent folder on such machines).
+func TestResolveHomeRelative_DocumentsUsesRealDocumentsFolder(t *testing.T) {
+	docs := userDocumentsDir()
+	if docs == "" {
+		t.Skip("no Documents folder available")
+	}
+	want := docs + string(os.PathSeparator) + "Preinstall"
 	if got := resolveHomeRelative("Documents/Preinstall"); got != want {
 		t.Errorf(`resolveHomeRelative("Documents/Preinstall") = %q, want %q`, got, want)
 	}

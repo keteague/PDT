@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"PDT/internal/driver"
@@ -114,10 +115,13 @@ func TestListLocal_SkipsExtractedSiblingFolder(t *testing.T) {
 	}
 }
 
-// TestListLocal_SkipsPdtInfCacheFolder guards the other half of issue #10's
-// skip rule - the .inf-only metadata cache the catalog rework writes into is
-// never synced either.
-func TestListLocal_SkipsPdtInfCacheFolder(t *testing.T) {
+// TestListLocal_IncludesPdtInfCacheFolder guards PdtInfCacheDirName's own
+// exception to the general dotfile/dotfolder skip rule (see
+// TestListLocal_SkipsDotEntries) - unlike an archive's extracted sibling
+// folder, the .inf-only metadata cache the catalog rework writes into is
+// real, useful content that Cloud Sync must carry along with the rest of
+// the folder, not drop.
+func TestListLocal_IncludesPdtInfCacheFolder(t *testing.T) {
 	root := t.TempDir()
 	cacheDir := filepath.Join(root, "Canon", driver.PdtInfCacheDirName, "Driver")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -134,24 +138,30 @@ func TestListLocal_SkipsPdtInfCacheFolder(t *testing.T) {
 	if _, ok := sizes["Canon/real.txt"]; !ok {
 		t.Errorf("expected the unrelated real file to still be listed, got %v", sizes)
 	}
-	for rel := range sizes {
-		if filepath.Base(filepath.Dir(rel)) == driver.PdtInfCacheDirName || rel == "Canon/"+driver.PdtInfCacheDirName {
-			t.Errorf("expected nothing under %s to be listed, got %q", driver.PdtInfCacheDirName, rel)
-		}
+	wantRel := "Canon/" + driver.PdtInfCacheDirName + "/Driver/driver.inf"
+	if _, ok := sizes[wantRel]; !ok {
+		t.Errorf("expected %s and its contents to be listed, got %v", driver.PdtInfCacheDirName, sizes)
 	}
 }
 
-// TestListLocal_SkipsDSStore guards Finder's own per-folder metadata
-// clutter (macOS creates a .DS_Store in nearly every folder it browses,
-// including a Drivers folder synced from/to a Windows machine) - never real
-// driver content, so Sync must never transfer it.
-func TestListLocal_SkipsDSStore(t *testing.T) {
+// TestListLocal_SkipsDotEntries guards the general dotfile/dotfolder skip
+// rule (driver.IsIgnoredDotEntry) - anything dot-prefixed other than
+// PdtInfCacheDirName itself (see TestListLocal_IncludesPdtInfCacheFolder) is
+// clutter, not real driver content, and Cloud Sync must never upload it.
+func TestListLocal_SkipsDotEntries(t *testing.T) {
 	root := t.TempDir()
 	canon := filepath.Join(root, "Canon")
 	if err := os.MkdirAll(canon, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(canon, driver.DSStoreFileName), []byte("finder metadata"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitDir := filepath.Join(canon, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("git internals"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(canon, "real.txt"), []byte("real file"), 0o644); err != nil {
@@ -164,6 +174,11 @@ func TestListLocal_SkipsDSStore(t *testing.T) {
 	}
 	if _, ok := sizes["Canon/"+driver.DSStoreFileName]; ok {
 		t.Errorf("expected %s to be skipped entirely, got %v", driver.DSStoreFileName, sizes)
+	}
+	for rel := range sizes {
+		if strings.HasPrefix(rel, "Canon/.git/") {
+			t.Errorf("expected .git/ to be skipped entirely, got %q", rel)
+		}
 	}
 }
 
@@ -202,5 +217,35 @@ func TestListRemote_SkipsDSStore(t *testing.T) {
 	}
 	if _, ok := remote[driver.DSStoreFileName]; ok {
 		t.Errorf("expected top-level %s to be skipped, got %v", driver.DSStoreFileName, remote)
+	}
+}
+
+// TestListRemote_IncludesPdtInfCacheFolder guards the remote side of
+// PdtInfCacheDirName's exception to the dotfile/dotfolder skip rule - a key
+// nested under it must survive isIgnoredRemotePath's filtering (unlike a
+// plain dotfile such as .DS_Store) so it doesn't wrongly show as a
+// perpetual, unsynced "Download".
+func TestListRemote_IncludesPdtInfCacheFolder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>test-bucket</Name>
+  <Prefix>Drivers/</Prefix>
+  <IsTruncated>false</IsTruncated>
+  <Contents><Key>Drivers/Canon/real.txt</Key><Size>10</Size></Contents>
+  <Contents><Key>Drivers/Canon/%s/Driver/driver.inf</Key><Size>20</Size></Contents>
+</ListBucketResult>`, driver.PdtInfCacheDirName)
+	}))
+	defer srv.Close()
+	core := testCore(t, srv)
+
+	remote, err := listRemote(context.Background(), core, "test-bucket", "Drivers/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRel := "Canon/" + driver.PdtInfCacheDirName + "/Driver/driver.inf"
+	if _, ok := remote[wantRel]; !ok {
+		t.Errorf("expected %s to be listed, got %v", wantRel, remote)
 	}
 }

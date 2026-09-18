@@ -546,6 +546,8 @@ document.querySelector('#app').innerHTML = `
     </table>
   </div>
 
+  <div class="log-resize-handle" id="logResizeHandle" title="Drag to resize the log panel"></div>
+
   <div class="log-panel">
     <div class="log-header">
       <span>Log</span>
@@ -1007,6 +1009,53 @@ function wireLogContextMenu() {
     el('logCtxSelectAll').addEventListener('click', () => { hide(); selectAllLog(); });
     el('logCtxCopy').addEventListener('click', () => { hide(); copyLog(); });
     el('logCtxClear').addEventListener('click', () => { hide(); clearLog(); });
+}
+
+// Drag-to-resize for the log panel: the handle sits between .grid-wrap
+// (flex: 1, so it absorbs whatever height .log-panel doesn't take) and
+// .log-panel (fixed height), so growing/shrinking the log panel's height
+// is all that's needed to resize both - the grid just fills what's left.
+// .log-panel sits flush against the bottom of #app (100vh, nothing below
+// it but the handle), so its bottom edge tracks the viewport bottom and
+// height = viewport height - pointer Y is exact for the whole drag.
+const LOG_PANEL_HEIGHT_KEY = 'pdtLogPanelHeight';
+const LOG_PANEL_MIN_HEIGHT = 80;
+const GRID_MIN_HEIGHT = 150;
+
+function wireLogResize() {
+    const handle = el('logResizeHandle');
+    const panel = document.querySelector('.log-panel');
+
+    const saved = parseInt(localStorage.getItem(LOG_PANEL_HEIGHT_KEY), 10);
+    if (!isNaN(saved) && saved > 0) {
+        panel.style.height = `${saved}px`;
+    }
+
+    let dragging = false;
+
+    handle.addEventListener('mousedown', (e) => {
+        dragging = true;
+        handle.classList.add('dragging');
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const maxHeight = Math.max(LOG_PANEL_MIN_HEIGHT, window.innerHeight - GRID_MIN_HEIGHT);
+        const newHeight = Math.min(maxHeight, Math.max(LOG_PANEL_MIN_HEIGHT, window.innerHeight - e.clientY));
+        panel.style.height = `${newHeight}px`;
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        handle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        localStorage.setItem(LOG_PANEL_HEIGHT_KEY, panel.style.height.replace('px', ''));
+    });
 }
 
 function escapeHtml(s) {
@@ -1788,6 +1837,7 @@ function wireEvents() {
     el('btnClearLog').addEventListener('click', clearLog);
 
     wireLogContextMenu();
+    wireLogResize();
 
     el('btnDeploy').addEventListener('click', deploy);
 

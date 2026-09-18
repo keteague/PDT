@@ -1,7 +1,6 @@
 package main
 
 import (
-	"embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,29 +28,14 @@ var sevenZipInstallerAssetRe = regexp.MustCompile(`^7z\d+-x64\.exe$`)
 // display or compare, never act on programmatically beyond that.
 var sevenZipVersionRe = regexp.MustCompile(`7-Zip\s+(\d+\.\d+)`)
 
-// sevenZipAssets embeds a fixed, versioned copy of 7-Zip's own 7z.exe/7z.dll
-// (plus its license text) - the only thing on this machine confirmed to
-// correctly extract Lexmark's self-extracting RAR driver package. See the
-// README's "Lexmark" section for why: Go's standard library has no RAR
-// reader at all, the one pure-Go library evaluated (nwaples/rardecode)
-// silently corrupts exactly the files this needs, and 7-Zip's own
-// easily-redistributable "Extra" console package doesn't include RAR support
-// either (confirmed directly - it errors "Cannot open the file as archive")
-// - only the full 7z.dll does. Redistribution is permitted under 7-Zip's own
-// license (LGPL + an "unRAR restriction" limited to barring use of the code
-// to build a RAR *compressor* - not redistribution of the decoder), provided
-// the license text travels with the binaries, which is why License.txt is
-// embedded and extracted alongside them.
-//
-//go:embed third_party/7zip/7z.exe third_party/7zip/7z.dll third_party/7zip/License.txt
-var sevenZipAssets embed.FS
-
 // sevenZipToolsDir is the stable per-machine cache folder
 // ensureSevenZipExtracted writes 7z.exe/7z.dll/License.txt into - also
-// copied onto a flash drive by Write to Flash Drive/Sync (see flashdrive.go)
-// so a portable copy carries its own tools rather than relying on this
-// exact computer's own cache existing. "" if os.UserCacheDir() itself
-// fails, same as ensureSevenZipExtracted's own best-effort handling of that.
+// this exact computer's own cache existing - unlike Write to Flash Drive
+// (flashdrive.go), which writes the embedded 7-Zip assets straight onto the
+// flash drive itself (writeSevenZipAssets, sevenzipassets.go) rather than
+// going through this per-machine cache at all. "" if os.UserCacheDir()
+// itself fails, same as ensureSevenZipExtracted's own best-effort handling
+// of that.
 func sevenZipToolsDir() string {
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
@@ -71,32 +55,10 @@ func ensureSevenZipExtracted() {
 	if destDir == "" {
 		return
 	}
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	if err := writeSevenZipAssets(destDir); err != nil {
 		return
 	}
-
-	for _, name := range []string{"7z.exe", "7z.dll", "License.txt"} {
-		if err := extractEmbeddedIfStale("third_party/7zip/"+name, filepath.Join(destDir, name)); err != nil {
-			return
-		}
-	}
 	driver.SevenZipPath = filepath.Join(destDir, "7z.exe")
-}
-
-// extractEmbeddedIfStale writes embeddedPath's content to destPath, skipping
-// the write if destPath already exists with the same size - cheap enough to
-// call on every startup without rewriting ~2.5MB each time, while still
-// picking up a newer bundled 7z.exe/7z.dll after PDT itself is updated (see
-// internal/update).
-func extractEmbeddedIfStale(embeddedPath, destPath string) error {
-	data, err := sevenZipAssets.ReadFile(embeddedPath)
-	if err != nil {
-		return err
-	}
-	if info, statErr := os.Stat(destPath); statErr == nil && info.Size() == int64(len(data)) {
-		return nil
-	}
-	return os.WriteFile(destPath, data, 0o755)
 }
 
 // currentSevenZipVersion runs the cached 7z.exe's own "i" (info) command and

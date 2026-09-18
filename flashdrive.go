@@ -400,6 +400,7 @@ func (a *App) SyncDriversFromFlashDrive(letter string) error {
 type stepProgressFunc func(step string, progress CopyProgress)
 
 func writePortablePDTTo(ctx context.Context, letter, exeName string, exeData []byte, progress stepProgressFunc) error {
+	flashdrive.DisableIndexing(letter)
 	if err := os.WriteFile(filepath.Join(letter, exeName), exeData, 0o755); err != nil {
 		return fmt.Errorf("writing %s: %w", exeName, err)
 	}
@@ -440,15 +441,16 @@ func writePortablePDTTo(ctx context.Context, letter, exeName string, exeData []b
 		errs = append(errs, fmt.Errorf("creating Configs: %w", err))
 	}
 
-	if dirExists(sevenZipToolsDir()) {
-		toolsProgress := func(p CopyProgress) {
-			if progress != nil {
-				progress("7-Zip tools", p)
-			}
-		}
-		if err := copyTreeMerge(ctx, filepath.Join(letter, "tools", "7zip"), sevenZipToolsDir(), toolsProgress); err != nil {
-			errs = append(errs, fmt.Errorf("copying 7-Zip tools: %w", err))
-		}
+	// Written straight from this build's own embedded copy (sevenzipassets.go),
+	// not copied from sevenZipToolsDir()'s per-machine cache - that cache is a
+	// Windows-only concept (macOS never populates or even defines one), but
+	// every platform's build embeds the same 7-Zip assets, so a flash drive
+	// gets a real Windows tools/7zip folder regardless of which platform
+	// created it.
+	if err := writeSevenZipAssets(filepath.Join(letter, "tools", "7zip")); err != nil {
+		errs = append(errs, fmt.Errorf("writing 7-Zip tools: %w", err))
+	} else if progress != nil {
+		progress("7-Zip tools", CopyProgress{DoneFiles: 1, TotalFiles: 1, DoneBytes: 1, TotalBytes: 1})
 	}
 	return errors.Join(errs...)
 }
@@ -462,6 +464,7 @@ func writePortablePDTTo(ctx context.Context, letter, exeName string, exeData []b
 // the toolbar's Sync button (drivers only, no exe/Configs/tools, for topping
 // up a flash drive that already exists).
 func syncDriversTo(ctx context.Context, letter string, onProgress func(CopyProgress)) error {
+	flashdrive.DisableIndexing(letter)
 	driversDest := filepath.Join(letter, "Drivers")
 	src := driversRoot()
 	if samePath(driversDest, src) {

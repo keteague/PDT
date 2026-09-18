@@ -25,6 +25,25 @@ const PdtInfCacheDirName = ".pdt-infcache"
 // all rather than round-tripped as if it were real driver content.
 const DSStoreFileName = ".DS_Store"
 
+// IsIgnoredDotEntry reports whether name - a single path segment, a file or
+// directory's own bare name rather than a full path - is a dotfile/
+// dotfolder that Sync (flash-drive Write/Sync and Cloud Sync alike) should
+// skip entirely: .DS_Store, a stray .git a technician's own tooling left in
+// a Drivers folder, or anything else dot-prefixed - none of it is real
+// driver content, and a Drivers folder is exactly the kind of place stray
+// tooling clutter accumulates over time on a long-lived shared laptop.
+//
+// PdtInfCacheDirName is the sole exception, despite being dot-prefixed
+// itself (deliberately, so it reads to a technician browsing the folder
+// directly as "PDT's own, not a real driver" - see its own doc comment):
+// its contents are real, useful catalog metadata (the .inf-only extraction
+// cache GitHub issue #10's own catalog rework builds), not disposable
+// clutter, so it and everything under it should travel with the rest of the
+// folder rather than being silently dropped.
+func IsIgnoredDotEntry(name string) bool {
+	return name != PdtInfCacheDirName && strings.HasPrefix(name, ".")
+}
+
 // infCacheDestDir returns the .inf-only cache destination for archivePath
 // (found somewhere under root, possibly nested) -
 // root/PdtInfCacheDirName/<archivePath's own path relative to root, with its

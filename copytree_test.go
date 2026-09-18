@@ -419,11 +419,14 @@ func TestCopyTreeMerge_SkipsExtractedSiblingFolder(t *testing.T) {
 	}
 }
 
-// TestCopyTreeMerge_SkipsPdtInfCacheFolder guards the other half of issue
-// #10's skip rule - the .inf-only metadata cache the catalog rework writes
-// into is never synced either, regardless of whether it happens to
-// correspond to any specific archive by name.
-func TestCopyTreeMerge_SkipsPdtInfCacheFolder(t *testing.T) {
+// TestCopyTreeMerge_CopiesPdtInfCacheFolder guards PdtInfCacheDirName's own
+// exception to the general dotfile/dotfolder skip rule (see
+// TestCopyTreeMerge_SkipsDotEntries) - unlike an archive's extracted
+// sibling folder, the .inf-only metadata cache the catalog rework writes
+// into is real, useful content, and both Write to Flash Drive and Sync
+// (both built on copyTreeMerge) must carry it and everything under it along
+// with the rest of the folder rather than dropping it.
+func TestCopyTreeMerge_CopiesPdtInfCacheFolder(t *testing.T) {
 	src := t.TempDir()
 	cacheDir := filepath.Join(src, driver.PdtInfCacheDirName, "Driver")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -444,8 +447,46 @@ func TestCopyTreeMerge_SkipsPdtInfCacheFolder(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dest, "real.txt")); err != nil {
 		t.Errorf("expected the unrelated real file to still be copied: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dest, driver.PdtInfCacheDirName)); !os.IsNotExist(err) {
-		t.Errorf("expected %s to be skipped entirely, got err=%v", driver.PdtInfCacheDirName, err)
+	if got, err := os.ReadFile(filepath.Join(dest, driver.PdtInfCacheDirName, "Driver", "driver.inf")); err != nil {
+		t.Errorf("expected %s and its contents to be copied, got err=%v", driver.PdtInfCacheDirName, err)
+	} else if string(got) != "cached inf" {
+		t.Errorf("got %q, want %q", got, "cached inf")
+	}
+}
+
+// TestCopyTreeMerge_SkipsDotEntries guards the general dotfile/dotfolder
+// skip rule (driver.IsIgnoredDotEntry) - anything dot-prefixed other than
+// PdtInfCacheDirName itself (see TestCopyTreeMerge_CopiesPdtInfCacheFolder)
+// is clutter, not real driver content, and must never be transferred.
+func TestCopyTreeMerge_SkipsDotEntries(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, ".gitignore"), []byte("*.log"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dotDir := filepath.Join(src, ".git", "objects")
+	if err := os.MkdirAll(dotDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dotDir, "pack"), []byte("git internals"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "real.txt"), []byte("real file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := copyTreeMerge(context.Background(), dest, src, nil); err != nil {
+		t.Fatalf("copyTreeMerge failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dest, "real.txt")); err != nil {
+		t.Errorf("expected the unrelated real file to still be copied: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".gitignore")); !os.IsNotExist(err) {
+		t.Errorf("expected .gitignore to be skipped, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".git")); !os.IsNotExist(err) {
+		t.Errorf("expected .git/ to be skipped entirely, got err=%v", err)
 	}
 }
 

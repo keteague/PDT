@@ -497,8 +497,24 @@ table.grid td.checkbox-cell {
     color: #fff;
 }
 
+.log-resize-handle {
+    flex: none;
+    height: 6px;
+    margin: -3px 0;
+    background: transparent;
+    cursor: row-resize;
+    position: relative;
+    z-index: 2;
+}
+
+.log-resize-handle:hover,
+.log-resize-handle.dragging {
+    background: #3f5978;
+}
+
 .log-panel {
     height: 200px;
+    flex: none;
     display: flex;
     flex-direction: column;
     background: #10182300;

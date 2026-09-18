@@ -131,3 +131,21 @@ func FormatExFAT(mountPoint string) error {
 	}
 	return nil
 }
+
+// DisableIndexing turns off Spotlight indexing for mountPoint (e.g.
+// "/Volumes/MYDRIVE") via `mdutil -i off`. Confirmed live: macOS indexes a
+// newly-written external volume by default, and mds_stores actively
+// crawling the very files Write to Flash Drive/Sync is writing competes for
+// I/O against the copy itself on a real (slow, latency-bound) USB device -
+// measured live as a meaningful share of the run-to-run slowdown/variance
+// on a real flash drive. Runs as the current user - confirmed live this
+// does not need sudo for a user-mounted removable volume, unlike some other
+// mdutil invocations. Never re-enabled afterward: a flash drive carrying
+// driver packages has no reason to be Spotlight-searchable in the first
+// place. Best-effort and silently ignored on failure (read-only mount,
+// unsupported filesystem, older macOS) - indexing being left on is a
+// performance issue, never a correctness one, so it must never block or
+// fail the write it's optimizing.
+func DisableIndexing(mountPoint string) {
+	_ = exec.Command("mdutil", "-i", "off", mountPoint).Run()
+}

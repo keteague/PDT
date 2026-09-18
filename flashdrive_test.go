@@ -121,7 +121,11 @@ func TestWritePortablePDTTo_RepeatWriteDoesNotDropRealDrivers(t *testing.T) {
 // TestWritePortablePDTTo_CopiesSevenZipTools guards the "USB drive should
 // include tools (7-zip) in case it's needed" request - a portable copy
 // should be fully self-contained, not rely on the destination computer
-// already having 7z.exe cached from some other PDT install.
+// already having 7z.exe cached from some other PDT install. Written
+// straight from this build's own embedded copy (writeSevenZipAssets,
+// sevenzipassets.go) rather than any per-machine cache, so this is fully
+// deterministic - every platform's build embeds the same assets, including
+// a macOS build, which has no such cache to depend on at all.
 func TestWritePortablePDTTo_CopiesSevenZipTools(t *testing.T) {
 	oldDrivers, oldConfigs := currentDriversBasePath, currentConfigsBasePath
 	defer func() {
@@ -130,23 +134,14 @@ func TestWritePortablePDTTo_CopiesSevenZipTools(t *testing.T) {
 	currentDriversBasePath = t.TempDir()
 	currentConfigsBasePath = filepath.Join(t.TempDir(), "Configs-does-not-exist")
 
-	// sevenZipToolsDir() itself isn't overridable (it always resolves to the
-	// real per-machine cache dir), so this only meaningfully exercises the
-	// copy step if that real directory happens to exist on the machine
-	// running the test - matching how ensureSevenZipExtracted would have
-	// already populated it during a real App.startup(). Skips cleanly
-	// otherwise rather than asserting something environment-dependent.
-	toolsDir := sevenZipToolsDir()
-	if !dirExists(toolsDir) {
-		t.Skip("7-Zip tools cache not present on this machine - nothing to verify")
-	}
-
 	dest := t.TempDir()
 	if err := writePortablePDTTo(context.Background(), dest, "PDT.exe", []byte("fake exe bytes"), nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dest, "tools", "7zip", "7z.exe")); err != nil {
-		t.Errorf("expected 7z.exe to be copied onto the flash drive: %v", err)
+	for _, name := range []string{"7z.exe", "7z.dll", "License.txt"} {
+		if _, err := os.Stat(filepath.Join(dest, "tools", "7zip", name)); err != nil {
+			t.Errorf("expected %s to be written onto the flash drive: %v", name, err)
+		}
 	}
 }
 

@@ -1,0 +1,182 @@
+name: Release
+
+# Tag-only: pushing a v<version> tag (e.g. v0.9.27, matching the README's own
+# "bump VERSION, wails build, create a GitHub Release tagged v<AppVersion>"
+# convention) is what builds and ships a release - an ordinary push/PR gets
+# no CI here at all. validate-version enforces that the tag actually matches
+# the repo-root VERSION file (version.go's own single source of truth)
+# before either platform build ever starts, so a forgotten version bump
+# fails fast instead of shipping a mismatched build.
+on:
+  push:
+    tags:
+      - 'v*'
+
+# contents: write is required for the release job's `gh release create` to
+# publish assets against this repo using the default GITHUB_TOKEN - no extra
+# PAT/secret needed.
+permissions:
+  contents: write
+
+# Pin the Wails CLI to the exact version go.mod's own
+# github.com/wailsapp/wails/v2 library dependency is on, not @latest - keeps
+# the tool that packages the app in lockstep with the library baked into it,
+# rather than letting CI silently drift onto a newer CLI release. Bump this
+# alongside go.mod's own wails dependency, never independently.
+env:
+  WAILS_CLI_VERSION: v2.15.0
+
+jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF#refs/tags/v}"
+          file_version="$(tr -d '[:space:]' < VERSION)"
+          if [ "$tag_version" != "$file_version" ]; then
+            echo "::error::Tag v$tag_version does not match the VERSION file ($file_version) - bump VERSION (and wails.json's info.productVersion) together before tagging a release."
+            exit 1
+          fi
+          echo "version=$file_version" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    needs: validate-version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Wails CLI
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@"${WAILS_CLI_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # README's own "Building / testing" commands - cmd/pdtdebugmac is
+      # darwin-only (its own //go:build tag), so it contributes no files
+      # here and needs no exclusion the way cmd/pdtdebug does on macOS below.
+      - name: Build and test
+        shell: bash
+        run: |
+          go build ./...
+          go vet ./...
+          go test ./...
+      # wails.json's frontend:install/frontend:build wire up npm - wails
+      # build itself installs frontend deps, builds the frontend, generates
+      # bindings, and compiles/packages PDT.exe, all in this one step.
+      - name: wails build
+        run: wails build
+      # Not preinstalled on windows-latest - the README's own "Building the
+      # installer" section names Inno Setup 6 as a prerequisite.
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files (x86)\Inno Setup 6'
+      - name: Build installer
+        shell: cmd
+        run: iscc installer\pdt.iss
+      # Staged into a flat dist/ dir rather than uploading build/bin/*
+      # directly, so the artifact's own internal layout is unambiguous
+      # (upload-artifact's path-flattening behavior across multiple listed
+      # paths is easy to get subtly wrong) - the release job below downloads
+      # this expecting exactly dist/PDT.exe and dist/PDT-Setup-*.exe.
+      - name: Stage release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp build/bin/PDT.exe dist/
+          cp build/bin/PDT-Setup-*.exe dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          # PDT.exe is uploaded under its own exact name deliberately -
+          # About's "Check for Updates" (internal/update, CheckForUpdate)
+          # looks for a release asset named exactly "PDT.exe".
+          path: dist/*
+          if-no-files-found: error
+
+  build-macos:
+    needs: validate-version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Wails CLI
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@"${WAILS_CLI_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      # Same as the Windows job's "Build and test" step, except cmd/pdtdebug
+      # is the one excluded here instead - it's Windows-only (imports
+      # internal/printer/windows and golang.org/x/sys/windows directly, with
+      # no build tag of its own to make that implicit), so building ./...
+      # unmodified fails on a macOS runner. cmd/pdtdebugmac (this platform's
+      # own equivalent throwaway debug CLI) builds and vets normally.
+      - name: Build and test
+        run: |
+          set -euo pipefail
+          # A plain array via `mapfile`/`readarray` needs bash 4+, which
+          # macOS's own ancient system /bin/bash (3.2, still what `run:`
+          # resolves to without an explicit newer shell) doesn't have - this
+          # read loop works on bash 3 too.
+          pkgs=()
+          while IFS= read -r pkg; do
+            pkgs+=("$pkg")
+          done < <(go list ./... 2>/dev/null | grep -v '^PDT/cmd/pdtdebug$')
+          go build "${pkgs[@]}"
+          go vet "${pkgs[@]}"
+          go test "${pkgs[@]}"
+      - name: wails build
+        run: wails build
+      # Deliberately NOT build-mac.sh: that script's extra re-sign step
+      # exists only for issue #9's own local-only "PDT Local Dev" self-signed
+      # identity, generated once by hand on Ken's own machine - it can't
+      # exist on a GitHub-hosted runner. A plain `wails build` already
+      # ad-hoc-signs the .app on its own (confirmed live), which is enough
+      # to produce a working, runnable build - but privileged elevation
+      # (Deploy's own admin prompt) will still hit issue #9's AMFI SIGKILL
+      # on whatever machine opens this release build, exactly as build-mac.sh's
+      # own doc comment describes, unless/until a real paid Developer ID
+      # signs it instead.
+      - name: Zip the app bundle
+        run: ditto -c -k --sequesterRsrc --keepParent build/bin/PDT.app build/bin/PDT-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: build/bin/PDT-macOS.zip
+          if-no-files-found: error
+
+  release:
+    needs: [validate-version, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ github.ref_name }}" \
+            dist/windows-build/PDT.exe \
+            dist/windows-build/PDT-Setup-*.exe \
+            dist/macos-build/PDT-macOS.zip \
+            --repo "${{ github.repository }}" \
+            --title "PDT ${{ needs.validate-version.outputs.version }}" \
+            --generate-notes

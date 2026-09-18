@@ -1427,9 +1427,12 @@ name; the process finishes on its own a moment later and its renamed-away `.old`
 the next time the app starts.
 
 **For this to find anything**, a release actually has to exist: bump `AppVersion` (`version.go`) and
-`wails.json`'s `info.productVersion` together, `wails build`, then create a GitHub Release tagged
-`v<AppVersion>` with `build/bin/PDT.exe` uploaded as a release asset named exactly `PDT.exe` (the exact
-name `CheckForUpdate` looks for).
+`wails.json`'s `info.productVersion` together, then push a tag `v<AppVersion>` (e.g. `v0.9.27`).
+`.github/workflows/release.yml` takes it from there - it refuses to run at all if the tag doesn't match
+the `VERSION` file, then builds both platforms (Windows: `wails build` + the Inno Setup installer;
+macOS: `wails build`, ad-hoc signed only - see the workflow's own comments on why `build-mac.sh`'s extra
+signing step can't run in CI) and creates the GitHub Release itself, with `PDT.exe` uploaded under that
+exact name (the one `CheckForUpdate` looks for), alongside the Windows installer and a zipped `PDT.app`.
 
 ### Keeping the bundled 7-Zip up to date (`sevenzip.go`, About tab)
 

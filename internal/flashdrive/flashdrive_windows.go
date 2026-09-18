@@ -108,3 +108,12 @@ func FormatExFAT(letter string) error {
 	}
 	return nil
 }
+
+// DisableIndexing is a no-op on Windows - see flashdrive_darwin.go's own
+// doc comment for what this does there (turning off Spotlight indexing on
+// the target volume, to stop it competing with the copy for I/O). Windows
+// Search does not index removable drives by default, so there is no
+// equivalent per-volume knob worth touching here. Exists purely so the
+// cross-platform caller in the main package's flashdrive.go doesn't need
+// its own platform branch.
+func DisableIndexing(letter string) {}

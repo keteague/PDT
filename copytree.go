@@ -139,21 +139,21 @@ func collectCopyJobs(destDir, srcAbs, rel string, ancestors map[string]bool, job
 		*errs = append(*errs, fmt.Errorf("%s: %w", srcAbs, err))
 		return
 	}
-	// extractedSiblings/pdtInfCache: folders skipped entirely, never copied -
-	// both are derived, re-creatable artifacts of an archive sitting right
-	// next to them (extractedSiblings: driver.ExtractedSiblingDirs' own doc
-	// comment; pdtInfCacheDirName: the .inf-only metadata cache GitHub issue
-	// #10's own catalog rework builds). Confirmed live a real Drivers folder
-	// was 5.4GB/22,570 files with this sprawl kept forever, vs. ~1.5GB/~25
-	// files for just the archives - skipping it here is most of that win.
-	// .DS_Store (driver.DSStoreFileName): Finder's own per-folder metadata
-	// clutter, never real driver content - skipped below for the same reason.
+	// extractedSiblings: folders skipped entirely, never copied - a derived,
+	// re-creatable artifact of an archive sitting right next to it (see
+	// driver.ExtractedSiblingDirs' own doc comment). Confirmed live a real
+	// Drivers folder was 5.4GB/22,570 files with this sprawl kept forever,
+	// vs. ~1.5GB/~25 files for just the archives - skipping it here is most
+	// of that win. Every other dotfile/dotfolder (.DS_Store, a stray .git,
+	// etc.) is skipped too, except PdtInfCacheDirName itself - see
+	// driver.IsIgnoredDotEntry's own doc comment for why that one's real
+	// content, not clutter.
 	extractedSiblings := driver.ExtractedSiblingDirs(srcAbs, entries)
 	for _, entry := range entries {
-		if entry.IsDir() && (extractedSiblings[entry.Name()] || entry.Name() == driver.PdtInfCacheDirName) {
+		if entry.IsDir() && extractedSiblings[entry.Name()] {
 			continue
 		}
-		if entry.Name() == driver.DSStoreFileName {
+		if driver.IsIgnoredDotEntry(entry.Name()) {
 			continue
 		}
 		childAbs := filepath.Join(srcAbs, entry.Name())
@@ -373,9 +373,6 @@ func (c ctxReader) Read(p []byte) (int, error) {
 // was actually downloaded/built) survives a trip through Sync/Write to
 // Flash Drive instead of every copy looking like it was just created today.
 func copyFile(ctx context.Context, destPath, srcPath string, srcModTime time.Time, buf []byte) error {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		return err
-	}
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return err

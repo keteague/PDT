@@ -4,6 +4,49 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-17 (v0.9.28) - Resizable log panel, macOS flash-drive fixes (7-Zip tools, Spotlight slowdown), .pdt-infcache now travels with Sync, and automated cross-platform releases
+
+### Added
+- A drag handle between the grid and the log panel (`#logResizeHandle`, `main.js`/`app.css`) - the
+  log panel was a fixed 200px, with no way to see more of either the grid or the log at once.
+  Height is clamped (80px log minimum, 150px grid minimum) and persisted to `localStorage` across
+  restarts.
+- `.github/workflows/release.yml` - pushing a `v<version>` tag now builds both platforms
+  (`wails build` + Inno Setup on Windows, `wails build` + a zipped `.app` on macOS) and publishes
+  a GitHub Release itself, with `PDT.exe` uploaded under that exact name (`CheckForUpdate`'s own
+  lookup) alongside the installer and the macOS zip - replaces the fully manual "build locally,
+  create the release by hand" process this README documented until now. `validate-version` refuses
+  to run either build at all if the tag doesn't match the `VERSION` file. The macOS build is
+  ad-hoc signed only - issue #9's own local-only "PDT Local Dev" signing workaround can't exist on
+  a GitHub-hosted runner, so privileged Deploy will still hit its AMFI SIGKILL on whatever machine
+  opens this build until a real Developer ID signs it instead.
+
+### Fixed
+- **macOS: Write to Flash Drive never included the Windows `tools/7zip` folder** (`7z.exe`/
+  `7z.dll`/`License.txt`) a portable copy needs to extract Lexmark's self-extracting RAR package -
+  `writePortablePDTTo` copied it from `sevenZipToolsDir()`, a Windows-only per-machine cache
+  `app_darwin.go` always resolved to `""`. The embedded 7-Zip assets (`sevenzip_windows.go`) moved
+  into a new cross-platform file (`sevenzipassets.go`) so a macOS build carries the same bundled
+  bytes too - it never runs them, but Write to Flash Drive now writes them straight onto the flash
+  drive on every platform, so a flash drive built on a Mac is just as usable on a locked-down
+  Windows machine as one built on Windows itself.
+- **macOS: Write to Flash Drive/Sync to a real USB drive was slower than it needed to be** -
+  macOS indexes a newly-written external volume via Spotlight by default, and `mds_stores`
+  actively crawling the very files being written competes for I/O against the copy itself.
+  `flashdrive.DisableIndexing` (`mdutil -i off`, no sudo needed for a user-mounted volume) now
+  runs before both Write to Flash Drive and Sync. Measured live against a real 15GB USB drive and
+  a real ~7,000-file/719MB driver subset, two runs each: indexing enabled (214s, 212s) vs.
+  disabled (195s, 179s) - a consistent, repeatable ~12-16% speedup, not noise.
+
+### Changed
+- **`.pdt-infcache` is no longer excluded from Write to Flash Drive, Sync, or Cloud Sync** - it
+  used to be skipped entirely, the same as an archive's derived "extracted sibling" folder, but
+  unlike that folder it's real, useful catalog metadata (the `.inf`-only extraction cache issue
+  #10's catalog rework builds), not disposable clutter. Every *other* dotfile/dotfolder
+  (`.DS_Store`, a stray `.git`, etc.) is now skipped too, generalized from the old `.DS_Store`-only
+  check (`driver.IsIgnoredDotEntry`) - both `copytree.go`'s flash-drive/Sync copy and Cloud Sync's
+  `internal/cloudsync/plan.go` (local walk and remote listing alike) enforce the same rule.
+
 ## 2026-09-16 (v0.9.27) - Windows: fixed a cross-platform test gap in the write-protected-media fallback test, first Windows build since v0.9.22
 
 Pulled in v0.9.22 through v0.9.26 (macOS-side work: lazy zip extraction, real Lexmark support,

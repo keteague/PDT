@@ -97,12 +97,6 @@ func (a *App) newPlatformDeployer() printer.Deployer {
 	return pdtdarwin.NewDeployer(catalog, modelIndex)
 }
 
-// sevenZipToolsDir: no bundled 7-Zip on macOS at all (sevenzip_windows.go) -
-// "" makes writePortablePDTTo's own dirExists(sevenZipToolsDir()) guard
-// (flashdrive.go) naturally skip copying it onto a flash drive, with no
-// platform branch needed in that shared function itself.
-func sevenZipToolsDir() string { return "" }
-
 // postSyncDriversHook: nothing needed here yet, matching platformStartup's
 // own reasoning - there's no macOS Drivers scaffold built yet, and unlike
 // Windows' .inf packages, a .dmg/.pkg driver package needs no pre-extraction

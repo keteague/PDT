@@ -77,6 +77,26 @@ type remoteObject struct {
 // itself, but never let that freeze the button indefinitely" reasoning
 // cloudSyncCancelGracePeriod (cloudsync_app.go) already applies to the
 // per-file transfer join, just one level further out.
+// isIgnoredRemotePath applies the same dotfile/dotfolder exclusion
+// walkLocal enforces locally (see driver.IsIgnoredDotEntry) to a remote
+// object's own full relative key - listRemote has no per-directory walk to
+// hook a single-entry check into the way walkLocal does, so it checks every
+// path segment instead. Once a PdtInfCacheDirName segment is seen, every
+// segment under it is let through unfiltered rather than checked further -
+// the same "and its contents" exception IsIgnoredDotEntry applies to one
+// entry name, extended across the rest of a full path.
+func isIgnoredRemotePath(rel string) bool {
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == driver.PdtInfCacheDirName {
+			return false
+		}
+		if driver.IsIgnoredDotEntry(seg) {
+			return true
+		}
+	}
+	return false
+}
+
 func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (map[string]remoteObject, error) {
 	out := map[string]remoteObject{}
 	token := ""
@@ -93,12 +113,15 @@ func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (m
 			if rel == "" {
 				continue
 			}
-			// Ignore any .DS_Store already sitting in the bucket from before
-			// this exclusion existed - walkLocal never lists one locally
-			// anymore (driver.DSStoreFileName), so leaving a stray one
-			// listed here would just make it look like a "Download" instead
-			// of correctly disappearing from the tree entirely.
-			if rel == driver.DSStoreFileName || strings.HasSuffix(rel, "/"+driver.DSStoreFileName) {
+			// Ignore any dotfile/dotfolder (.DS_Store, a stray .git, etc.)
+			// already sitting in the bucket from before this exclusion
+			// existed - walkLocal never lists one locally anymore (see
+			// driver.IsIgnoredDotEntry), so leaving one listed here would
+			// just make it look like a "Download" instead of correctly
+			// disappearing from the tree entirely. PdtInfCacheDirName and
+			// its contents are the one exception - real content, not
+			// clutter - so isIgnoredRemotePath lets those through.
+			if isIgnoredRemotePath(rel) {
 				continue
 			}
 			out[rel] = remoteObject{size: obj.Size}
@@ -124,13 +147,16 @@ func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (m
 // filepath.WalkDir - needed so driver.ExtractedSiblingDirs can see a whole
 // directory's sibling list at once to decide what to skip, the same reason
 // copytree.go's own collectCopyJobs is shaped this way. An archive's own
-// extracted sibling folder (Foo.zip -> Foo/) and the .inf-only metadata
-// cache (driver.PdtInfCacheDirName) are both derived, re-creatable
-// artifacts - Cloud Sync must not upload them any more than flash-drive
-// Sync does (GitHub issue #10: a real Drivers folder was 5.4GB/22,570 files
-// with both kept forever, vs. ~1.5GB/~25 files for just the archives).
-// Skipping the directory outright, rather than filtering its contents out
-// after the fact, also avoids paying the walk cost for whatever's inside it.
+// extracted sibling folder (Foo.zip -> Foo/) is a derived, re-creatable
+// artifact - Cloud Sync must not upload it any more than flash-drive Sync
+// does (GitHub issue #10: a real Drivers folder was 5.4GB/22,570 files with
+// both extracted siblings and the .inf-only cache kept forever, vs.
+// ~1.5GB/~25 files for just the archives). Skipping the directory outright,
+// rather than filtering its contents out after the fact, also avoids paying
+// the walk cost for whatever's inside it. Every other dotfile/dotfolder is
+// skipped the same way, except PdtInfCacheDirName itself - see
+// driver.IsIgnoredDotEntry's own doc comment for why that one's real
+// content, not clutter, and travels with the rest of the folder.
 func listLocal(root string) map[string]int64 {
 	out := map[string]int64{}
 	walkLocal(root, "", out)
@@ -144,10 +170,10 @@ func walkLocal(absDir, relDir string, out map[string]int64) {
 	}
 	extractedSiblings := driver.ExtractedSiblingDirs(absDir, entries)
 	for _, entry := range entries {
-		if entry.IsDir() && (extractedSiblings[entry.Name()] || entry.Name() == driver.PdtInfCacheDirName) {
+		if entry.IsDir() && extractedSiblings[entry.Name()] {
 			continue
 		}
-		if entry.Name() == driver.DSStoreFileName {
+		if driver.IsIgnoredDotEntry(entry.Name()) {
 			continue
 		}
 		childAbs := filepath.Join(absDir, entry.Name())

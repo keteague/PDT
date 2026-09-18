@@ -4,7 +4,15 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
-## 2026-09-17 (v0.9.28) - Resizable log panel, macOS flash-drive fixes (7-Zip tools, Spotlight slowdown), .pdt-infcache now travels with Sync, and automated cross-platform releases
+## 2026-09-17 (v0.9.29) - Resizable log panel, macOS flash-drive fixes (7-Zip tools, Spotlight slowdown), .pdt-infcache now travels with Sync, and automated cross-platform releases
+
+(v0.9.28 was tagged but never published - its own first real CI run under the new
+`release.yml` below failed on both platforms before either build finished: `go build`/`vet`/`test`
+ran before `wails build`, but `main.go`'s `//go:embed all:frontend/dist` needs `frontend/dist` to
+already exist, and it's gitignored - only `wails build`'s own pipeline produces it. Fixed by
+reordering; the macOS job also hit a real bash 3.2 "unbound variable" bug referencing an array
+built dynamically via `go list`, fixed by listing the exact package paths instead. This release is
+that fix plus everything below, retagged.)
 
 ### Added
 - A drag handle between the grid and the log panel (`#logResizeHandle`, `main.js`/`app.css`) - the

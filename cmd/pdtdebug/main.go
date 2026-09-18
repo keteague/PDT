@@ -182,6 +182,18 @@ func main() {
 			os.Exit(1)
 		}
 		err = cmdMacPPDs(os.Args[2], os.Args[3])
+	case "maccatalog":
+		if len(os.Args) != 3 {
+			usage()
+			os.Exit(1)
+		}
+		err = cmdMacCatalog(os.Args[2])
+	case "macmodels":
+		if len(os.Args) != 3 {
+			usage()
+			os.Exit(1)
+		}
+		err = cmdMacModels(os.Args[2])
 	default:
 		usage()
 		os.Exit(1)
@@ -241,7 +253,15 @@ Commands:
   macppds <path> <mfg>      driver.PackagePPDNickNames against a real .pkg - the
                             full real chain (expandPkg + cpioExtractGlob, Phases
                             2+3 together) BuildMacModelIndex itself uses to find
-                            every real PPD's own *NickName`)
+                            every real PPD's own *NickName
+  maccatalog <driversRoot>  driver.BuildMacCatalog against a real Drivers/macOS
+                            tree - lists every package/OpenPrinting PPD found
+                            per manufacturer (GitHub issue #3 Phase 4)
+  macmodels <driversRoot>   driver.BuildMacModelIndex against a real Drivers/macOS
+                            tree - the real end-to-end catalog build (writes
+                            catalog.<mfg>.json under driversRoot/macOS), same as
+                            what loadCatalog now runs on every Windows startup/
+                            Refresh (GitHub issue #3 Phase 4)`)
 }
 
 func cmdEnumPrinters() error {
@@ -885,5 +905,72 @@ func cmdMacPPDs(path, manufacturer string) error {
 		fmt.Println(n)
 	}
 	fmt.Printf("(%d PPD(s) found)\n", len(names))
+	return nil
+}
+
+// cmdMacCatalog mirrors cmd/pdtdebugmac's own "catalog" subcommand - lists
+// every package/OpenPrinting PPD driver.BuildMacCatalog finds under a real
+// Drivers/macOS tree, for hand-inspection before trusting BuildMacModelIndex
+// against the same tree.
+func cmdMacCatalog(driversRoot string) error {
+	if err := ensureDebugSevenZip(); err != nil {
+		return err
+	}
+	cat, err := driver.BuildMacCatalog(driversRoot)
+	if err != nil {
+		return fmt.Errorf("BuildMacCatalog: %w", err)
+	}
+	for _, mfg := range driver.Manufacturers {
+		pkgs := cat.Packages[mfg]
+		ppds := cat.OpenPrintingPPDs[mfg]
+		if len(pkgs) == 0 && len(ppds) == 0 {
+			continue
+		}
+		fmt.Printf("%s:\n", mfg)
+		for _, p := range pkgs {
+			fmt.Printf("  package: %s (kind=%v, modtime=%s)\n", p.Path, p.Kind, p.ModTime.Format("2006-01-02 15:04:05"))
+		}
+		for _, p := range ppds {
+			fmt.Printf("  OpenPrinting PPD: %s\n", p)
+		}
+	}
+	return nil
+}
+
+// cmdMacModels mirrors cmd/pdtdebugmac's own "models" subcommand - the real,
+// full BuildMacCatalog + BuildMacModelIndex chain against a real Drivers/
+// macOS tree, exactly what loadCatalog (app_windows.go, GitHub issue #3
+// Phase 4) now runs on every Windows startup/Refresh - writes real
+// catalog.<mfg>.json files under driversRoot/macOS as a side effect. Run
+// twice in a row to see the cached/skip-reinspection path (IsCurrent) take
+// over on the second run.
+func cmdMacModels(driversRoot string) error {
+	if err := ensureDebugSevenZip(); err != nil {
+		return err
+	}
+	cat, err := driver.BuildMacCatalog(driversRoot)
+	if err != nil {
+		return fmt.Errorf("BuildMacCatalog: %w", err)
+	}
+	ppdCacheDir := filepath.Join(os.TempDir(), "pdtdebug-macppdcache")
+	macRoot := filepath.Join(driversRoot, "macOS")
+	start := time.Now()
+	index, changes := driver.BuildMacModelIndex(cat, macRoot, ppdCacheDir, true)
+	fmt.Printf("BuildMacModelIndex took %s (each manufacturer's own catalog.<mfg>.json under %s)\n\n", time.Since(start), macRoot)
+
+	if len(index) == 0 {
+		fmt.Println("BuildMacModelIndex returned nothing at all for any manufacturer.")
+	}
+	for mfg, byModel := range index {
+		fmt.Printf("%s: %d model(s)\n", mfg, len(byModel))
+	}
+
+	fmt.Println("\n--- model changes vs. the previous catalog.json, if any ---")
+	if len(changes) == 0 {
+		fmt.Println("(none - first-ever build, or nothing changed since the last one)")
+	}
+	for _, c := range changes {
+		fmt.Println(c)
+	}
 	return nil
 }

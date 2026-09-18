@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"PDT/internal/driver"
 	"PDT/internal/flashdrive"
@@ -44,20 +45,70 @@ func (a *App) platformStartup() {
 // those flash drives carry a physical write-protect switch, so it's safe to
 // assume everything on one is already extracted by the time PDT itself runs
 // from it. A local/fixed-drive install still gets the full extracting scan.
+//
+// Also builds the macOS-shaped catalog (driver.MacCatalog/MacModelIndex),
+// exactly the same two calls app_darwin.go's own loadCatalog makes, now
+// possible on Windows too (GitHub issue #3): the four OS-tool seams
+// indexFamilyPackage's own call chain depends on (openDmg, expandPkg,
+// cpioExtractGlob/cpioExtractAll/cpioListEntries) all have real Windows-
+// native implementations as of Phases 1-3. Catalog-file-only by design (Ken's
+// own explicit scope decision) - a.macCatalog/a.macModelIndex are populated
+// here exactly like app_darwin.go does, but nothing in drivercatalog_windows.go
+// or the frontend ever reads them, so this has no UI effect at all: the real
+// deliverable is catalog.<mfg>.json getting written under driversRoot/macOS,
+// ready to travel to a real Mac via the existing Sync/Cloud Sync machinery.
+// Best-effort: a failure building the mac side doesn't fail loadCatalog
+// itself (the Windows .inf catalog this function's own callers actually
+// depend on is unaffected either way) - matches BuildMacCatalog/
+// BuildMacModelIndex's own established "index what's readable, degrade for
+// the rest" discipline, just one level up.
 func (a *App) loadCatalog(driversRoot string) error {
 	buildFn := driver.BuildCatalog
-	if exe, err := os.Executable(); err == nil && flashdrive.IsRemovableDrive(exe) {
+	isRemovable := false
+	if exe, err := os.Executable(); err == nil {
+		isRemovable = flashdrive.IsRemovableDrive(exe)
+	}
+	if isRemovable {
 		buildFn = driver.BuildCatalogNoExtract
 	}
 	catalog, err := buildFn(driversRoot)
 	if err != nil {
 		return err
 	}
+
+	macCatalog, macModelIndex, macChanges := a.loadMacCatalogBestEffort(driversRoot, !isRemovable)
+
 	a.catalogMu.Lock()
 	a.catalog = catalog
 	a.modelIndex = driver.BuildModelIndex(catalog)
+	a.macCatalog = macCatalog
+	a.macModelIndex = macModelIndex
+	a.macModelChanges = macChanges
 	a.catalogMu.Unlock()
 	return nil
+}
+
+// loadMacCatalogBestEffort is loadCatalog's own macOS-side step, split out
+// so a failure there (a missing/corrupt Drivers/macOS tree, a 7z.exe that
+// hasn't been cached yet) degrades to an empty catalog rather than failing
+// the Windows .inf catalog build it runs alongside - mirrors
+// BuildMacCatalog's own "a missing driversRoot or macOS subfolder is an
+// empty catalog, not an error" contract one level up, for the one real
+// failure mode that's new here (driver.BuildMacCatalog itself already
+// returns a real error only for a driversRoot os.ReadDir failure other than
+// not-exist).
+func (a *App) loadMacCatalogBestEffort(driversRoot string, persist bool) (driver.MacCatalog, driver.MacModelIndex, []string) {
+	catalog, err := driver.BuildMacCatalog(driversRoot)
+	if err != nil {
+		return driver.MacCatalog{}, driver.MacModelIndex{}, nil
+	}
+	ppdCacheDir := ""
+	if dir := installedAppDataDir(); dir != "" {
+		ppdCacheDir = filepath.Join(dir, "PPDCache")
+	}
+	macRoot := filepath.Join(driversRoot, "macOS")
+	modelIndex, changes := driver.BuildMacModelIndex(catalog, macRoot, ppdCacheDir, persist)
+	return catalog, modelIndex, changes
 }
 
 // newPlatformDeployer builds this run's Deployer against the current Windows

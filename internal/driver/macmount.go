@@ -11,14 +11,6 @@ import (
 	"strings"
 )
 
-// mountPointRe pulls the mount-point string out of `hdiutil attach -plist`'s
-// XML output. Confirmed against a real vendor image (Kyocera's macOS
-// driver .dmg): only the system-entities dict for the actual mountable
-// volume carries a <key>mount-point</key>, sibling partition-map/scheme
-// entries never do - a plain line-pair regex is enough, no need for a full
-// plist parser for this one field.
-var mountPointRe = regexp.MustCompile(`(?s)<key>mount-point</key>\s*<string>(.*?)</string>`)
-
 // isDmgLikePath reports whether path is a plain .dmg, or a gzip-compressed
 // .dmg.gz - the real shape Toshiba's own current download ships as
 // (confirmed live, 2026-09-13: `hdiutil attach` does NOT auto-detect a plain
@@ -32,9 +24,13 @@ func isDmgLikePath(path string) bool {
 }
 
 // decompressGzipToTemp gunzip-decompresses path into a caller-owned temp
-// file, returning its path plus a cleanup that removes it - mountDmg's own
-// helper for a ".dmg.gz" input, since `hdiutil attach` needs a real,
-// already-decompressed UDIF image on disk to open at all.
+// file, returning its path plus a cleanup that removes it - openDmg's own
+// helper for a ".dmg.gz" input on darwin (macdmgopen_darwin.go), since
+// `hdiutil attach` needs a real, already-decompressed UDIF image on disk to
+// open at all. Pure Go (compress/gzip, no OS dependency) - shared as-is by
+// the Windows openDmg (macdmgopen_windows.go, GitHub issue #3 Phase 1),
+// which needs the identical decompression step before handing a real file
+// to 7z.exe.
 func decompressGzipToTemp(path string) (tmpPath string, cleanup func(), err error) {
 	noop := func() {}
 	f, err := os.Open(path)
@@ -58,45 +54,6 @@ func decompressGzipToTemp(path string) (tmpPath string, cleanup func(), err erro
 		return "", noop, err
 	}
 	return tmp.Name(), func() { os.Remove(tmp.Name()) }, nil
-}
-
-// mountDmg attaches path read-only and not in the Finder (-nobrowse), and
-// returns its mount point plus a detach func that unmounts it - always call
-// detach once done, even on a later error, so a failed driver install
-// doesn't leave a mounted volume behind. Transparently decompresses a
-// ".dmg.gz" path to a temp file first (see decompressGzipToTemp) - the
-// mounted volume still needs that decompressed copy to exist on disk for as
-// long as it stays mounted, so its own cleanup is folded into detach, not
-// run immediately after attaching.
-func mountDmg(path string) (mountPoint string, detach func() error, err error) {
-	attachPath := path
-	tmpCleanup := func() {}
-	if strings.HasSuffix(strings.ToLower(path), ".dmg.gz") {
-		decompressed, cleanup, derr := decompressGzipToTemp(path)
-		if derr != nil {
-			return "", nil, fmt.Errorf("decompressing %s: %w", path, derr)
-		}
-		attachPath = decompressed
-		tmpCleanup = cleanup
-	}
-
-	out, err := exec.Command("hdiutil", "attach", "-nobrowse", "-readonly", "-plist", attachPath).Output()
-	if err != nil {
-		tmpCleanup()
-		return "", nil, fmt.Errorf("mounting %s: %w", path, err)
-	}
-	m := mountPointRe.FindSubmatch(out)
-	if m == nil {
-		tmpCleanup()
-		return "", nil, fmt.Errorf("mounting %s: no mountable volume found in hdiutil output", path)
-	}
-	mountPoint = string(m[1])
-	detach = func() error {
-		err := exec.Command("hdiutil", "detach", mountPoint, "-quiet").Run()
-		tmpCleanup()
-		return err
-	}
-	return mountPoint, detach, nil
 }
 
 // findFirstByExt walks root looking for the first file whose extension
@@ -214,7 +171,7 @@ func locateLoosePPDsFromRealPath(path string) (ppdPaths []string, cleanup func()
 		}
 	}
 
-	mountPoint, detach, err := mountDmg(path)
+	mountPoint, detach, err := openDmg(path)
 	if err != nil {
 		return nil, cleanup, err
 	}
@@ -226,7 +183,7 @@ func locateLoosePPDsFromRealPath(path string) (ppdPaths []string, cleanup func()
 
 	var nestedPPDs []string
 	for _, nested := range collectByExt(mountPoint, ".dmg") {
-		nestedMount, nestedDetach, mountErr := mountDmg(nested)
+		nestedMount, nestedDetach, mountErr := openDmg(nested)
 		if mountErr != nil {
 			// Best-effort: one bad nested .dmg (a locale variant that
 			// happens not to mount) shouldn't block collecting PPDs from
@@ -241,6 +198,26 @@ func locateLoosePPDsFromRealPath(path string) (ppdPaths []string, cleanup func()
 	}
 
 	return nil, cleanup, fmt.Errorf("no loose PPD files found inside %s", path)
+}
+
+// InspectDmg is a debug-only wrapper around the package-internal openDmg
+// seam (macdmgopen_darwin.go/macdmgopen_windows.go) - opens path (a real
+// mount via hdiutil on darwin, a 7z.exe extraction on Windows) and returns
+// every .pkg/.dmg found directly inside it. No real codepath uses this -
+// LocatePkg/LocatePkgWithChain/LocateLoosePPDs call openDmg directly and go
+// straight on to resolve a real .pkg or PPDs rather than just listing what's
+// there. Exists purely for cmd/pdtdebug's own "macdmg" subcommand (GitHub
+// issue #3, Phase 1's own "give yourself a test hook before wiring into the
+// UI" step) to hand-test openDmg against real vendor .dmg files before
+// anything downstream depends on it.
+func InspectDmg(path string) (found []string, err error) {
+	root, cleanup, err := openDmg(path)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	found = append(collectByExt(root, ".pkg"), collectByExt(root, ".dmg")...)
+	return found, nil
 }
 
 // LocatePkg resolves path (a .pkg or .dmg found by BuildMacCatalog) to an
@@ -309,7 +286,7 @@ func locatePkgWithChainFromRealPath(path string) (pkgPath string, chain []string
 		}
 	}
 
-	mountPoint, detach, err := mountDmg(path)
+	mountPoint, detach, err := openDmg(path)
 	if err != nil {
 		return "", nil, cleanup, err
 	}
@@ -320,7 +297,7 @@ func locatePkgWithChainFromRealPath(path string) (pkgPath string, chain []string
 	}
 
 	if nested := findFirstByExt(mountPoint, ".dmg"); nested != "" {
-		nestedMount, nestedDetach, err := mountDmg(nested)
+		nestedMount, nestedDetach, err := openDmg(nested)
 		if err != nil {
 			return "", nil, cleanup, err
 		}

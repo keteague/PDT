@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -157,6 +158,18 @@ func main() {
 			os.Exit(1)
 		}
 		err = cmdTimedCreate(os.Args[2], os.Args[3])
+	case "macdmg":
+		if len(os.Args) != 3 {
+			usage()
+			os.Exit(1)
+		}
+		err = cmdMacDmg(os.Args[2])
+	case "maclocatepkg":
+		if len(os.Args) != 3 {
+			usage()
+			os.Exit(1)
+		}
+		err = cmdMacLocatePkg(os.Args[2])
 	default:
 		usage()
 		os.Exit(1)
@@ -201,7 +214,15 @@ Commands:
                             directly to that real port (no NUL: workaround at all) -
                             answers whether the new syscall-based create still has
                             the multi-minute HP delay the old cmdlet-based one had.
-                            Cleans up the printer and port afterward.`)
+                            Cleans up the printer and port afterward.
+  macdmg <path>             open a real macOS driver .dmg via the Windows-side
+                            openDmg seam (7z.exe, GitHub issue #3 Phase 1) and list
+                            every .pkg/.dmg found inside - hand-testing hook, no
+                            real codepath uses this
+  maclocatepkg <path>       driver.LocatePkg against a real .zip/.dmg/.pkg (the
+                            actual codepath BuildMacModelIndex uses) - exercises
+                            the outer .zip unwrap and any nested .dmg walk on top
+                            of the Phase 1 openDmg seam`)
 }
 
 func cmdEnumPrinters() error {
@@ -718,5 +739,72 @@ func cmdTimedCreate(driverName, ip string) error {
 		fmt.Println("cleanup: deleted port")
 	}
 
+	return nil
+}
+
+// cmdMacDmg exercises driver.InspectDmg (and, underneath it, the Windows-side
+// openDmg seam - macdmgopen_windows.go) against a real macOS driver .dmg by
+// hand, before anything in BuildMacCatalog/the Wails UI depends on it (GitHub
+// issue #3, Phase 1's own "give yourself a test hook" step). Points
+// driver.SevenZipPath at the same per-machine cache the real app writes to
+// (sevenZipToolsDir/ensureSevenZipExtracted, sevenzip_windows.go) rather than
+// re-extracting the embedded copy - this debug CLI has no embedded 7-Zip
+// assets of its own, so it just reuses whatever the real app already cached
+// on this machine; run PDT itself at least once first if that cache doesn't
+// exist yet.
+func cmdMacDmg(path string) error {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("resolving the per-machine 7-Zip cache dir: %w", err)
+	}
+	driver.SevenZipPath = filepath.Join(cacheDir, "PDT", "tools", "7zip", "7z.exe")
+	if _, err := os.Stat(driver.SevenZipPath); err != nil {
+		return fmt.Errorf("%s not found - run PDT itself at least once first so it caches 7z.exe: %w", driver.SevenZipPath, err)
+	}
+
+	found, err := driver.InspectDmg(path)
+	if err != nil {
+		return err
+	}
+	if len(found) == 0 {
+		fmt.Println("no .pkg/.dmg found directly inside - a multi-partition image with no real filesystem partition, or 7z genuinely couldn't open it")
+		return nil
+	}
+	for _, f := range found {
+		fmt.Println(f)
+	}
+	fmt.Printf("(%d found)\n", len(found))
+
+	return nil
+}
+
+// cmdMacLocatePkg exercises driver.LocatePkg - the real codepath
+// BuildMacModelIndex/indexFamilyPackage uses - against a real .zip/.dmg/.pkg,
+// same 7z.exe cache setup as cmdMacDmg. Unlike macdmg (a single openDmg
+// call), this also walks resolveMacZipSource's own outer-.zip unwrap and
+// locatePkgWithChainFromRealPath's own nested-.dmg-inside-a-.dmg loop -
+// confirms the full real chain a package like Canon's own UFR II download
+// (.zip -> .dmg -> nested .dmg -> .pkg) resolves correctly on Windows, not
+// just a single openDmg call in isolation.
+func cmdMacLocatePkg(path string) error {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("resolving the per-machine 7-Zip cache dir: %w", err)
+	}
+	driver.SevenZipPath = filepath.Join(cacheDir, "PDT", "tools", "7zip", "7z.exe")
+	if _, err := os.Stat(driver.SevenZipPath); err != nil {
+		return fmt.Errorf("%s not found - run PDT itself at least once first so it caches 7z.exe: %w", driver.SevenZipPath, err)
+	}
+
+	pkgPath, chain, cleanup, err := driver.LocatePkgWithChain(path)
+	defer cleanup()
+	if err != nil {
+		return err
+	}
+	fmt.Println("chain:")
+	for _, c := range chain {
+		fmt.Println(" ", c)
+	}
+	fmt.Println("resolved .pkg:", pkgPath)
 	return nil
 }

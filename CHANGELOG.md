@@ -4,6 +4,89 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-18 (v0.9.30) - Windows can now catalog macOS driver packages, cross-platform catalog portability, Export Configs file selection, and UI renames
+
+### Added
+- **Windows-side cataloging of macOS driver packages (`.dmg`/`.pkg`), GitHub issue #3.** A
+  technician on a Windows-only laptop can now drop a real macOS driver package into
+  `Drivers/macOS/<Manufacturer>/...` and click Refresh - the exact same `BuildMacCatalog`/
+  `BuildMacModelIndex` chain `app_darwin.go` already ran now runs on Windows too, writing a real
+  `catalog.<mfg>.json`. Four phases, each live-tested against real vendor packages already
+  present on a technician's own machine, not synthetic fixtures:
+  - **`.dmg` opening via the already-bundled `7z.exe`** (`macdmgopen_windows.go`) - confirmed live
+    that a real vendor `.dmg`'s internal container shape varies: a multi-partition image (Kyocera's
+    own "Web Build") needs a second `7z x` pass against the extracted `.hfs` partition specifically,
+    while a single-partition image (Lexmark, Ricoh, Canon) resolves in one pass. `mountDmg`'s own
+    hdiutil body moved to `macdmgopen_darwin.go` verbatim (zero behavior change) so both
+    implementations share one `openDmg` seam.
+  - **A hand-rolled Go xar TOC parser** (`macxar.go`) for `.pkg` expansion - no 7-Zip dependency,
+    its own xar support being unreliable in practice. Found and fixed a real bug before it shipped:
+    xar's own per-entry `application/x-gzip` encoding label is misleading - the actual bytes are
+    zlib-wrapped deflate (RFC 1950), not the real gzip file format (RFC 1952); confirmed directly
+    against a real package's own `Distribution` entry bytes before switching `compress/gzip` to
+    `compress/zlib`.
+  - **A hand-rolled Go cpio reader** (`maccpioodc.go`) for `Payload` extraction - initially built
+    against the "newc" (SVR4 hex) format per the issue's own original assumption; live-tested
+    against a real Kyocera `Payload` and found the actual format is "odc" (POSIX portable ASCII,
+    octal fields, no padding at all) - rewrote around the confirmed real format, catching and
+    fixing an off-by-one in the field-width table during the same verification pass. Also adds a
+    hand-rolled glob matcher (`cpioGlobMatch`) letting `*` cross `/` the way real cpio's own
+    `fnmatch()` does but Go's `path.Match`/`filepath.Match` don't - every real pattern already in
+    this codebase depends on that.
+  - Verified end to end against every `macFamilyPreference` manufacturer with a real package on a
+    real technician machine: Kyocera (460 models, exactly matching this codebase's own
+    already-documented real BOM count, and exactly 1380÷3 - confirming `kyoceraRestrictSubPackages`,
+    the one code path only `BuildMacModelIndex` itself could exercise, now works correctly through
+    the full native Windows chain), Canon (450), Ricoh (353), Sharp (147), Xerox (1166), Toshiba
+    (136), Lexmark (1), Konica Minolta (31).
+- **`pdtdebug` gains `macdmg`/`maclocatepkg`/`macpkg`/`macppds`/`maccatalog`/`macmodels`
+  subcommands** - the "give yourself a test hook before wiring into the UI" step each phase above
+  called for, mirroring `cmd/pdtdebugmac`'s own `catalog`/`models` commands.
+- **Export Configs now shows exactly which files will be exported before exporting them** - a new
+  file-selection step after confirming the destination Preinstall subfolder, every matching Configs
+  file gets its own checkbox (all checked by default), plus a synced "Select All" checkbox at the
+  top matching the main grid's own `selectAllHeader` pattern. The destination folder is now always
+  confirmed too, even for a single match - an old SalesChain ID's own subfolder can still be sitting
+  there if the tech hasn't created today's new one yet.
+
+### Fixed
+- **A catalog built on Windows never actually sped anything up once it reached a real Mac** -
+  `MacCatalogVariant`/`MacPackageRef` stored the fully-resolved absolute path of the package that
+  produced them, so `IsCurrent`'s plain string comparison could never match what a different
+  machine's (or platform's) own fresh scan computed for the identical file - the catalog was always
+  treated as stale and silently re-indexed from scratch. Fixed by storing paths relative to
+  `driversRoot` instead (`relToDriversRoot`/`absFromDriversRoot`, `maccatalogdb.go`) - mirrors the
+  same pattern `app.go`'s own `resolveExeRelative` already uses for Settings' own portable base
+  paths. Traced every real reader of `PackagePath` first (`deploy_darwin.go`,
+  `canonbatch_darwin.go`, `canoninstall_darwin.go`) and confirmed none needed changes - they only
+  ever touch the live, in-memory value, never the persisted one. No schema/version bump - a pre-fix
+  catalog's own absolute paths are recognized and passed through unchanged, degrading to the old
+  "always stale, one re-index" behavior rather than erroring or producing a garbled path. Caught and
+  fixed a second real bug during verification: the first working version stored the relative path
+  with the writing platform's own separator (backslash on Windows) - `filepath.Join` on a real Mac
+  treats a literal backslash as just another filename character, not a separator, so it would never
+  have resolved the real nested file there; paths are now always forward-slash-normalized regardless
+  of which OS wrote them. Live-confirmed the actual fix works, not just that nothing broke: a repeat
+  `BuildMacModelIndex` run against the same real Drivers folder dropped from 80.4s to 12.9s once the
+  catalog was in the corrected format.
+- **`PreinstallBasePath` could bake in a hardcoded absolute path** (whoever's home folder happened to
+  compute the default on whichever machine first ran PDT) rather than resolving fresh per machine.
+  The default is now the bare relative string `"Documents/Preinstall"`, resolved against
+  `os.UserHomeDir()` at read time (`resolveHomeRelative`, `app.go`) - the same value now resolves
+  correctly on a technician's Windows or macOS laptop, rather than only ever being correct for
+  whichever one computer happened to compute it first. A technician's own explicit Browse pick is
+  still stored and used literally, unchanged.
+
+### Changed
+- **"Check for Updates" (the manufacturer driver-page button) renamed to "Download Center"; Settings
+  \> "External Sites" renamed to "Download Centers"** (GitHub issue #17). PDT's own self-update
+  check (Settings > About) keeps its existing name - traced every reference first to avoid
+  conflating the two, which the codebase had never previously needed to distinguish by name.
+- **Every user-facing "DEVMODE" renamed to "Settings"** (buttons, tooltips, the file-picker dialog
+  title/filter, backend error messages). "Device Settings" - a genuinely separate captured artifact,
+  the `PrinterDriverData` registry sidecar, not just alternate wording for the DEVMODE print-defaults
+  `.bin` - kept as its own distinct term.
+
 ## 2026-09-17 (v0.9.29) - Resizable log panel, macOS flash-drive fixes (7-Zip tools, Spotlight slowdown), .pdt-infcache now travels with Sync, and automated cross-platform releases
 
 (v0.9.28 was tagged but never published - its own first real CI run under the new

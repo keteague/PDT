@@ -520,6 +520,7 @@ export namespace main {
 	    preinstallBasePath: string;
 	    manufacturerUrls: Record<string, string>;
 	    manufacturerOrder: string[];
+	    directDownloadUrls: Record<string, any>;
 	    cloudSync: CloudSyncSettings;
 	    cloudSyncSecretKey?: string;
 	    cloudSyncHasSecret: boolean;
@@ -535,6 +536,7 @@ export namespace main {
 	        this.preinstallBasePath = source["preinstallBasePath"];
 	        this.manufacturerUrls = source["manufacturerUrls"];
 	        this.manufacturerOrder = source["manufacturerOrder"];
+	        this.directDownloadUrls = source["directDownloadUrls"];
 	        this.cloudSync = this.convertValues(source["cloudSync"], CloudSyncSettings);
 	        this.cloudSyncSecretKey = source["cloudSyncSecretKey"];
 	        this.cloudSyncHasSecret = source["cloudSyncHasSecret"];

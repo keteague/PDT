@@ -616,6 +616,20 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 					}
 				}
 
+				// A package already known not to open at all (confirmed
+				// live, 2026-09-18: some dmg variants never will - see
+				// openDmg's own doc comment) is skipped outright rather than
+				// re-attempted - see FailedPackages/IsKnownFailed's own doc
+				// comments for the real cost this was adding to every single
+				// Windows startup before this check existed. Unchanged since
+				// the failed attempt (same modTime/size) is the only
+				// condition that matters here; a package that changes gets a
+				// fresh attempt regardless; of course, since a new version
+				// might fix whatever failed.
+				if cat.IsKnownFailed(family, pkg, driversRoot) {
+					continue
+				}
+
 				famCacheDir := ""
 				if ppdCacheDir != "" {
 					// Each package within a family gets its own cache
@@ -629,7 +643,28 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 				}
 				variants, prov := indexFamilyPackage(pkg, family, tokens, famCacheDir, macSubPackageRestrictor(mfg), macSubPackagePPDFallback(mfg), macPPDEntryExpander(mfg), driversRoot)
 				if len(variants) == 0 {
+					// Remembered so the next launch doesn't pay for the exact
+					// same doomed attempt again - see FailedPackages' own doc
+					// comment. Best-effort map initialization, mirroring how
+					// ExtraProvenance is lazily created elsewhere in this file.
+					if cat.FailedPackages == nil {
+						cat.FailedPackages = map[string]map[string]MacPackageRef{}
+					}
+					if cat.FailedPackages[family] == nil {
+						cat.FailedPackages[family] = map[string]MacPackageRef{}
+					}
+					cat.FailedPackages[family][relPkgPath] = MacPackageRef{Path: relPkgPath, ModTime: pkg.ModTime, Size: pkg.Size}
+					dirty = true
 					continue
+				}
+				// Succeeded - clear any stale failure record for this exact
+				// package (e.g. it failed once, then a re-run of the very
+				// same version somehow succeeded, or this is a leftover from
+				// before the modTime/size changed but IsKnownFailed's own
+				// check hadn't yet been reached this run).
+				if _, hadFailed := cat.FailedPackages[family][relPkgPath]; hadFailed {
+					delete(cat.FailedPackages[family], relPkgPath)
+					dirty = true
 				}
 				for model, vs := range variants {
 					byModel[model] = append(byModel[model], vs...)
@@ -750,6 +785,15 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 			for path := range cat.ExtraProvenance[family] {
 				if !currentPaths[path] {
 					delete(cat.ExtraProvenance[family], path)
+					dirty = true
+				}
+			}
+			// A known-failed package that's since disappeared entirely
+			// (deleted, archived) has nothing left to skip re-attempting for -
+			// same reasoning as ExtraProvenance's own pruning just above.
+			for path := range cat.FailedPackages[family] {
+				if !currentPaths[path] {
+					delete(cat.FailedPackages[family], path)
 					dirty = true
 				}
 			}

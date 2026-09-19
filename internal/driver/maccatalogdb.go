@@ -51,6 +51,25 @@ type MacManufacturerCatalog struct {
 	// that the same as "no extra versions cached yet," never a parse error.
 	ExtraProvenance map[string]map[string]MacFamilyProvenance `json:"extraProvenance,omitempty"`
 	Models          map[string][]MacCatalogVariant             `json:"models"`
+	// FailedPackages: family -> packagePath -> the outer package's own
+	// path/modTime/size at the moment indexFamilyPackage tried and failed to
+	// find any real PPD content in it - confirmed live as a real, live gap
+	// (2026-09-18): some packages are permanently unopenable on Windows (see
+	// openDmg's own doc comment - some newer/cryptex-style APFS .dmg
+	// variants may not extract via 7-Zip at all, a known/accepted
+	// limitation, not a bug to chase further), yet nothing remembered that a
+	// given package had already failed, so BuildMacModelIndex retried the
+	// exact same doomed attempt - opening the outer package, running 7z,
+	// failing - from scratch on every single launch, adding several real
+	// seconds to Windows startup for a result that could never succeed until
+	// the package itself actually changed. Checked before ever calling
+	// indexFamilyPackage again for an unchanged package (same path/modTime/
+	// size); cleared automatically the moment the package's own modTime/size
+	// changes (a new version might fix whatever failed) or it succeeds after
+	// having failed before. Additive: omitempty, absent in any
+	// catalog.<mfg>.json written before this field existed - same
+	// no-entries-yet contract ExtraProvenance already has.
+	FailedPackages map[string]map[string]MacPackageRef `json:"failedPackages,omitempty"`
 }
 
 // MacPackageRef identifies one file in a package's own chain of nesting, at
@@ -300,6 +319,22 @@ func (cat MacManufacturerCatalog) IsCurrentForPackage(family string, pkg MacPack
 	}
 	outer := prov.Chain[0]
 	return outer.Path == relPkgPath && outer.ModTime.Equal(pkg.ModTime) && outer.Size == pkg.Size
+}
+
+// IsKnownFailed reports whether pkg (identified by its own driversRoot-
+// relative path) already failed to index for family, and hasn't changed
+// (same modTime/size) since that attempt - see FailedPackages' own doc
+// comment for why this exists: without it, a package indexFamilyPackage can
+// never actually open (a known, accepted gap for some dmg variants - see
+// openDmg) gets retried at full cost on every single BuildMacModelIndex
+// call forever, since a failed attempt was never otherwise distinguished
+// from "never attempted at all."
+func (cat MacManufacturerCatalog) IsKnownFailed(family string, pkg MacPackage, driversRoot string) bool {
+	failed, ok := cat.FailedPackages[family][relToDriversRoot(driversRoot, pkg.Path)]
+	if !ok {
+		return false
+	}
+	return failed.ModTime.Equal(pkg.ModTime) && failed.Size == pkg.Size
 }
 
 // DiffModels compares the model names cat already had recorded for family

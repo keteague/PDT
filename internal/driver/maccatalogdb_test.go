@@ -136,6 +136,40 @@ func TestMacManufacturerCatalog_IsCurrent(t *testing.T) {
 	}
 }
 
+// TestMacManufacturerCatalog_IsKnownFailed is the direct regression test for
+// a real, live gap (2026-09-18): a package indexFamilyPackage can never
+// actually open (openDmg's own doc comment - some dmg variants are a known,
+// accepted limitation, not a bug to keep chasing) was retried at full cost
+// on every single BuildMacModelIndex call, since nothing distinguished "this
+// failed last time" from "never attempted at all." Mirrors
+// TestMacManufacturerCatalog_IsCurrent's own shape exactly, one type over.
+func TestMacManufacturerCatalog_IsKnownFailed(t *testing.T) {
+	now := time.Now()
+	driversRoot := "/Drivers"
+	pkg := MacPackage{Path: "/Drivers/macOS/Canon/PPDv5.50_mac.zip", ModTime: now, Size: 1000}
+	cat := MacManufacturerCatalog{
+		FailedPackages: map[string]map[string]MacPackageRef{
+			"PPD": {
+				relToDriversRoot(driversRoot, pkg.Path): {Path: relToDriversRoot(driversRoot, pkg.Path), ModTime: pkg.ModTime, Size: pkg.Size},
+			},
+		},
+		Models: map[string][]MacCatalogVariant{},
+	}
+
+	if !cat.IsKnownFailed("PPD", pkg, driversRoot) {
+		t.Error("expected IsKnownFailed to match an identical path/modtime/size")
+	}
+	if cat.IsKnownFailed("PS", pkg, driversRoot) {
+		t.Error("expected no match for a family with no recorded failure at all")
+	}
+	if cat.IsKnownFailed("PPD", MacPackage{Path: pkg.Path, ModTime: now, Size: 999}, driversRoot) {
+		t.Error("expected no match once Size differs (a new download might fix the failure)")
+	}
+	if cat.IsKnownFailed("PPD", MacPackage{Path: pkg.Path, ModTime: now.Add(time.Hour), Size: pkg.Size}, driversRoot) {
+		t.Error("expected no match once ModTime differs")
+	}
+}
+
 // TestMacManufacturerCatalog_IsCurrent_DifferentDriversRoot is the real
 // scenario GitHub issue #13 fixes: the identical package, indexed once with
 // one driversRoot (e.g. a Windows machine's own local path) then checked

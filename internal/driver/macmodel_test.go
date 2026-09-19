@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"archive/zip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -639,5 +640,90 @@ func TestMacVariantForDeploy_UnknownModelReportsNotFound(t *testing.T) {
 	index, _ := BuildMacModelIndex(cat, dir, dir, true)
 	if _, ok := MacVariantForDeploy(index, "Canon", "Totally Unknown Model", ""); ok {
 		t.Error("expected no match for a model absent from the index - caller should fall back to ResolveMacFamily/choosePPD")
+	}
+}
+
+// writeBrokenZip creates a syntactically valid .zip at zipPath containing no
+// .pkg/.dmg at all - guaranteed to make LocatePkgWithChain fail cleanly on
+// any platform (no pkgutil/hdiutil/7z-format-specific behavior involved),
+// unlike this file's own real-fixture tests above which all skip on
+// non-macOS.
+func writeBrokenZip(t *testing.T, zipPath string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(zipPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zw := zip.NewWriter(f)
+	w, err := zw.Create("readme.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("not a package")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBuildMacModelIndex_RemembersPackageThatFailsToIndex is the direct
+// regression test for a real, live gap (2026-09-18): a package that
+// genuinely can't be opened (a known, accepted limitation for some real
+// vendor .dmg files on Windows - see openDmg's own doc comment) used to get
+// retried at full cost on every single BuildMacModelIndex call, since
+// nothing distinguished "already tried and failed" from "never attempted at
+// all" - confirmed live adding several real seconds to Windows startup for a
+// result that could never succeed until the package itself changed. Uses a
+// synthetic broken .zip (see writeBrokenZip) rather than this file's other
+// tests' real macOS-only fixtures, specifically so this reproduces and
+// verifies the fix on any platform, Windows included - where the real bug
+// was actually found.
+func TestBuildMacModelIndex_RemembersPackageThatFailsToIndex(t *testing.T) {
+	disableOSVersionFiltering(t)
+	root := t.TempDir()
+	zipPath := filepath.Join(root, "macOS", "Canon", "Broken_PPD_test.zip")
+	writeBrokenZip(t, zipPath)
+
+	catalog, err := BuildMacCatalog(root)
+	if err != nil {
+		t.Fatalf("BuildMacCatalog: %v", err)
+	}
+	macRoot := filepath.Join(root, "macOS")
+
+	// ppdCacheDir "" - no loose-PPD fallback to try, so a broken zip fails
+	// cleanly on the very first attempt, matching a real irrecoverable
+	// package (see indexFamilyPackage's own "cacheDir == \"\"" early return).
+	index, _ := BuildMacModelIndex(catalog, macRoot, "", true)
+	if len(index["Canon"]) != 0 {
+		t.Fatalf("expected nothing indexed from a broken package, got %v", index["Canon"])
+	}
+
+	catalogPath := filepath.Join(macRoot, "Canon", CatalogFileName("Canon"))
+	cat := LoadMacManufacturerCatalog(catalogPath)
+	pkg := MacPackage{Path: zipPath}
+	for _, p := range catalog.Packages["Canon"] {
+		if p.Path == zipPath {
+			pkg = p
+		}
+	}
+	if !cat.IsKnownFailed("PPD", pkg, root) {
+		t.Fatal("expected the broken package to be recorded in FailedPackages after the first attempt")
+	}
+
+	// Second pass: IsKnownFailed's own check (wired into BuildMacModelIndex's
+	// loop) must skip re-attempting this exact, unchanged package entirely -
+	// still correctly produces an empty index, without erroring or panicking
+	// from skipping the normal indexFamilyPackage call.
+	index2, changes2 := BuildMacModelIndex(catalog, macRoot, "", true)
+	if len(index2["Canon"]) != 0 {
+		t.Fatalf("expected the second pass to still find nothing indexed, got %v", index2["Canon"])
+	}
+	if len(changes2) != 0 {
+		t.Errorf("expected no reported changes on the second pass, got %v", changes2)
 	}
 }

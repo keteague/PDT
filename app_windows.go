@@ -57,11 +57,18 @@ func (a *App) platformStartup() {
 // or the frontend ever reads them, so this has no UI effect at all: the real
 // deliverable is catalog.<mfg>.json getting written under driversRoot/macOS,
 // ready to travel to a real Mac via the existing Sync/Cloud Sync machinery.
-// Best-effort: a failure building the mac side doesn't fail loadCatalog
-// itself (the Windows .inf catalog this function's own callers actually
-// depend on is unaffected either way) - matches BuildMacCatalog/
-// BuildMacModelIndex's own established "index what's readable, degrade for
-// the rest" discipline, just one level up.
+//
+// Runs in the background, after loadCatalog itself has already returned -
+// confirmed live as a real startup-time regression the day this landed: a
+// real Drivers/macOS tree of several manufacturers' own installer packages
+// added ~10 seconds to every single Windows launch (visible as a burst of
+// 7z.exe console windows during "Initializing..."), for a result nothing on
+// Windows even reads yet. Since a.ready gates every other bound method and
+// is only closed once loadCatalog returns (app.go's own startup), blocking
+// on this here would hold the whole UI hostage for work with no Windows-side
+// consumer. catalogMu still guards the write below, same as any other
+// concurrent catalog mutation (RefreshDriverCatalog can already land at any
+// moment) - just on its own goroutine's own schedule instead of inline.
 func (a *App) loadCatalog(driversRoot string) error {
 	buildFn := driver.BuildCatalog
 	isRemovable := false
@@ -76,15 +83,20 @@ func (a *App) loadCatalog(driversRoot string) error {
 		return err
 	}
 
-	macCatalog, macModelIndex, macChanges := a.loadMacCatalogBestEffort(driversRoot, !isRemovable)
-
 	a.catalogMu.Lock()
 	a.catalog = catalog
 	a.modelIndex = driver.BuildModelIndex(catalog)
-	a.macCatalog = macCatalog
-	a.macModelIndex = macModelIndex
-	a.macModelChanges = macChanges
 	a.catalogMu.Unlock()
+
+	go func() {
+		macCatalog, macModelIndex, macChanges := a.loadMacCatalogBestEffort(driversRoot, !isRemovable)
+		a.catalogMu.Lock()
+		a.macCatalog = macCatalog
+		a.macModelIndex = macModelIndex
+		a.macModelChanges = macChanges
+		a.catalogMu.Unlock()
+	}()
+
 	return nil
 }
 

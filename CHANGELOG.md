@@ -4,6 +4,38 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-19 (v0.9.34) - Windows startup added ~10 seconds building a macOS catalog nothing on Windows reads yet
+
+Reported live: on startup, PDT sat in "Initializing..." for about 10 seconds while roughly one
+7z.exe console window per manufacturer flashed open and closed in succession.
+
+### Fixed
+- **A package that can never actually open got retried at full cost on every single startup,
+  forever.** GitHub issue #3 (landed 2026-09-18) made Windows startup also build the macOS-shaped
+  catalog (`driver.BuildMacCatalog`/`BuildMacModelIndex`), purely so `catalog.<mfg>.json` can travel
+  to a real Mac via Sync - nothing on Windows itself reads the result. Investigated live: two Canon
+  families (`PS`/`UFRII`) already cached correctly, but the third (`PPD`) genuinely fails to open on
+  Windows (`openDmg`'s own known, accepted limitation for some `.dmg` variants - not a bug to chase
+  further), and a failed attempt was never distinguished from "never attempted at all," so the exact
+  same doomed extraction (opening the outer package, running 7z, failing) ran again from scratch on
+  every launch. Fixed with a new `MacManufacturerCatalog.FailedPackages` (mirroring
+  `Provenance`/`ExtraProvenance`'s own shape) and `IsKnownFailed`, checked before ever re-attempting
+  an unchanged package, and cleared automatically the moment the package's own modTime/size changes
+  (a new version might fix whatever failed) or it succeeds after having failed before. Measured live
+  against the real Drivers folder this was found on: a repeat build dropped from 9.5s to 21ms.
+  New tests: `TestMacManufacturerCatalog_IsKnownFailed`,
+  `TestBuildMacModelIndex_RemembersPackageThatFailsToIndex` (a synthetic broken `.zip`, deliberately
+  not needing macOS-only tools, so this reproduces and verifies the fix on the platform the bug was
+  actually found on).
+- **The macOS catalog build now runs in the background, after Windows startup has already
+  returned** (`app_windows.go`'s own `loadCatalog`), rather than blocking `a.ready` - the gate every
+  bound method waits on - until it finishes. Independent of the fix above (a first-ever build, or one
+  hitting a package that genuinely can't be fixed, still takes real time), but directly addresses
+  the felt "stuck in Initializing" symptom: nothing on Windows reads `a.macCatalog`/`macModelIndex`/
+  `macModelChanges` today (confirmed - the only reads are in `drivercatalog_darwin.go`, which never
+  compiles into the Windows binary), so there's no reason any Windows interaction should ever wait
+  on it.
+
 ## 2026-09-18 (v0.9.33) - default Preinstall Base Path follows a redirected Documents folder
 
 ### Fixed

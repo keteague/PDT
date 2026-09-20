@@ -28,8 +28,48 @@ type PrinterRow struct {
 	LPDQueueName string
 	Manufacturer string
 	Model        string
-	Driver       string
-	SNMP         bool
+	// Driver is the Windows driver name - GitHub issue #16's own explicit
+	// scope decision: rather than rename this field (which would ripple
+	// through every Windows-specific call site that already correctly reads
+	// it as "the Windows driver"), a row now carries a *second*, independent
+	// driver commitment (MacDriver, below) for the platform PDT isn't
+	// currently running on. Before this, a single shared Driver field meant
+	// "Windows driver name" on a row authored on Windows but "the pinned
+	// macOS driver commitment" on a row authored on a Mac (see
+	// darwin/deploy_darwin.go's own Deploy, which reads MacDriver now
+	// instead) - fine for a config that only ever traveled within one
+	// platform, but wrong the moment the same row needs to define a print
+	// queue for *both* (e.g. a Windows tech pre-configuring a macOS-only
+	// queue ahead of a site visit, or one shared MFD both platforms print
+	// to).
+	Driver string
+	// MacDriver is the pinned macOS driver commitment - MacVariantForDeploy's
+	// own driverLabel parameter (internal/driver/macmodel.go), read by
+	// darwin/deploy_darwin.go's own Deploy. Blank means no commitment at
+	// all: MacVariantForDeploy already falls back to whatever it would
+	// auto-pick fresh (preference-ordered, favoring the newest macOS release
+	// folder present) - the exact same fallback a real endpoint running an
+	// older macOS than whatever was favored at configuration time already
+	// gets today, no new logic needed for that. Meaningless on Windows,
+	// which never reads it.
+	MacDriver string
+	// WindowsDisabled excludes this row from a Windows Deploy entirely (see
+	// windows/deploy_windows.go's own Deploy) - false (its Go zero value) is
+	// deliberately "included," not "excluded": every row that existed before
+	// this field did, and every row a CSV import/test literal builds without
+	// setting it at all, must keep behaving exactly as it always has (a
+	// Windows-deployable row), which a positively-named "WindowsEnabled"
+	// field defaulting to false would have silently broken. The grid's own
+	// "Windows" checkbox is checked when this is false, not when it's true.
+	WindowsDisabled bool
+	// MacEnabled opts this row into a macOS Deploy at all (see
+	// darwin/deploy_darwin.go's own Deploy) - false (the zero value) is the
+	// right default here, matching Ken's own explicit spec: unlike Windows,
+	// most rows never intend a macOS print queue, so a Mac deploy skips any
+	// row that never opted in, exactly like today's behavior for every row
+	// that predates this field.
+	MacEnabled bool
+	SNMP       bool
 	// SNMPCommunity is the community string used when SNMP is true and a new
 	// port is actually created. The grid's own SNMP field is this string
 	// directly (blank means SNMP disabled, non-blank both enables it and

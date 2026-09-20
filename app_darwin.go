@@ -85,7 +85,29 @@ func (a *App) loadCatalog(driversRoot string) error {
 	a.macModelIndex = modelIndex
 	a.macModelChanges = changes
 	a.catalogMu.Unlock()
+
+	// Backgrounded, not run inline here - unlike the vendor package model
+	// index just above (needed immediately for the UI to function),
+	// nothing blocks on the OpenPrinting nickname cache being ready, and
+	// loadCatalog itself runs synchronously on this platform (blocks
+	// a.ready - see startup(), app.go), unlike Windows' own already-
+	// backgrounded mac-catalog goroutine. Never run at all from removable
+	// media (persist false here means exactly that) - see
+	// buildOpenPrintingCatalogAsync's own doc comment.
+	if persist {
+		go a.buildOpenPrintingCatalogAsync(catalog, macRoot)
+	}
 	return nil
+}
+
+// resolveOtherPlatformDriver is runbook.go's own resolveOtherPlatformDriverFunc
+// seam on macOS: always "not found" - unlike Windows (which builds a
+// macOS-shaped catalog alongside its own, see GitHub issue #3), a macOS
+// build has no Windows driver catalog at all to resolve against, so the
+// Runbook's own "Windows:" lines simply stay blank here, for the technician
+// to fill in by hand.
+func (a *App) resolveOtherPlatformDriver(manufacturer, model string) (string, bool) {
+	return "", false
 }
 
 // newPlatformDeployer builds this run's Deployer against the current macOS

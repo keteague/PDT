@@ -95,6 +95,17 @@ func (a *App) loadCatalog(driversRoot string) error {
 		a.macModelIndex = macModelIndex
 		a.macModelChanges = macChanges
 		a.catalogMu.Unlock()
+
+		// Never run at all from removable media (GitHub issue #16 follow-up,
+		// 2026-09-19 - Ken's own explicit ask) - see
+		// buildOpenPrintingCatalogAsync's own doc comment for why this is a
+		// full skip, not just persist=false. Chained after the mac catalog
+		// itself is already assigned above (not run concurrently with it)
+		// since it needs that catalog's own OpenPrintingPPDs to know what to
+		// check - still entirely off a.ready's own critical path either way.
+		if !isRemovable {
+			a.buildOpenPrintingCatalogAsync(macCatalog, filepath.Join(driversRoot, "macOS"))
+		}
 	}()
 
 	return nil
@@ -121,6 +132,29 @@ func (a *App) loadMacCatalogBestEffort(driversRoot string, persist bool) (driver
 	macRoot := filepath.Join(driversRoot, "macOS")
 	modelIndex, changes := driver.BuildMacModelIndex(catalog, macRoot, ppdCacheDir, persist)
 	return catalog, modelIndex, changes
+}
+
+// resolveOtherPlatformDriver is runbook.go's own resolveOtherPlatformDriverFunc
+// seam on Windows: looks up manufacturer/model against the macOS-shaped
+// catalog this same build already indexes in the background (see loadCatalog
+// above) - the one platform that can answer "what would the *other*
+// platform's driver be for this row" at all, since a macOS build never
+// builds a Windows catalog. driverLabel "" (no pinned commitment) asks for
+// whatever MacVariantForDeploy's own default preference order would pick -
+// the Runbook is a point-in-time snapshot for a site survey, not a real
+// deploy with a saved commitment to honor. ok is false whenever nothing
+// resolves at all (not model-driven, no match, or the background catalog
+// build just hasn't finished yet on a very fresh launch - see loadCatalog's
+// own doc comment on why this runs asynchronously).
+func (a *App) resolveOtherPlatformDriver(manufacturer, model string) (string, bool) {
+	a.catalogMu.RLock()
+	index := a.macModelIndex
+	a.catalogMu.RUnlock()
+	variant, ok := driver.MacVariantForDeploy(index, manufacturer, model, "")
+	if !ok {
+		return "", false
+	}
+	return variant.Label, true
 }
 
 // newPlatformDeployer builds this run's Deployer against the current Windows

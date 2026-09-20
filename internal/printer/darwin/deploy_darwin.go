@@ -125,6 +125,15 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 		return printer.DeployResult{RowName: row.Name, Log: log.Lines(), Err: err}
 	}
 
+	// GitHub issue #16: most rows never intend a macOS print queue at all
+	// (MacEnabled defaults to false) - skipped here, not treated as a
+	// failure (Err stays nil), same as the Windows side's own WindowsDisabled
+	// check (windows/deploy_windows.go's own Deploy).
+	if !row.MacEnabled {
+		log.Info("Skipping %q - macOS is unchecked for this row.", row.Name)
+		return printer.DeployResult{RowName: row.Name, Log: log.Lines()}
+	}
+
 	log.Info("Starting deployment for %q", row.Name)
 
 	if result, ok := d.canonBatchResults[row.Name]; ok {
@@ -267,12 +276,12 @@ func sanitizeCUPSQueueName(name string) string {
 // then choosePPD fuzzy-matches Model against whatever PPDs that install
 // actually registers, logging a [WARN] if the pick wasn't a clear winner.
 //
-// row.Driver, when it holds an *exact* OpenPrintingCandidates label (the
-// technician explicitly picked one from the Driver dropdown rather than just
-// typing a Model and moving on), is preferred over re-deriving a guess from
-// Model in the OpenPrinting-fallback branch - a real selection beats a best
-// guess, the same rule MacVariantForDeploy itself applies to row.Driver
-// first when the model index has an entry.
+// row.MacDriver, when it holds an *exact* OpenPrintingCandidates label (the
+// technician explicitly picked one from the macOS Driver field rather than
+// just typing a Model and moving on), is preferred over re-deriving a guess
+// from Model in the OpenPrinting-fallback branch - a real selection beats a
+// best guess, the same rule MacVariantForDeploy itself applies to
+// row.MacDriver first when the model index has an entry.
 //
 // Unlike Windows, there's no cheap "read the currently-installed version"
 // check to skip a redundant reinstall against the *system's* own state (see
@@ -289,7 +298,7 @@ func sanitizeCUPSQueueName(name string) string {
 // few minutes, so back-to-back multi-minute installs routinely outlast it)
 // before ensureInstalledOnce existed.
 //
-// row.Driver is checked against Apple's own bundled Generic PostScript/PCL
+// row.MacDriver is checked against Apple's own bundled Generic PostScript/PCL
 // drivers (driver.GenericDriverModelByLabel) before anything else - an
 // explicit technician selection always wins outright (DriverCandidates only
 // ever offers these when nothing else was available at all, see that
@@ -297,12 +306,17 @@ func sanitizeCUPSQueueName(name string) string {
 // CUPS already has them built in, this returns straight to EnsureQueue with
 // a `-m drv:///...` model string instead of a real PPD file path
 // (buildEnsureQueueArgv).
+//
+// row.MacDriver (not row.Driver, which is the Windows driver name - GitHub
+// issue #16 split what used to be one shared field in two, so a single row
+// can define both a Windows and a macOS print queue at once) is this
+// platform's own equivalent of the Windows side's driver selection.
 func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, log *printer.Logger) (ppdPath string, err error) {
-	if model, ok := driver.GenericDriverModelByLabel(row.Driver); ok {
-		log.Info("Using %s - built into macOS, no install needed.", row.Driver)
+	if model, ok := driver.GenericDriverModelByLabel(row.MacDriver); ok {
+		log.Info("Using %s - built into macOS, no install needed.", row.MacDriver)
 		return model, nil
 	}
-	if variant, ok := driver.MacVariantForDeploy(d.ModelIndex, row.Manufacturer, row.Model, row.Driver); ok {
+	if variant, ok := driver.MacVariantForDeploy(d.ModelIndex, row.Manufacturer, row.Model, row.MacDriver); ok {
 		return d.installVariant(ctx, variant, row, log)
 	}
 
@@ -329,9 +343,9 @@ func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, lo
 		return chosen, nil
 	}
 
-	if row.Driver != "" {
-		if path, ok := driver.OpenPrintingPPDByLabel(d.Catalog, row.Manufacturer, row.Driver); ok {
-			log.Info("Using explicitly-selected OpenPrinting PPD %q for %s.", row.Driver, row.Manufacturer)
+	if row.MacDriver != "" {
+		if path, ok := driver.OpenPrintingPPDByLabel(d.Catalog, row.Manufacturer, row.MacDriver); ok {
+			log.Info("Using explicitly-selected OpenPrinting PPD %q for %s.", row.MacDriver, row.Manufacturer)
 			return path, nil
 		}
 	}
@@ -340,7 +354,7 @@ func (d *Deployer) resolveDriver(ctx context.Context, row printer.PrinterRow, lo
 		return path, nil
 	}
 
-	return "", fmt.Errorf("no usable driver package or fallback PPD found locally for manufacturer %q (model %q, driver selection %q)", row.Manufacturer, row.Model, row.Driver)
+	return "", fmt.Errorf("no usable driver package or fallback PPD found locally for manufacturer %q (model %q, driver selection %q)", row.Manufacturer, row.Model, row.MacDriver)
 }
 
 // installVariant deploys a driver.MacPPDVariant resolved straight from the

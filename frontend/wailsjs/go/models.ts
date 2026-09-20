@@ -2,12 +2,16 @@ export namespace config {
 	
 	export class SavedRow {
 	    Select: boolean;
+	    ID: string;
 	    Name: string;
 	    IP: string;
 	    LPDQueueName: string;
 	    Manufacturer: string;
 	    Model: string;
 	    Driver: string;
+	    MacDriver: string;
+	    WindowsDisabled: boolean;
+	    MacEnabled: boolean;
 	    Snmp: boolean;
 	    SnmpCommunity: string;
 	    Mono: boolean;
@@ -15,6 +19,7 @@ export namespace config {
 	    UseExistingPort: boolean;
 	    AdvancedPrintingFeatures: boolean;
 	    DevModeFile: string;
+	    preDatesMacDriverSplit: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SavedRow(source);
@@ -23,12 +28,16 @@ export namespace config {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.Select = source["Select"];
+	        this.ID = source["ID"];
 	        this.Name = source["Name"];
 	        this.IP = source["IP"];
 	        this.LPDQueueName = source["LPDQueueName"];
 	        this.Manufacturer = source["Manufacturer"];
 	        this.Model = source["Model"];
 	        this.Driver = source["Driver"];
+	        this.MacDriver = source["MacDriver"];
+	        this.WindowsDisabled = source["WindowsDisabled"];
+	        this.MacEnabled = source["MacEnabled"];
 	        this.Snmp = source["Snmp"];
 	        this.SnmpCommunity = source["SnmpCommunity"];
 	        this.Mono = source["Mono"];
@@ -36,6 +45,7 @@ export namespace config {
 	        this.UseExistingPort = source["UseExistingPort"];
 	        this.AdvancedPrintingFeatures = source["AdvancedPrintingFeatures"];
 	        this.DevModeFile = source["DevModeFile"];
+	        this.preDatesMacDriverSplit = source["preDatesMacDriverSplit"];
 	    }
 	}
 	export class SavedConfig {
@@ -442,6 +452,20 @@ export namespace main {
 	        this.physical = source["physical"];
 	    }
 	}
+	export class MacDriverCandidate {
+	    label: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MacDriverCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.source = source["source"];
+	    }
+	}
 	export class OpenConfigResult {
 	    canceled: boolean;
 	    config: config.SavedConfig;
@@ -514,6 +538,52 @@ export namespace main {
 	        this.error = source["error"];
 	    }
 	}
+	export class RunbookPrinter {
+	    id: string;
+	    name: string;
+	    ip: string;
+	    lpdQueueName: string;
+	    useExistingPort: boolean;
+	    manufacturer: string;
+	    model: string;
+	    driver: string;
+	    macDriver: string;
+	    windowsEnabled: boolean;
+	    macEnabled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RunbookPrinter(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.ip = source["ip"];
+	        this.lpdQueueName = source["lpdQueueName"];
+	        this.useExistingPort = source["useExistingPort"];
+	        this.manufacturer = source["manufacturer"];
+	        this.model = source["model"];
+	        this.driver = source["driver"];
+	        this.macDriver = source["macDriver"];
+	        this.windowsEnabled = source["windowsEnabled"];
+	        this.macEnabled = source["macEnabled"];
+	    }
+	}
+	export class RunbookResult {
+	    path: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RunbookResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.error = source["error"];
+	    }
+	}
 	export class Settings {
 	    saveFileBasePath: string;
 	    driversBasePath: string;
@@ -524,6 +594,8 @@ export namespace main {
 	    cloudSync: CloudSyncSettings;
 	    cloudSyncSecretKey?: string;
 	    cloudSyncHasSecret: boolean;
+	    verboseLoggingDisabled: boolean;
+	    logLevel: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -540,6 +612,8 @@ export namespace main {
 	        this.cloudSync = this.convertValues(source["cloudSync"], CloudSyncSettings);
 	        this.cloudSyncSecretKey = source["cloudSyncSecretKey"];
 	        this.cloudSyncHasSecret = source["cloudSyncHasSecret"];
+	        this.verboseLoggingDisabled = source["verboseLoggingDisabled"];
+	        this.logLevel = source["logLevel"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -608,6 +682,9 @@ export namespace printer {
 	    Manufacturer: string;
 	    Model: string;
 	    Driver: string;
+	    MacDriver: string;
+	    WindowsDisabled: boolean;
+	    MacEnabled: boolean;
 	    SNMP: boolean;
 	    SNMPCommunity: string;
 	    Mono: boolean;
@@ -628,6 +705,9 @@ export namespace printer {
 	        this.Manufacturer = source["Manufacturer"];
 	        this.Model = source["Model"];
 	        this.Driver = source["Driver"];
+	        this.MacDriver = source["MacDriver"];
+	        this.WindowsDisabled = source["WindowsDisabled"];
+	        this.MacEnabled = source["MacEnabled"];
 	        this.SNMP = source["SNMP"];
 	        this.SNMPCommunity = source["SNMPCommunity"];
 	        this.Mono = source["Mono"];

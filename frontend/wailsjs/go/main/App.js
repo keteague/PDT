@@ -74,6 +74,10 @@ export function FormatDrives(arg1) {
   return window['go']['main']['App']['FormatDrives'](arg1);
 }
 
+export function GenerateRunbook(arg1, arg2) {
+  return window['go']['main']['App']['GenerateRunbook'](arg1, arg2);
+}
+
 export function GetAppInfo() {
   return window['go']['main']['App']['GetAppInfo']();
 }
@@ -112,6 +116,18 @@ export function ListRemovableDrives() {
 
 export function ListRescanTargets() {
   return window['go']['main']['App']['ListRescanTargets']();
+}
+
+export function MacDriverCandidatesFor(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MacDriverCandidatesFor'](arg1, arg2, arg3);
+}
+
+export function MacModelManufacturers() {
+  return window['go']['main']['App']['MacModelManufacturers']();
+}
+
+export function MacModelsFor(arg1, arg2) {
+  return window['go']['main']['App']['MacModelsFor'](arg1, arg2);
 }
 
 export function Manufacturers() {

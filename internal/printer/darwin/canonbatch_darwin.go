@@ -122,7 +122,7 @@ func (d *Deployer) PrepareBatch(ctx context.Context, reqs []printer.DeployReques
 			continue // an existing queue - not something PrepareBatch handles, see its own doc comment
 		}
 
-		variant, ok := driver.MacVariantForDeploy(d.ModelIndex, row.Manufacturer, row.Model, row.Driver)
+		variant, ok := driver.MacVariantForDeploy(d.ModelIndex, row.Manufacturer, row.Model, row.MacDriver)
 		if !ok || variant.PackagePath == "" {
 			// No real catalog-driven driver for this row (a manufacturer
 			// with no macFamilyPreference entry, or a loose-PPD family with
@@ -810,7 +810,7 @@ func planLexmarkBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, p
 // driver at all (its caller only ever tries this once driver.MacVariantForDeploy
 // has already come back not-ok) but does resolve to a real OpenPrinting
 // fallback PPD - the identical resolution order resolveDriver's own
-// OpenPrinting branch already uses (deploy_darwin.go): row.Driver's own
+// OpenPrinting branch already uses (deploy_darwin.go): row.MacDriver's own
 // exact label first (a technician's real, explicit pick beats a guess), then
 // row.Model as a fuzzy fallback. Unlike every manufacturer-specific planner
 // above, there is no install step at all - an OpenPrinting PPD is a loose
@@ -824,8 +824,8 @@ func planLexmarkBatchRow(row printer.PrinterRow, variant driver.MacPPDVariant, p
 func planOpenPrintingBatchRow(catalog driver.MacCatalog, row printer.PrinterRow, deviceURI string) (canonBatchRowPlan, bool) {
 	var ppdPath string
 	var ok bool
-	if row.Driver != "" {
-		ppdPath, ok = driver.OpenPrintingPPDByLabel(catalog, row.Manufacturer, row.Driver)
+	if row.MacDriver != "" {
+		ppdPath, ok = driver.OpenPrintingPPDByLabel(catalog, row.Manufacturer, row.MacDriver)
 	}
 	if !ok {
 		ppdPath, ok = driver.ResolveOpenPrintingPPD(catalog, row.Manufacturer, row.Model)

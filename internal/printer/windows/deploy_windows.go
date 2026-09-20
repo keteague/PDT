@@ -49,6 +49,16 @@ func (d *Deployer) Deploy(ctx context.Context, req printer.DeployRequest, confir
 		return printer.DeployResult{RowName: row.Name, Log: log.Lines(), Err: err}
 	}
 
+	// GitHub issue #16: a row pre-configured from Windows purely for a
+	// macOS-only print queue (e.g. ahead of a site visit) has nothing for a
+	// Windows Deploy to do at all - skipped here, not treated as a failure
+	// (Err stays nil), the same way a checked-but-not-yet-ready row would
+	// never reach this method in the first place.
+	if row.WindowsDisabled {
+		log.Info("Skipping %q - Windows is unchecked for this row.", row.Name)
+		return printer.DeployResult{RowName: row.Name, Log: log.Lines()}
+	}
+
 	log.Info("Starting deployment for %q", row.Name)
 
 	ip, isNul, err := printer.NormalizeIP(row.IP)

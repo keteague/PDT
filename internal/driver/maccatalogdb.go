@@ -132,6 +132,11 @@ type MacCatalogVariant struct {
 	// live every time) so a decorated multi-version label can be rebuilt
 	// straight from the catalog file alone.
 	PackageModTime time.Time `json:"packageModTime,omitempty"`
+	// OSVersionFolder mirrors MacPPDVariant's own field of the same name -
+	// persisted so a cache-hit rebuild (toMacPPDVariant) still knows which
+	// real OS-version folder this variant came from, without needing to
+	// re-inspect the source package (GitHub issue #16 follow-up, 2026-09-19).
+	OSVersionFolder string `json:"osVersionFolder,omitempty"`
 }
 
 // CatalogFileName returns the catalog filename for manufacturer, meant to

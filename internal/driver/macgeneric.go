@@ -13,15 +13,27 @@ package driver
 // documented mechanism, not a guess.
 //
 // Offered as Driver-dropdown candidates *only* when nothing else is
-// available at all (Ken's own explicit scoping, 2026-09-13) - see
-// DriverCandidates' own doc comment (drivercatalog_darwin.go) for exactly
-// where this sits in the fallback chain. Never silently auto-picked: unlike
-// every other fallback in this codebase, a technician has to explicitly
-// select one from the dropdown, since PostScript vs. PCL is a real choice
-// (not every printer supports both) this codebase has no way to guess.
+// available at all on darwin's own native DriverCandidates (Ken's own
+// explicit scoping, 2026-09-13) - see that function's own doc comment
+// (drivercatalog_darwin.go) for exactly where this sits in its fallback
+// chain; the macOS Driver modal's own MacDriverCandidatesFor
+// (macdrivercandidate.go, package main) instead always offers Generic
+// PostScript alongside whatever else resolves (Ken's own later revision,
+// 2026-09-19). Never silently auto-picked either way: unlike every other
+// fallback in this codebase, a technician has to explicitly select one from
+// the dropdown, since PostScript vs. PCL is a real choice (not every
+// printer supports both) this codebase has no way to guess.
+//
+// Labels are prefixed "Apple " (Ken's own explicit ask, 2026-09-19) so a
+// technician can tell at a glance these are macOS's own bundled drivers,
+// not something belonging to whichever manufacturer the row is otherwise
+// showing candidates for - GenericDriverModelByLabel/GenericDriverCandidates'
+// own callers all compare against these same constants, never a bare string
+// literal, so this is the one place that needs to change for the prefix to
+// round-trip everywhere.
 const (
-	GenericPostScriptLabel = "Generic PostScript Printer"
-	GenericPCLLabel        = "Generic PCL Laser Printer"
+	GenericPostScriptLabel = "Apple Generic PostScript Printer"
+	GenericPCLLabel        = "Apple Generic PCL Laser Printer"
 	GenericPostScriptModel = "drv:///sample.drv/generic.ppd"
 	GenericPCLModel        = "drv:///sample.drv/generpcl.ppd"
 )

@@ -140,6 +140,15 @@ type MacPPDVariant struct {
 	// more than one package can now contribute a variant to the same
 	// (model, family) pair at once.
 	PackageModTime time.Time
+	// OSVersionFolder is SourcePackagePath's own real, technician-placed
+	// OS-version folder name (MacPackage.OSVersionFolder's own doc comment) -
+	// GitHub issue #16 follow-up (2026-09-19): lets MacModelCandidateDetails
+	// prefer whichever real macOS release is actually newest when more than
+	// one OS-version folder's packages coexist unfiltered in the same
+	// MacModelIndex (the real scenario when configuring a macOS print queue
+	// from Windows - see osVersionFolderRank), and lets a caller show a
+	// technician which real folder/package a candidate comes from.
+	OSVersionFolder string
 }
 
 // MacModelIndex: manufacturer -> friendly model name (language suffix
@@ -294,6 +303,7 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 				PackagePath:       pkg.Path,
 				SourcePackagePath: pkg.Path,
 				PackageModTime:    pkg.ModTime,
+				OSVersionFolder:   pkg.OSVersionFolder,
 			})
 		}
 		if len(out) == 0 {
@@ -341,6 +351,7 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 			LooseCachedPPDPath: cached,
 			SourcePackagePath:  pkg.Path,
 			PackageModTime:     pkg.ModTime,
+			OSVersionFolder:    pkg.OSVersionFolder,
 		})
 	}
 	if len(out) == 0 {
@@ -372,6 +383,7 @@ func toMacPPDVariant(model string, v MacCatalogVariant, driversRoot string) MacP
 		LooseCachedPPDPath: v.LooseCachedPPDPath,
 		SourcePackagePath:  absFromDriversRoot(driversRoot, v.SourcePackagePath),
 		PackageModTime:     v.PackageModTime,
+		OSVersionFolder:    v.OSVersionFolder,
 	}
 }
 
@@ -682,6 +694,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 							Language: v.Language, NickName: v.NickName, Filename: v.Filename,
 							PackagePath: relToDriversRoot(driversRoot, v.PackagePath), LooseCachedPPDPath: v.LooseCachedPPDPath,
 							SourcePackagePath: relToDriversRoot(driversRoot, v.SourcePackagePath), PackageModTime: v.PackageModTime,
+							OSVersionFolder: v.OSVersionFolder,
 						})
 					}
 				}
@@ -923,11 +936,27 @@ func MacModels(index MacModelIndex, manufacturer, filterText string) []string {
 // dropdown down to Manufacturer's own single guessed package label the
 // moment Model wasn't narrowed down yet, on every real Canon download.
 func MacModelCandidates(index MacModelIndex, manufacturer, model, filterText string) []string {
+	variants := MacModelCandidateDetails(index, manufacturer, model, filterText)
+	out := make([]string, len(variants))
+	for i, v := range variants {
+		out[i] = v.Label
+	}
+	return out
+}
+
+// MacModelCandidateDetails is MacModelCandidates' own richer sibling,
+// returning each candidate's full MacPPDVariant (SourcePackagePath included)
+// rather than just its Label - GitHub issue #16 follow-up (Ken's own ask,
+// 2026-09-19): a technician overriding the modal's auto-picked macOS Driver
+// needs to see which real package/PPD a candidate actually comes from, not
+// just its display label. See MacModelCandidates' own doc comment for the
+// blank-model/ranking/dedup rules this applies too.
+func MacModelCandidateDetails(index MacModelIndex, manufacturer, model, filterText string) []MacPPDVariant {
 	var variants []MacPPDVariant
 	if model == "" {
 		byModel := index[manufacturer]
 		if len(byModel) == 0 {
-			return []string{}
+			return []MacPPDVariant{}
 		}
 		modelNames := make([]string, 0, len(byModel))
 		for m := range byModel {
@@ -940,7 +969,7 @@ func MacModelCandidates(index MacModelIndex, manufacturer, model, filterText str
 	} else {
 		_, v, ok := lookupMacModel(index, manufacturer, model)
 		if !ok {
-			return []string{}
+			return []MacPPDVariant{}
 		}
 		variants = v
 	}
@@ -950,30 +979,73 @@ func MacModelCandidates(index MacModelIndex, manufacturer, model, filterText str
 		rank[t] = i
 	}
 	sorted := append([]MacPPDVariant(nil), variants...)
-	sort.SliceStable(sorted, func(i, j int) bool { return rank[sorted[i].Language] < rank[sorted[j].Language] })
-
-	if filterText == "" {
-		out := make([]string, len(sorted))
-		for i, v := range sorted {
-			out[i] = v.Label
+	// Family preference (UFR II before PostScript before Generic PPD for
+	// Canon) is still the primary key; osVersionFolderRank is the new
+	// secondary one (GitHub issue #16 follow-up, 2026-09-19: Ken's own ask
+	// to favor whichever real macOS release is actually newest - "v27
+	// Golden Gate over v26 Tahoe today, whatever's newest next year" -
+	// rather than a codename hardcoded to go stale every September).
+	// PackageModTime stays the final tiebreaker, exactly as before, for two
+	// coexisting versions genuinely placed under the very same OS-version
+	// folder. This only ever matters when more than one OS-version folder's
+	// packages coexist unfiltered in index at all - the real scenario being
+	// configured from Windows (see filterToCurrentOSVersionFolder's own doc
+	// comment on why a native mac run never sees more than one folder here
+	// to begin with, making this a no-op there).
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri, rj := rank[sorted[i].Language], rank[sorted[j].Language]
+		if ri != rj {
+			return ri < rj
 		}
-		return out
+		oi, oj := osVersionFolderRank(sorted[i].OSVersionFolder), osVersionFolderRank(sorted[j].OSVersionFolder)
+		if oi != oj {
+			return oi > oj
+		}
+		return sorted[i].PackageModTime.After(sorted[j].PackageModTime)
+	})
+
+	// Distinct source packages (e.g. the same driver version shipped under
+	// separate installer filenames per macOS release, or a package sitting
+	// under more than one OS-version folder without an identical enough
+	// basename+size for packagesInFamily's own dedup key to collapse) can
+	// legitimately produce more than one MacPPDVariant that renders to the
+	// exact same Label text - confirmed live (GitHub issue #16's own Driver
+	// modal): a Canon UFR II/PostScript version showed up twice in the macOS
+	// Driver dropdown. Deduped here, not at packagesInFamily, since Label -
+	// not package identity - is what a technician actually sees and picks
+	// from; first-seen wins, preserving the preference/OS-version/ModTime
+	// ordering already applied above.
+	if filterText == "" {
+		return dedupeVariantsByLabel(sorted)
 	}
 	type scored struct {
-		label string
-		score int
+		variant MacPPDVariant
+		score   int
 	}
 	var results []scored
 	for _, v := range sorted {
 		s := FuzzyMatchScore(v.Label, filterText)
 		if s >= 0 {
-			results = append(results, scored{v.Label, s})
+			results = append(results, scored{v, s})
 		}
 	}
 	sort.SliceStable(results, func(i, j int) bool { return results[i].score > results[j].score })
-	out := make([]string, len(results))
+	ordered := make([]MacPPDVariant, len(results))
 	for i, r := range results {
-		out[i] = r.label
+		ordered[i] = r.variant
+	}
+	return dedupeVariantsByLabel(ordered)
+}
+
+func dedupeVariantsByLabel(variants []MacPPDVariant) []MacPPDVariant {
+	seen := make(map[string]bool, len(variants))
+	out := make([]MacPPDVariant, 0, len(variants))
+	for _, v := range variants {
+		if seen[v.Label] {
+			continue
+		}
+		seen[v.Label] = true
+		out = append(out, v)
 	}
 	return out
 }

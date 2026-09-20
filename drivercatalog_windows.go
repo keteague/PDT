@@ -1,6 +1,8 @@
 package main
 
 import (
+	"sort"
+
 	"PDT/internal/driver"
 )
 
@@ -104,4 +106,77 @@ func (a *App) DefaultDriverFor(manufacturer string) string {
 	<-a.ready
 	catalog, _, _ := a.catalogSnapshot()
 	return driver.DefaultDriverNameFor(catalog, manufacturer)
+}
+
+// macCatalogSnapshot returns the current macCatalog/macModelIndex under
+// catalogMu's read lock - the Windows analog of drivercatalog_darwin.go's
+// own macCatalogSnapshot, reading the same fields loadCatalog's own
+// background goroutine populates (app_windows.go - GitHub issue #3). Unlike
+// that goroutine's own populate-in-background timing, every method below
+// blocks on <-a.ready first, same as every other bound method - a.ready only
+// covers the Windows .inf catalog finishing, so a call landing in the first
+// few seconds after startup can still see an empty macModelIndex if the
+// background build hasn't caught up yet; every caller here already treats
+// "nothing resolved" as a normal, valid outcome (a free-text field, not an
+// error), so this is a graceful, self-correcting degrade, not a bug.
+func (a *App) macCatalogSnapshot() (driver.MacCatalog, driver.MacModelIndex) {
+	a.catalogMu.RLock()
+	defer a.catalogMu.RUnlock()
+	return a.macCatalog, a.macModelIndex
+}
+
+// MacModelManufacturers lists every manufacturer with real per-model macOS
+// PPD data in the background-built mac catalog (GitHub issue #3) - identical
+// role and implementation to drivercatalog_darwin.go's own method of the
+// same name, now meaningful on Windows too (GitHub issue #16): the
+// frontend's own macModelDriven() check no longer needs an isMac() gate to
+// mean something here, since a Windows-authored row can now also pin a real
+// macOS driver commitment for the same printer.
+func (a *App) MacModelManufacturers() []string {
+	<-a.ready
+	_, modelIndex := a.macCatalogSnapshot()
+	out := make([]string, 0, len(modelIndex))
+	for mfg := range modelIndex {
+		out = append(out, mfg)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// MacModelsFor is the new "macOS Driver" modal's own Model field data
+// source when the row's manufacturer has real per-model data (see
+// MacModelManufacturers) - identical to drivercatalog_darwin.go's own Models,
+// just reading the Windows-side background-built mac catalog instead of a
+// native mac build's own foreground one. Named distinctly from Windows' own
+// Models (Kyocera's .inf-derived model list) since a Windows build needs
+// both at once now - one row can resolve a Kyocera Windows model *and* a
+// Canon-shaped macOS model for two entirely different purposes.
+func (a *App) MacModelsFor(manufacturer, filterText string) []string {
+	<-a.ready
+	_, modelIndex := a.macCatalogSnapshot()
+	return driver.MacModels(modelIndex, manufacturer, filterText)
+}
+
+// MacDriverCandidatesFor is the new "macOS Driver" modal's own field data
+// source, once a technician configuring from Windows has picked (or typed) a
+// Model - identical logic to drivercatalog_darwin.go's own MacDriverCandidatesFor
+// (same OpenPrinting-always-appended, Generic-PostScript-last-resort
+// fallback chain, and same bound method name/signature, so the frontend
+// needs no platform branch to fetch these), reading the Windows-side
+// background-built mac catalog. A blank model behaves exactly as
+// MacModelCandidates' own doc comment describes (every variant of every
+// model, preference-ordered - UFR II before PostScript before Generic PPD
+// for Canon). Ordering additionally favors whichever real macOS release is
+// actually newest (osVersionFolderRank, GitHub issue #16 follow-up,
+// 2026-09-19 - "v27 Golden Gate over v26 Tahoe today") whenever more than
+// one OS-version folder's packages coexist here, which they always do on
+// Windows (see filterToCurrentOSVersionFolder's own doc comment) - falling
+// back automatically to the next-newest release with an actual driver for
+// this family/model. Each candidate also carries its own real source
+// package/PPD path (MacDriverCandidate.Source) for the frontend's own
+// tooltip - see macDriverCandidatesWithSource (macdrivercandidate.go).
+func (a *App) MacDriverCandidatesFor(manufacturer, model, filterText string) []MacDriverCandidate {
+	<-a.ready
+	catalog, modelIndex := a.macCatalogSnapshot()
+	return macDriverCandidatesWithSource(catalog, modelIndex, manufacturer, model, filterText)
 }

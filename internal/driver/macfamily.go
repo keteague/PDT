@@ -283,13 +283,13 @@ func newestInFamily(packages []MacPackage, tokens []string, family string) (MacP
 // data corruption this feature must never produce. Two copies sharing a
 // basename and byte size are treated as the same logical download (the
 // same "never silently modified in place" assumption IsCurrent's own doc
-// comment already relies on for exactly this reason) - only the newest-
-// mtime copy among them is kept as that version's own representative.
+// comment already relies on for exactly this reason) - only one copy among
+// them is kept as that version's own representative (preferRepresentative).
 func packagesInFamily(packages []MacPackage, tokens []string, family string) []MacPackage {
 	byIdentity := map[string]MacPackage{}
 	for _, p := range familyCandidates(packages, tokens, family) {
 		key := filepath.Base(p.Path) + "|" + strconv.FormatInt(p.Size, 10)
-		if existing, ok := byIdentity[key]; !ok || p.ModTime.After(existing.ModTime) {
+		if existing, ok := byIdentity[key]; !ok || preferRepresentative(p, existing) {
 			byIdentity[key] = p
 		}
 	}
@@ -299,6 +299,42 @@ func packagesInFamily(packages []MacPackage, tokens []string, family string) []M
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ModTime.After(out[j].ModTime) })
 	return out
+}
+
+// preferRepresentative decides which of two byte-identical copies (same
+// basename+size - packagesInFamily's own dedup key, confirmed the same
+// logical download) of a package, found sitting in different OS-version
+// folders, is kept as that download's own single representative entry -
+// GitHub issue #16 follow-up (Ken's own ask, 2026-09-19): the *lowest*
+// recognized OS-version folder wins when both copies parse to one, not
+// whichever copy happens to have the newest file modification time.
+//
+// A driver package copied identically into every OS-version folder it's
+// actually compatible with (this project's own established convention - see
+// packagesInFamily's own doc comment) is compatible with that lowest folder
+// *and every newer one* - showing that floor version (e.g. "11-BigSur") in
+// a technician-facing tooltip (MacDriverCandidate.Source) conveys real,
+// useful compatibility information ("works on Big Sur and up"); showing
+// whichever copy simply happened to be touched most recently on disk was an
+// accident of copy order, not a meaningful signal. Falls back to whichever
+// copy parses to a recognized folder at all when only one does (a
+// recognized floor beats an unrecognized/missing one outright, regardless
+// of mtime), and to the previous newest-ModTime tie-break when neither
+// parses (or both parse to the exact same rank) - the same outcome
+// packagesInFamily always produced before this existed, for the case this
+// project's own real Drivers folders never actually hit in practice.
+func preferRepresentative(candidate, existing MacPackage) bool {
+	_, candidateRecognized := osVersionFolderPrefix(candidate.OSVersionFolder)
+	_, existingRecognized := osVersionFolderPrefix(existing.OSVersionFolder)
+	if candidateRecognized != existingRecognized {
+		return candidateRecognized
+	}
+	if candidateRecognized {
+		if cr, er := osVersionFolderRank(candidate.OSVersionFolder), osVersionFolderRank(existing.OSVersionFolder); cr != er {
+			return cr < er
+		}
+	}
+	return candidate.ModTime.After(existing.ModTime)
 }
 
 // ResolveMacFamily is ResolveMac, but family-and-model-aware for a

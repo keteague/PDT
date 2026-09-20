@@ -220,6 +220,40 @@ button.danger:hover:not(:disabled) {
     background: #3f5978;
 }
 
+/* Floating "clear this field" button (GitHub issue #16 follow-up,
+   2026-09-19) - one shared instance, positioned via inline left/top styles
+   over whichever text input currently has focus and a value
+   (wireTextFieldClearButton) rather than a wrapper element on every text
+   input in the app. fixed, not absolute - repositioned in JS against
+   getBoundingClientRect(), which is viewport-relative regardless of which
+   scroll container (grid, a modal, a Settings tab panel) the focused field
+   happens to be inside. */
+.text-field-clear-btn {
+    position: fixed;
+    z-index: 45;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    font-size: 13px;
+    color: #9fb3c8;
+    background: transparent;
+    border: none;
+    border-radius: 3px;
+}
+
+.text-field-clear-btn:hover {
+    color: white;
+    background: #3a577a;
+}
+
+.text-field-clear-btn[hidden] {
+    display: none;
+}
+
 /* Spooler button's own status color - independent of button.primary/danger
    (which mean "the main action"/"a destructive action" elsewhere), since
    here the color reports live service state rather than an action's
@@ -528,6 +562,14 @@ table.grid td.checkbox-cell {
     background: #1a2536;
 }
 
+/* Verbose checkbox + Normal/Debug combobox (GitHub issue #16 follow-up,
+   2026-09-19) - sit inline with Clear Log via .log-header's own flex row,
+   this just gives the checkbox+"Verbose" text pair the same tight gap the
+   global label rule already gives everywhere else. */
+.log-verbose-toggle {
+    gap: 4px;
+}
+
 .log-panel pre {
     flex: 1;
     margin: 0;
@@ -802,6 +844,59 @@ table.grid td.checkbox-cell {
     align-items: stretch;
     gap: 6px;
     white-space: normal;
+}
+
+/* The Driver modal's own three fields (GitHub issue #16) - a dedicated
+   wrapper rather than relying on .modal's own (nonexistent) child spacing,
+   so the gap *between* Model/Windows Driver/macOS Driver is set once here
+   rather than left to accident. 10px matches the Settings modal's own
+   .tab-panel row spacing - the established "space between field rows in a
+   modal" value elsewhere in this codebase. */
+.driver-modal-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Overrides .modal-field's own generic 6px label-to-input gap with the same
+   4px every other label already uses (the plain `label` rule above) - Ken's
+   own explicit ask, confirmed live: 6px read as visibly looser than the
+   Defaults panel's own Manufacturer/Driver label spacing right above this
+   modal. */
+.driver-modal .modal-field {
+    gap: 4px;
+}
+
+/* The Driver modal's own Windows/macOS Driver fields (GitHub issue #16) -
+   a checkbox inline with the field's own label, instead of a plain text
+   label, since each of those two fields is individually enabled/disabled. */
+.driver-modal-checkbox-field > span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Ken's own explicit ask: the three Model/Windows Driver/macOS Driver text
+   fields should use almost the full width of the Driver modal, with 40px of
+   padding on each side. .modal already contributes 20px of its own
+   horizontal padding (see .modal's own rule) - centering the input at
+   calc(100% - 40px) of its container (which itself already spans the
+   modal's full padded content width) adds another 20px on each side on top
+   of that, landing the input's own edge exactly 40px in from the modal's
+   true outer edge. */
+.driver-modal .combo {
+    display: block;
+}
+.driver-modal .combo input {
+    display: block;
+    width: calc(100% - 40px);
+    margin: 0 auto;
+}
+/* Keeps the dropdown's own left/right edges aligned with the input's above,
+   rather than the wider .combo box it would otherwise inherit. */
+.driver-modal .combo-list {
+    left: 20px;
+    right: 20px;
 }
 
 /* A small text link sitting inline next to a .modal-field's own label - e.g.

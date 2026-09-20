@@ -68,6 +68,18 @@ type MacPackage struct {
 type MacCatalog struct {
 	Packages         map[string][]MacPackage
 	OpenPrintingPPDs map[string][]string
+	// OpenPrintingNickNames caches each OpenPrinting PPD's own real
+	// *NickName/*ModelName content (GitHub issue #16 follow-up, 2026-09-19),
+	// keyed by manufacturer then by the PPD's own absolute path (matching
+	// OpenPrintingPPDs' own path form) - see BuildOpenPrintingNickNames. Nil
+	// is always a valid, safe "nothing cached yet" state -
+	// OpenPrintingCandidateDetails degrades to filename-only matching, never
+	// treats it as an error. BuildMacCatalog itself never populates this (a
+	// fast, side-effect-free scan, no caching decisions) - only
+	// BuildOpenPrintingNickNames does, as a separate step layered on top,
+	// exactly the same relationship BuildMacModelIndex already has to
+	// BuildMacCatalog.
+	OpenPrintingNickNames map[string]map[string]string
 }
 
 var macPackageExts = map[string]MacPackageKind{

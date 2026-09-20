@@ -4,6 +4,116 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-20 (v0.9.35) - Configure a macOS print queue from Windows, before ever touching the endpoint (GitHub issue #16)
+
+The grid can now define both a Windows and a macOS commitment for the same printer row at once,
+regardless of which platform PDT is actually running on - a technician pre-configuring on their own
+Windows laptop can now also define the macOS print queue for a site's Mac endpoints, ahead of ever
+plugging the flash drive into one.
+
+### Added
+- Grid rework: the Model/Driver text columns are gone, replaced by one "Driver" button per row that
+  opens a modal with three fields - Model, Windows Driver, and a new macOS Driver - plus a
+  Windows/macOS checkbox pair (Windows checked by default, macOS unchecked). Deploy on either
+  platform skips a row outright when that platform's own checkbox is unchecked.
+- Model is mandatory the moment macOS is checked - a real Mac has nothing else to resolve its own
+  driver from. The Model field itself now merges both worlds: Kyocera's own `.inf`-derived list on
+  Windows, plus the same background-built macOS-shaped catalog (GitHub issue #3) for a manufacturer
+  with real per-model mac data (Canon today) - new `MacModelsFor`/`MacDriverCandidatesFor` bound
+  methods on Windows, mirroring what a native mac build already had.
+- macOS Driver auto-fills the moment Model resolves (or the macOS checkbox is checked with a Model
+  already set), favoring whichever real macOS release is actually newest among the packages on disk
+  (`osVersionFolderRank`, `internal/driver/macosversion.go`) rather than a codename hardcoded to go
+  stale every September - generalizes correctly forever, and gracefully falls back to the
+  next-newest release with an actual driver for that model when the newest one doesn't have one.
+  Always overridable: clearing the field and picking from the dropdown works exactly like Windows'
+  own Driver field always has.
+- Each dropdown candidate now carries a tooltip naming the real package/PPD it comes from (e.g.
+  `Canon\26-Tahoe\UFRII_v10.19.25_mac.zip` or `OpenPrinting\Canon\cnadvc5045x1g.ppd`) -
+  `MacDriverCandidate{Label, Source}` on both platforms' `MacDriverCandidatesFor`.
+- New per-manufacturer OpenPrinting nickname cache (`catalog.<mfg>.json` under
+  `Drivers/macOS/OpenPrinting/<Manufacturer>/`, mirroring the existing vendor-package catalog's own
+  provenance-based staleness pattern): each PPD's real `*NickName`/`*ModelName` content is parsed
+  once and cached, so matching a technician's typed Model against a real OpenPrinting PPD no longer
+  depends on that PPD's own routinely-cryptic filename (`cnadvc5045x1g.ppd` for "Canon iR-ADV
+  C5045/5051") - and the dropdown now shows that real NickName as its own label, with the old
+  filename-derived label moved into the tooltip alongside the source path. A genuinely unmatched
+  Model no longer widens into the manufacturer's *entire* OpenPrinting list either - "there simply
+  isn't a candidate to choose from" now means none shown, not everything shown.
+- Apple's own bundled Generic PostScript driver is now always offered in the macOS Driver dropdown
+  (previously only as an absolute last resort when nothing else resolved at all), and both generic
+  labels are now prefixed "Apple " so they read as clearly not belonging to whichever manufacturer's
+  other candidates sit alongside them.
+- Runs in the background on both platforms (a dedicated goroutine on macOS, since `loadCatalog`
+  there is otherwise synchronous; folded into Windows' own pre-existing background mac-catalog
+  build) - never at all when running from removable media, matching this project's own established
+  "USB is slow, don't redo expensive work" treatment elsewhere. A new toolbar "Verbose" checkbox +
+  Normal/Debug combobox (checked/Normal by default, persisted in Settings) controls how much detail
+  this - and any future background catalog work - writes to the Log panel: a plain
+  started/finished line always appears; Normal adds which catalog is being checked/created; Debug
+  adds which files changed and which NickNames were added/removed.
+- Open/Save Configuration now round-trips Model plus both platforms' own driver commitments
+  (`Driver`/`MacDriver`/`WindowsDisabled`/`MacEnabled` on `printer.PrinterRow`/`config.SavedRow`) -
+  a config authored once (typically on Windows) carries both, not just whichever platform happens to
+  be running right now. A file that predates this split (`SavedRow.PreDatesMacDriverSplit`, detected
+  via real JSON-key presence, not a zero-value guess) has its old single `Driver` value migrated into
+  `MacDriver` on load when there's real reason to believe it was a mac commitment.
+- Text field usability, app-wide: a right-click context menu (Select All/Cut/Copy/Paste) on every
+  plain text input - WebView2's own default one never appears in a production Wails build - plus a
+  floating "×" button that clears whichever field currently has focus and a value. Modals no longer
+  dismiss when you click outside them (every one already has its own explicit Close/Cancel button).
+  Save ID gets keyboard focus automatically on launch.
+
+### Fixed
+- `driver.MacModelCandidates`/`MacModelCandidateDetails` now dedupe by rendered label - a driver
+  version shipped under separate installer filenames per macOS release (or otherwise not collapsed
+  by `packagesInFamily`'s own basename+size dedup) no longer shows up twice in the dropdown.
+- `packagesInFamily`'s own dedup tie-break, when the exact same file sits in several OS-version
+  folders side by side, now prefers the *lowest* recognized folder rather than whichever copy simply
+  had the newest file modification time - the tooltip now reliably reads as a real compatibility
+  floor ("works on Big Sur and up"), not an accident of copy order.
+- `driver.OpenPrintingPPDByLabel` (deploy-time resolution of a saved MacDriver commitment back to a
+  real PPD path) now also matches a cached NickName, not just the older filename-derived label - a
+  real gap the NickName-as-primary-label change above would otherwise have introduced.
+
+## 2026-09-20 (v0.9.35) - New Runbook report generates a site-survey print-driver-installation section from the grid (GitHub issue #15)
+
+A new "Runbook" toolbar button (next to Get Settings) generates the "PRINT DRIVER INSTALLATION"
+section of Ken's own site-survey notes directly from whatever's currently in the grid, and opens
+it in Notepad (Windows) or TextEdit (macOS) - disabled until at least one printer row exists.
+
+### Added
+- New "ID" grid column, right before Name - free text (e.g. "1-1"), never required, and
+  deliberately skipped in the grid's own tab order (`tabindex="-1"`) - for telling apart multiple
+  MFDs of the same make/model at one site. Round-trips through Open/Save Configuration
+  (`config.SavedRow.ID`) but deliberately absent from `printer.PrinterRow`/CSV - it has no bearing
+  on Deploy at all, purely a Runbook/documentation aid.
+- The report's own "ID:" line appears only once there's more than one printer (even blank, per
+  Ken's own explicit call), matching the single-MFD template's simpler shape when there's just one.
+- Auto-fills what PDT actually knows and leaves the rest (forbidden-access/elevation/credentials/
+  server-hosting details/endpoint availability - all human-interview-only) as a blank template:
+  Print Object Name, Port Type (derived from the row's own IP/LPD-Q/Use-Existing-Port fields, the
+  same precedence Deploy itself applies), and the Print Driver section for **both** platforms at
+  once, regardless of which one generated the report.
+  - The platform generating the report supplies its own driver name directly from the row.
+  - The *other* platform is resolved automatically when possible: on Windows, by looking up the
+    row's own Model against the macOS-shaped catalog this build already indexes in the background
+    (GitHub issue #3) - shown as a clean "`<Manufacturer> <Model>`" (e.g. "Canon imageFORCE
+    C331F"), not the catalog's own internal "`<model> (UFR II)`"-style family label. A macOS build
+    has no Windows catalog at all, so its own Windows lines always stay blank.
+  - Both platforms' download links come from Settings > Direct Downloads (GitHub issue #19, which
+    already exposes both platforms' URL fields from either platform's own Settings screen).
+- New tests: `TestBuildRunbookText_SingleMFDHasNoIDLine`,
+  `TestBuildRunbookText_MultipleMFDsShowIDLineEvenWhenBlank`,
+  `TestBuildRunbookText_ResolvesOtherPlatformDriverOnWindows`,
+  `TestBuildRunbookText_MacPlatformNeverGuessesWindowsDriver`, `TestRunbookPortType`,
+  `TestRunbookDownloadURL`, `TestWriteRunbookFile`.
+
+The generated file is named `<Save ID>-runbook.txt` and lives directly under the Configs folder -
+deliberately the same naming convention (starts with the Save ID) `ExportConfigs`' own
+`matchingConfigFiles` already scans, so the runbook rides along automatically the next time the
+technician runs Export Configs, with no changes needed there at all.
+
 ## 2026-09-19 (v0.9.34) - Windows startup added ~10 seconds building a macOS catalog nothing on Windows reads yet
 
 Reported live: on startup, PDT sat in "Initializing..." for about 10 seconds while roughly one

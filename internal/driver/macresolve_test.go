@@ -105,6 +105,33 @@ func TestResolveOpenPrintingPPD_EmptyModelNoMatch(t *testing.T) {
 	}
 }
 
+func TestOpenPrintingPPDByLabel_MatchesFilenameDerivedLabel(t *testing.T) {
+	cat := testMacCatalog(t)
+	path, ok := OpenPrintingPPDByLabel(cat, "Ricoh", "Ricoh MP C3003 (OP)")
+	if !ok || path == "" {
+		t.Fatalf("OpenPrintingPPDByLabel(filename-derived label) = (%q, %v), want a real path", path, ok)
+	}
+}
+
+// TestOpenPrintingPPDByLabel_MatchesCachedNickName is the direct regression
+// test for a real correctness gap introduced by showing the NickName as the
+// macOS Driver modal's own primary label (Ken's own ask, 2026-09-19): a
+// technician's saved MacDriver commitment can now be that NickName rather
+// than the older filename-derived label, and deploy-time resolution
+// (deploy_darwin.go/canonbatch_darwin.go, both via this function) must still
+// resolve it back to the real PPD path.
+func TestOpenPrintingPPDByLabel_MatchesCachedNickName(t *testing.T) {
+	cat := testMacCatalog(t)
+	path := cat.OpenPrintingPPDs["Ricoh"][0]
+	cat.OpenPrintingNickNames = map[string]map[string]string{
+		"Ricoh": {path: "Ricoh MP C3003 Real NickName"},
+	}
+	got, ok := OpenPrintingPPDByLabel(cat, "Ricoh", "Ricoh MP C3003 Real NickName")
+	if !ok || got != path {
+		t.Errorf("OpenPrintingPPDByLabel(cached NickName) = (%q, %v), want (%q, true)", got, ok, path)
+	}
+}
+
 func TestOpenPrintingCandidates_EmptyQueriesReturnsEverything(t *testing.T) {
 	cat := testMacCatalog(t)
 	got := OpenPrintingCandidates(cat, "Ricoh", "", "")

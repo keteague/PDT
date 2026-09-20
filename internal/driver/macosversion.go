@@ -127,6 +127,43 @@ func filterToCurrentOSVersionFolder(packages []MacPackage) []MacPackage {
 	return matched
 }
 
+// osVersionFolderRank returns a comparable "bigger is newer" rank for a
+// <number>-<Codename> driver folder name - GitHub issue #16 follow-up (Ken's
+// own ask, 2026-09-19): the macOS Driver modal should favor whichever real
+// macOS release is actually newest (today, v27 "Golden Gate" over v26
+// "Tahoe") when more than one OS-version folder's packages coexist
+// unfiltered in the same MacModelIndex, falling back to the next-newest
+// automatically whenever the newest folder simply has no driver for this
+// particular family/model - which falls out for free here, since ranking is
+// only ever compared among variants that already exist for that exact
+// (family, model) pair. Deliberately generalized to "parse the leading
+// number, bigger wins" rather than a hardcoded "27, else 26" - the same
+// folder-naming convention this project already commits to keeps this
+// correct every future macOS release with no code change needed.
+//
+// A legacy "10.x" folder always ranks below every modern integer-major
+// folder (same era boundary OSVersionFolderAtLeast already draws - Big
+// Sur/11 onward is the modern integer-major era). An unrecognized or
+// missing folder name ranks lowest of all - nothing to prefer it for. Used
+// only as a tiebreaker (MacModelCandidateDetails), so ties for machines
+// where every candidate already comes from the same single folder (any
+// native mac run - see filterToCurrentOSVersionFolder's own doc comment)
+// are harmless no-ops.
+func osVersionFolderRank(folder string) int {
+	prefix, ok := osVersionFolderPrefix(folder)
+	if !ok {
+		return -1
+	}
+	if strings.HasPrefix(prefix, "10.") {
+		return 0
+	}
+	major, err := strconv.Atoi(prefix)
+	if err != nil {
+		return -1
+	}
+	return major + 1
+}
+
 // OSVersionFolderAtLeast reports whether folderName's own leading version
 // number (osVersionFolderPrefix) is macOS major version minMajor or newer -
 // the issue #12 installer-version-gate fallback's own safety guardrail

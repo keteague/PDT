@@ -116,34 +116,105 @@ func ResolveOpenPrintingPPD(catalog MacCatalog, manufacturer, model string) (str
 // darwin hands these straight to the frontend combobox the same way
 // Candidates (Windows) hands back driver names, not .inf paths.
 func OpenPrintingCandidates(catalog MacCatalog, manufacturer, model, filterText string) []string {
-	type scored struct {
-		label string
-		score int
+	details := OpenPrintingCandidateDetails(catalog, manufacturer, model, filterText)
+	out := make([]string, len(details))
+	for i, d := range details {
+		out[i] = d.Label
 	}
+	return out
+}
+
+// OpenPrintingCandidateDetail is one OpenPrintingCandidates entry paired
+// with the real .ppd/.ppd.gz path it comes from - GitHub issue #16 follow-up
+// (Ken's own ask, 2026-09-19): a technician overriding the macOS Driver
+// modal's auto-picked driver needs to see which real file a candidate
+// actually resolves to, not just its display label.
+type OpenPrintingCandidateDetail struct {
+	Label string
+	Path  string
+}
+
+// OpenPrintingCandidateDetails is OpenPrintingCandidates' own richer
+// sibling, returning (label, path) pairs - see that function's own doc
+// comment for the shared ranking rules.
+//
+// Matching against model/filterText considers each PPD's own cached real
+// *NickName/*ModelName content (catalog.OpenPrintingNickNames -
+// BuildOpenPrintingNickNames, GitHub issue #16 follow-up, 2026-09-19), not
+// just its filename-derived label - the fix for a confirmed-live, real gap:
+// a real OpenPrinting PPD's own filename is routinely cryptic (e.g.
+// "cnadvc5045x1g.ppd" for "Canon iR-ADV C5045/5051" - see ppdNickNameRe's
+// own doc comment), so FuzzyMatchScore(label, model) alone almost never
+// matched one, which is why Model became mandatory for a checked macOS row
+// (GitHub issue #16's own modal) without ever meaningfully narrowing this
+// list - a technician had to scroll past every OpenPrinting PPD for the
+// manufacturer to find the right one. Whichever of label/nickname scores
+// higher wins (bestMatchScore) - a manufacturer whose OpenPrinting PPDs
+// already carry a friendly, filename-matching name (e.g. Ricoh) is
+// unaffected either way.
+//
+// A genuinely empty result (narrowing by model matches nothing at all - no
+// filename, no cached nickname) is returned as-is, not widened into every
+// OpenPrinting entry for manufacturer - GitHub issue #16 follow-up (Ken's
+// own explicit revision, 2026-09-19): "if there is no OpenPrinting driver
+// candidate, we should not show the complete list... there simply isn't a
+// candidate to choose from." A technician is never left looking at a
+// silently empty dropdown regardless - macDriverCandidatesWithSource
+// (macdrivercandidate.go) always offers Apple's own bundled Generic
+// PostScript driver alongside whatever this returns, and darwin's own
+// DriverCandidates already falls through to the same Generic set once every
+// other source (this one included) comes back empty.
+func OpenPrintingCandidateDetails(catalog MacCatalog, manufacturer, model, filterText string) []OpenPrintingCandidateDetail {
+	return scoredOpenPrintingCandidates(catalog, manufacturer, model, filterText)
+}
+
+// bestMatchScore is the better (higher) of FuzzyMatchScore(label, text) and,
+// when a real cached PPD nickname exists, FuzzyMatchScore(nickName, text) -
+// -1 only when neither matches at all. See OpenPrintingCandidateDetails' own
+// doc comment for why the nickname is so often the one that actually
+// matches.
+func bestMatchScore(text, label, nickName string) int {
+	best := FuzzyMatchScore(label, text)
+	if nickName == "" {
+		return best
+	}
+	if s := FuzzyMatchScore(nickName, text); s > best {
+		return s
+	}
+	return best
+}
+
+func scoredOpenPrintingCandidates(catalog MacCatalog, manufacturer, model, filterText string) []OpenPrintingCandidateDetail {
+	type scored struct {
+		detail OpenPrintingCandidateDetail
+		score  int
+	}
+	nickNames := catalog.OpenPrintingNickNames[manufacturer]
 	var candidates []scored
 	for _, path := range catalog.OpenPrintingPPDs[manufacturer] {
 		label := ppdMatchLabel(path)
+		nickName := nickNames[path]
 		total := 0
 		if model != "" {
-			s := FuzzyMatchScore(label, model)
+			s := bestMatchScore(model, label, nickName)
 			if s < 0 {
 				continue
 			}
 			total += s
 		}
 		if filterText != "" {
-			s := FuzzyMatchScore(label, filterText)
+			s := bestMatchScore(filterText, label, nickName)
 			if s < 0 {
 				continue
 			}
 			total += s
 		}
-		candidates = append(candidates, scored{label, total})
+		candidates = append(candidates, scored{OpenPrintingCandidateDetail{Label: label, Path: path}, total})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
-	out := make([]string, len(candidates))
+	out := make([]OpenPrintingCandidateDetail, len(candidates))
 	for i, c := range candidates {
-		out[i] = c.label
+		out[i] = c.detail
 	}
 	return out
 }
@@ -155,9 +226,24 @@ func OpenPrintingCandidates(catalog MacCatalog, manufacturer, model, filterText 
 // (deploy_darwin.go) prefers this over re-deriving a PPD from Model's own
 // fuzzy match whenever the technician explicitly picked one - a real
 // selection is always more authoritative than a best guess.
+//
+// Tries the filename-derived label (ppdMatchLabel) first, then falls back
+// to matching against the PPD's own cached real *NickName/*ModelName
+// content (catalog.OpenPrintingNickNames) - GitHub issue #16 follow-up
+// (Ken's own ask, 2026-09-19): the macOS Driver modal's own dropdown now
+// shows that NickName as the primary label whenever one is cached
+// (macDriverCandidatesWithSource, package main), so a saved MacDriver
+// commitment can be either form depending on when it was picked - an older
+// saved config, or a manufacturer/PPD BuildOpenPrintingNickNames hasn't
+// cataloged yet, still round-trips via the original filename-derived form.
 func OpenPrintingPPDByLabel(catalog MacCatalog, manufacturer, label string) (string, bool) {
 	for _, path := range catalog.OpenPrintingPPDs[manufacturer] {
 		if ppdMatchLabel(path) == label {
+			return path, true
+		}
+	}
+	for _, path := range catalog.OpenPrintingPPDs[manufacturer] {
+		if nick, ok := catalog.OpenPrintingNickNames[manufacturer][path]; ok && nick != "" && nick == label {
 			return path, true
 		}
 	}

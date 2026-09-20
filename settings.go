@@ -47,6 +47,22 @@ type Settings struct {
 	// ignored, so a stale copy sitting there from an old save can't lie
 	// about whether a secret is actually configured.
 	CloudSyncHasSecret bool `json:"cloudSyncHasSecret"`
+	// VerboseLoggingDisabled turns off the extra Normal/Debug-level detail
+	// background catalog work (e.g. the OpenPrinting nickname cache - see
+	// buildOpenPrintingCatalogAsync) emits into the Log panel via the
+	// toolbar's own Verbose checkbox (GitHub issue #16 follow-up,
+	// 2026-09-19). false (the zero value) is deliberately "enabled" - Ken's
+	// own explicit ask: verbose logging in Normal mode is the default a
+	// tech should see without opting in, and this negative polarity is what
+	// lets a settings.json that predates this field default to enabled
+	// rather than silently starting disabled (same reasoning/fix as
+	// printer.PrinterRow's own WindowsDisabled).
+	VerboseLoggingDisabled bool `json:"verboseLoggingDisabled"`
+	// LogLevel is "Normal" or "Debug" - the toolbar's own combobox next to
+	// the Verbose checkbox. Any other value (blank - an old settings.json,
+	// or a not-yet-recognized one) is treated as "Normal", never as
+	// invalid - see loadSettings/SaveSettings' own normalization.
+	LogLevel string `json:"logLevel"`
 }
 
 // CloudSyncSettings is the non-secret half of the Cloud Sync (R2) config -
@@ -274,6 +290,7 @@ func loadSettings() Settings {
 		ManufacturerOrder:  reconcileManufacturerOrder(nil),
 		DirectDownloadURLs: defaultDirectDownloadURLs(),
 		CloudSync:          defaultCloudSyncSettings(),
+		LogLevel:           "Normal",
 	}
 	path, err := settingsFilePath()
 	if err != nil {
@@ -287,6 +304,14 @@ func loadSettings() Settings {
 	if err := json.Unmarshal(data, &loaded); err != nil {
 		return withCloudSyncHasSecret(s)
 	}
+	// VerboseLoggingDisabled passes straight through (not gated on
+	// non-zero, unlike every string/map field above) - "explicitly true"
+	// and "explicitly false" both need to survive a save, and false is
+	// already this struct's own default, so there's no meaningful "blank
+	// means absent" case to detect here at all, unlike PreDatesMacDriverSplit's
+	// own JSON-key-presence trick elsewhere in this codebase.
+	s.VerboseLoggingDisabled = loaded.VerboseLoggingDisabled
+	s.LogLevel = normalizeLogLevel(loaded.LogLevel)
 	if loaded.SaveFileBasePath != "" {
 		s.SaveFileBasePath = loaded.SaveFileBasePath
 	}
@@ -319,6 +344,18 @@ func loadSettings() Settings {
 		s.CloudSync.ConcurrentTransfers = loaded.CloudSync.ConcurrentTransfers
 	}
 	return withCloudSyncHasSecret(s)
+}
+
+// normalizeLogLevel is LogLevel's own "any unrecognized value means Normal"
+// rule - shared by loadSettings (an old/corrupt settings.json) and
+// SaveSettings (a defensive normalization at the one other place this
+// crosses the Wails bridge), so the two can never drift apart on what
+// counts as a valid value.
+func normalizeLogLevel(level string) string {
+	if level == "Debug" {
+		return "Debug"
+	}
+	return "Normal"
 }
 
 // withCloudSyncHasSecret sets s.CloudSyncHasSecret from the OS keychain

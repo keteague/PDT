@@ -115,6 +115,23 @@ func (a *App) DriverCandidates(manufacturer, model, filterText string) []string 
 	return driver.GenericDriverCandidates(filterText)
 }
 
+// MacDriverCandidatesFor is the Driver modal's own dedicated "macOS Driver"
+// field data source (GitHub issue #16 follow-up, 2026-09-19) - identical
+// bound method name/signature to Windows' own (drivercatalog_windows.go), so
+// the frontend needs no platform branch to fetch macOS Driver candidates
+// either way. Distinct from DriverCandidates above (which the modal's own
+// Windows Driver field keeps using unchanged, on both platforms): that
+// returns plain labels with no source-path metadata, while this additionally
+// carries each candidate's own real package/PPD path
+// (MacDriverCandidate.Source) for the frontend's own tooltip - see
+// macDriverCandidatesWithSource (macdrivercandidate.go), the exact same
+// gathering logic Windows' own MacDriverCandidatesFor calls.
+func (a *App) MacDriverCandidatesFor(manufacturer, model, filterText string) []MacDriverCandidate {
+	<-a.ready
+	catalog, modelIndex, _ := a.macCatalogSnapshot()
+	return macDriverCandidatesWithSource(catalog, modelIndex, manufacturer, model, filterText)
+}
+
 // DefaultDriverFor is the Defaults panel's pre-selected Driver value for
 // manufacturer - the resolved package's own label when one is present
 // locally, "" otherwise (an OpenPrinting-only manufacturer has no single

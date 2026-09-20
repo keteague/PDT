@@ -22,8 +22,12 @@ import {EventsOn} from '../wailsjs/runtime/runtime';
 const TIP = {
     salesChainId: 'Used to name saved configuration/Settings files for this job. Letters, numbers, hyphen, and underscore only.',
     manufacturer: 'Printer manufacturer - determines which drivers are offered.',
-    driver: 'Driver to install/use for this printer. Type to fuzzy-search; multiple local versions of the same driver appear as separate dated entries - for a model-specific driver name (Kyocera, mainly), typing part of the model narrows the list the same way.',
-    model: 'Printer model - optional, free text. Narrows the Driver list the same way typing it there does; a dropdown of known models only appears when that data is actually available (Kyocera, today).',
+    driver: 'Windows driver to install/use for this printer. Type to fuzzy-search; multiple local versions of the same driver appear as separate dated entries - for a model-specific driver name (Kyocera, mainly), typing part of the model narrows the list the same way.',
+    macDriver: 'macOS driver commitment for this printer - lets a technician configuring from Windows pre-select what a real Mac should use later. Disabled until the macOS checkbox is checked; auto-filled once Model resolves (favoring the newest macOS release available), but always overridable.',
+    model: 'Printer model - narrows the Windows Driver list the same way typing it there does (a dropdown of known models only appears when that data is actually available - Kyocera, today) and drives the macOS Driver entirely once the macOS checkbox is checked. Mandatory the moment macOS is checked - a real Mac has nothing else to resolve its own driver from.',
+    driverButton: 'Configure this row\'s Model and Windows/macOS Driver.',
+    driverWindowsEnabled: 'Deploy this printer\'s Windows print queue. Checked by default - uncheck for a row that only ever defines a macOS-only queue.',
+    driverMacEnabled: 'Also deploy this printer\'s macOS print queue, using the driver commitment below - lets a technician configuring from Windows pre-select what a real Mac endpoint should use. Unchecked by default.',
     subnet: 'Pre-fills new rows\' IP with this subnet (a trailing "." is added automatically if you don\'t type one) - e.g. "10.1.1." so you only need to type the last octet per row.',
     portPrefixEnabled: 'When creating a new Standard TCP/IP port, prefix its name with the text to the right instead of using the bare IP address.',
     portPrefixText: 'Prefix text used when Port name prefix is checked, e.g. "IP_" - the port would be named "IP_10.1.1.50".',
@@ -35,6 +39,7 @@ const TIP = {
     oneSided: 'Deploy this printer set to simplex (single-sided) printing by default.',
     apf: 'Enable "Advanced printing features" on the printer\'s Advanced tab.',
     select: 'Included in the next deploy.',
+    id: 'Optional free-text label (e.g. "1-1") for telling apart multiple MFDs of the same make/model at one site - shown in the Runbook report only once there\'s more than one printer. Never required.',
     name: 'Printer object name.',
     ip: 'Printer\'s IP address, or "NUL" to bind permanently to the local NUL: port.',
     lpdQueue: 'Optional LPD queue name (macOS deploys only - Windows carries this through for portability but never uses it). Most manufacturers ignore it and respond to any/no queue name; HP ("raw") and Xerox ("lp") are the two known exceptions, auto-filled when you pick that Manufacturer - blank is fine for everyone else.',
@@ -43,6 +48,8 @@ const TIP = {
     driversBasePath: 'Where PDT looks for printer drivers (Drivers\\Windows\\<version>\\<Manufacturer>\\... on Windows, Drivers/macOS/<Manufacturer>/<version>/... on macOS) - click Refresh (or restart PDT) after changing this to rescan the new location. Defaults to Drivers alongside PDT itself when running portably, or a per-user PDT data folder for an installed copy.',
     preinstallBasePath: 'Where site-survey "<SaveID> - <Client> - <Address>" subfolders live - Export Configs looks here for the one matching the current Save ID. Stays fixed on this computer regardless of which flash drive PDT is running from. Defaults to Documents/Preinstall under your own user profile - resolved fresh on whichever computer (Windows or macOS) you\'re using, so the same setting works on both. Browse to pick anywhere else instead.',
     manufacturerOrder: 'Drag to reorder - controls the Manufacturer dropdown\'s order in Defaults and in the grid. Settings > Download Centers is always alphabetical regardless of this order.',
+    logVerbose: 'Show extra detail about background catalog work (e.g. the OpenPrinting driver cache) in the log below, in addition to the plain "started/finished" line that always appears regardless of this checkbox. Enabled by default; your choice is remembered.',
+    logVerboseLevel: 'Normal: which catalog is being checked or created. Debug: also which files changed, and which make/models were added or removed. Disabled (and ignored) while Verbose is unchecked.',
 };
 
 // HTML-attribute-escapes a string for use inside title="..." - every tooltip
@@ -70,7 +77,23 @@ let nextRowId = 1;
 function newRow(overrides = {}) {
     return Object.assign({
         _id: nextRowId++,
-        select: true, name: '', ip: '', lpdQueueName: '', manufacturer: '', model: '', driver: '',
+        select: true,
+        // Free-text, technician-assigned "1-1"-style label (GitHub issue
+        // #15) for telling apart multiple MFDs of the same make/model at one
+        // site in the Runbook report - never touches Deploy/CSV at all (see
+        // config.SavedRow's own doc comment), only Open/Save Configuration
+        // and the Runbook itself read/write this.
+        id: '',
+        name: '', ip: '', lpdQueueName: '', manufacturer: '', model: '', driver: '',
+        // macDriver/windowsEnabled/macEnabled (GitHub issue #16): see
+        // printer.PrinterRow's own doc comments. windowsEnabled is this
+        // frontend's own positive-polarity spelling of Go's WindowsDisabled
+        // (see rowToPrinterRow/rowToSavedRow, which invert it back crossing
+        // the Wails bridge) - true by default so every existing row/site
+        // keeps deploying to Windows exactly as before; macEnabled defaults
+        // false (Ken's own explicit ask - opting a row into a second,
+        // usually-not-yet-relevant platform should never happen silently).
+        macDriver: '', windowsEnabled: true, macEnabled: false,
         // '' disables SNMP on this row's port; any other text enables it and
         // is the community string used (only applies when a new port is
         // actually created) - see tip('snmpGrid').
@@ -97,6 +120,7 @@ function inferSnmpCommunity(snmpEnabled, community) {
 function rowToPrinterRow(r) {
     return {
         Name: r.name, IP: r.ip, LPDQueueName: r.lpdQueueName, Manufacturer: r.manufacturer, Model: r.model, Driver: r.driver,
+        MacDriver: r.macDriver, WindowsDisabled: !r.windowsEnabled, MacEnabled: r.macEnabled,
         SNMP: !!r.snmpCommunity, SNMPCommunity: r.snmpCommunity, Mono: r.mono, OneSided: r.oneSided,
         UseExistingPort: r.useExistingPort, AdvancedPrintingFeatures: r.advancedPrintingFeatures,
         DevModeFile: r.devModeFile,
@@ -106,6 +130,7 @@ function rowToPrinterRow(r) {
 function printerRowToRow(pr, select = true) {
     return newRow({
         select, name: pr.Name, ip: pr.IP, lpdQueueName: pr.LPDQueueName || '', manufacturer: pr.Manufacturer, model: pr.Model, driver: pr.Driver,
+        macDriver: pr.MacDriver || '', windowsEnabled: !pr.WindowsDisabled, macEnabled: !!pr.MacEnabled,
         snmpCommunity: inferSnmpCommunity(pr.SNMP, pr.SNMPCommunity), mono: pr.Mono, oneSided: pr.OneSided,
         useExistingPort: pr.UseExistingPort, advancedPrintingFeatures: pr.AdvancedPrintingFeatures,
         devModeFile: pr.DevModeFile || '',
@@ -114,16 +139,36 @@ function printerRowToRow(pr, select = true) {
 
 function rowToSavedRow(r) {
     return {
-        Select: r.select, Name: r.name, IP: r.ip, LPDQueueName: r.lpdQueueName, Manufacturer: r.manufacturer, Model: r.model, Driver: r.driver,
+        Select: r.select, ID: r.id, Name: r.name, IP: r.ip, LPDQueueName: r.lpdQueueName, Manufacturer: r.manufacturer, Model: r.model, Driver: r.driver,
+        MacDriver: r.macDriver, WindowsDisabled: !r.windowsEnabled, MacEnabled: r.macEnabled,
         Snmp: !!r.snmpCommunity, SnmpCommunity: r.snmpCommunity, Mono: r.mono, OneSided: r.oneSided,
         UseExistingPort: r.useExistingPort, AdvancedPrintingFeatures: r.advancedPrintingFeatures,
         DevModeFile: r.devModeFile,
     };
 }
 
+// savedRowToRow migrates a file that predates the Driver/MacDriver split
+// (sr.PreDatesMacDriverSplit - see config.SavedRow's own doc comment) by
+// moving its one shared Driver value into MacDriver instead of silently
+// losing it, but only when there's real reason to believe that value was
+// actually a mac commitment: Model is set, for a manufacturer with real
+// per-model mac data (isMacModelDrivenManufacturer). A pre-split Windows
+// build never populated Model for these manufacturers at all (no Kyocera-
+// style .inf model list ever existed for them there - see the old
+// App.Models' own doc comment), so a Windows-authored row never has both
+// set together; only a mac-native run ever did. The Windows Driver field is
+// left blank rather than guessed at - correctly flagged by
+// driverButtonHtml/updateDriverModalFieldStyling as needing attention if
+// Windows is also left checked, which the technician can resolve by either
+// filling it in or unchecking Windows for a mac-only row.
 function savedRowToRow(sr) {
+    const migrateToMac = sr.PreDatesMacDriverSplit && !!sr.Model && !!sr.Driver && isMacModelDrivenManufacturer(sr.Manufacturer);
     return newRow({
-        select: sr.Select, name: sr.Name, ip: sr.IP, lpdQueueName: sr.LPDQueueName || '', manufacturer: sr.Manufacturer, model: sr.Model, driver: sr.Driver,
+        select: sr.Select, id: sr.ID || '', name: sr.Name, ip: sr.IP, lpdQueueName: sr.LPDQueueName || '', manufacturer: sr.Manufacturer, model: sr.Model,
+        driver: migrateToMac ? '' : sr.Driver,
+        macDriver: migrateToMac ? sr.Driver : (sr.MacDriver || ''),
+        windowsEnabled: !sr.WindowsDisabled,
+        macEnabled: migrateToMac ? true : !!sr.MacEnabled,
         snmpCommunity: inferSnmpCommunity(sr.Snmp, sr.SnmpCommunity), mono: sr.Mono, oneSided: sr.OneSided,
         useExistingPort: sr.UseExistingPort, advancedPrintingFeatures: sr.AdvancedPrintingFeatures,
         devModeFile: sr.DevModeFile || '',
@@ -163,7 +208,7 @@ const state = {
     rows: [],
     deploying: false,
     logLines: [],
-    settings: {saveFileBasePath: '', driversBasePath: '', manufacturerUrls: {}, directDownloadUrls: {}, manufacturerOrder: []},
+    settings: {saveFileBasePath: '', driversBasePath: '', manufacturerUrls: {}, directDownloadUrls: {}, manufacturerOrder: [], verboseLoggingDisabled: false, logLevel: 'Normal'},
     // Set while Deploy is running: the exact rows submitted, in submission
     // order, plus how many deploy-progress events have arrived so far - since
     // events arrive in that same order, this correlates each event to its
@@ -424,6 +469,29 @@ document.querySelector('#app').innerHTML = `
     </div>
   </div>
 
+  <div class="modal-backdrop" id="driverModalBackdrop" hidden>
+    <div class="modal driver-modal">
+      <h3 id="driverModalTitle">Driver</h3>
+      <div class="driver-modal-fields">
+        <label class="modal-field" title="${tip('model')}">
+          Model
+          <div class="combo"><input type="text" id="driverModalModel" title="${tip('model')}"><div class="combo-list" hidden></div></div>
+        </label>
+        <label class="modal-field driver-modal-checkbox-field">
+          <span><input type="checkbox" id="driverModalWindowsEnabled" checked title="${tip('driverWindowsEnabled')}"> Windows Driver</span>
+          <div class="combo"><input type="text" id="driverModalWindowsDriver" title="${tip('driver')}"><div class="combo-list" hidden></div></div>
+        </label>
+        <label class="modal-field driver-modal-checkbox-field">
+          <span><input type="checkbox" id="driverModalMacEnabled" title="${tip('driverMacEnabled')}"> macOS Driver</span>
+          <div class="combo"><input type="text" id="driverModalMacDriver" disabled title="${tip('macDriver')}"><div class="combo-list" hidden></div></div>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button id="btnDriverModalClose">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" id="cloudSyncBackdrop" hidden>
     <div class="modal cloud-sync-modal">
       <h3>Cloud Sync</h3>
@@ -542,6 +610,7 @@ document.querySelector('#app').innerHTML = `
     <button id="btnImportCsv" title="Import printer rows from a CSV file.">Import CSV</button>
     <button id="btnImportPrinters" class="platform-windows-only" title="Import already-configured printers from this computer.">Import Printers</button>
     <button id="btnGetDevmode" class="platform-windows-only" title="Capture the current Settings (print defaults) and Device Settings from every checked row's local printer.">Get Settings</button>
+    <button id="btnRunbook" disabled title="Generate a site-survey print-driver-installation report from the printers below and open it in a text editor.">Runbook</button>
     <span class="spacer"></span>
     <button class="primary" id="btnDeploy" title="Deploy every checked row: create/update ports, drivers, and printer objects, then apply print configuration.">Deploy Checked Printers</button>
     <button class="danger" id="btnStop" disabled title="Stop after the row currently in progress finishes - no further row will start.">STOP</button>
@@ -552,12 +621,12 @@ document.querySelector('#app').innerHTML = `
       <thead>
         <tr>
           <th title="${tip('selectAllHeader')}"><input type="checkbox" id="selectAllHeader" title="${tip('selectAllHeader')}"></th>
+          <th title="${tip('id')}">ID</th>
           <th title="${tip('name')}">Name</th>
           <th title="${tip('ip')}">IP</th>
           <th title="${tip('lpdQueue')}">LPD-Q</th>
           <th title="${tip('manufacturer')}">Manufacturer</th>
-          <th title="${tip('model')}">Model</th>
-          <th title="${tip('driver')}">Driver</th>
+          <th title="${tip('driverButton')}">Driver</th>
           <th class="platform-windows-only" title="${tip('snmpGrid')}">SNMP</th>
           <th title="${tip('mono')}">Mono</th>
           <th title="${tip('oneSided')}">1-side</th>
@@ -576,6 +645,13 @@ document.querySelector('#app').innerHTML = `
     <div class="log-header">
       <span>Log</span>
       <span class="spacer"></span>
+      <label class="log-verbose-toggle" title="${tip('logVerbose')}">
+        <input type="checkbox" id="logVerboseEnabled" checked> Verbose
+      </label>
+      <select id="logVerboseLevel" title="${tip('logVerboseLevel')}">
+        <option value="Normal">Normal</option>
+        <option value="Debug">Debug</option>
+      </select>
       <button id="btnClearLog" title="Clear the log output below.">Clear Log</button>
     </div>
     <pre id="logOutput"></pre>
@@ -587,6 +663,26 @@ document.querySelector('#app').innerHTML = `
     <div class="context-menu-separator"></div>
     <button id="logCtxClear" class="context-menu-item">Clear Log</button>
   </div>
+
+  <!-- Right-click menu for every plain text input in the app (grid, Defaults,
+       every modal, Settings) - WebView2's own default context menu never
+       appears in a production Wails build, so this is the only way to get
+       Select All/Cut/Copy/Paste at all. One shared instance, delegated (see
+       wireTextFieldContextMenu) - not one per field, since fields are
+       created/destroyed constantly as the grid re-renders. -->
+  <div id="textFieldContextMenu" class="context-menu" hidden>
+    <button id="textCtxSelectAll" class="context-menu-item">Select All</button>
+    <div class="context-menu-separator"></div>
+    <button id="textCtxCut" class="context-menu-item">Cut</button>
+    <button id="textCtxCopy" class="context-menu-item">Copy</button>
+    <button id="textCtxPaste" class="context-menu-item">Paste</button>
+  </div>
+
+  <!-- Floating "clear this field" button (Ken's own ask, 2026-09-19) - one
+       shared instance repositioned over whichever text input currently has
+       focus and a value (see wireTextFieldClearButton), rather than a
+       wrapper element added to every single text input in the app. -->
+  <button type="button" id="textFieldClearBtn" class="text-field-clear-btn" tabindex="-1" title="Clear" hidden>&times;</button>
 `;
 
 const el = (id) => document.getElementById(id);
@@ -824,6 +920,18 @@ function macModelDriven(manufacturer) {
     return isMac() && state.macModelManufacturers.has(manufacturer);
 }
 
+// isMacModelDrivenManufacturer (GitHub issue #16) is macModelDriven's own
+// underlying check, deliberately without its isMac() gate - the Driver
+// modal's own macOS Driver field needs this to work the same way on Windows
+// as it already does natively on a Mac (a Windows-run technician pre-
+// configuring a macOS print queue ahead of time), while every existing
+// caller of macModelDriven itself (the Defaults panel, mainly) keeps behaving
+// exactly as it always has on a native mac run - this is a new, additional
+// question, not a redefinition of the old one.
+function isMacModelDrivenManufacturer(manufacturer) {
+    return state.macModelManufacturers.has(manufacturer);
+}
+
 // applyCatalogStatus is the shared tail end of both the mac one-click
 // Refresh Drivers handler and the Windows Rescan dialog's own confirm
 // handler - both end up with the exact same CatalogStatus shape
@@ -836,9 +944,10 @@ async function applyCatalogStatus(status, verb) {
         logStatus('ERR', `Driver catalog ${verb === 'refreshed' ? 'refresh' : 'rescan'} failed: ${status.error}`);
         return;
     }
-    if (isMac()) {
-        state.macModelManufacturers = new Set(await App.MacModelManufacturers());
-    }
+    // Fetched on both platforms now (GitHub issue #16) - Windows didn't have
+    // this at all before (nothing there ever needed it), but the new Driver
+    // modal's own macOS Driver field does, via isMacModelDrivenManufacturer.
+    state.macModelManufacturers = new Set(await App.MacModelManufacturers());
     const mfgSelect = el('defMfg');
     if (mfgSelect.value) {
         el('defDriver').value = await App.DefaultDriverFor(mfgSelect.value);
@@ -861,11 +970,23 @@ async function applyCatalogStatus(status, verb) {
     }
 }
 
+// applyLogVerbositySettings reflects state.settings' own
+// verboseLoggingDisabled/logLevel (GitHub issue #16 follow-up, 2026-09-19)
+// into the toolbar's Verbose checkbox + Normal/Debug combobox - called once
+// at startup (after GetSettings resolves) and again after Settings itself
+// is saved through the full modal, so either save path keeps this pair in
+// sync with whatever's actually persisted.
+function applyLogVerbositySettings() {
+    const enabled = !state.settings.verboseLoggingDisabled;
+    el('logVerboseEnabled').checked = enabled;
+    el('logVerboseLevel').value = state.settings.logLevel === 'Debug' ? 'Debug' : 'Normal';
+    el('logVerboseLevel').disabled = !enabled;
+}
+
 async function init() {
     state.platform = await App.Platform();
-    if (isMac()) {
-        state.macModelManufacturers = new Set(await App.MacModelManufacturers());
-    }
+    // Fetched on both platforms now - see applyCatalogStatus's own comment.
+    state.macModelManufacturers = new Set(await App.MacModelManufacturers());
     document.body.classList.add(state.platform === 'darwin' ? 'platform-darwin' : 'platform-windows');
 
     state.manufacturers = await App.Manufacturers();
@@ -883,6 +1004,7 @@ async function init() {
     }
 
     state.settings = await App.GetSettings();
+    applyLogVerbositySettings();
 
     renderGrid();
     wireEvents();
@@ -908,6 +1030,11 @@ async function init() {
 
     EventsOn('deploy-progress', (result) => onDeployProgress(result));
     EventsOn('flashcopy-progress', (progress) => updateFlashCopyProgress(progress));
+    // Background catalog work (today: the OpenPrinting nickname cache -
+    // GitHub issue #16 follow-up, 2026-09-19) has no synchronous bound-
+    // method call to piggyback a log line on the way RefreshDriverCatalog's
+    // own CatalogStatus does - this is its own channel instead.
+    EventsOn('catalog-log', (entry) => logStatus(entry.level, entry.text));
 
     // Startup overlay: everything above this point runs before wireEvents()
     // attaches a single event listener, so clicking anything during that
@@ -917,6 +1044,12 @@ async function init() {
     // fully interactive, is what actually fixes that rather than just
     // hiding the symptom.
     el('startupOverlay').hidden = true;
+    // Save ID is the very first thing a technician needs to type on a fresh
+    // launch (Ken's own explicit ask, 2026-09-19) - focused last, after the
+    // overlay above is actually gone, so it isn't sitting underneath
+    // something still covering the window and isn't immediately stolen back
+    // by whatever else might still run during this same init() call.
+    el('salesChainId').focus();
 }
 
 function logLevelClass(line) {
@@ -965,6 +1098,29 @@ function renderLog() {
 function clearLog() {
     state.logLines = [];
     renderLog();
+}
+
+// wireLogVerbosity wires the toolbar's Verbose checkbox + Normal/Debug
+// combobox (GitHub issue #16 follow-up, 2026-09-19) - each change persists
+// immediately via App.SaveSettings (state.settings already carries every
+// other current setting, so this never touches anything the Settings modal
+// itself owns), rather than waiting for some later, unrelated Settings save.
+function wireLogVerbosity() {
+    const enabledInput = el('logVerboseEnabled');
+    const levelSelect = el('logVerboseLevel');
+
+    enabledInput.addEventListener('change', async (e) => {
+        state.settings.verboseLoggingDisabled = !e.target.checked;
+        levelSelect.disabled = !e.target.checked;
+        state.settings = await App.SaveSettings(state.settings);
+        applyLogVerbositySettings();
+    });
+
+    levelSelect.addEventListener('change', async (e) => {
+        state.settings.logLevel = e.target.value;
+        state.settings = await App.SaveSettings(state.settings);
+        applyLogVerbositySettings();
+    });
 }
 
 // selectAllLog/copyLog operate on the log's own text content (state.logLines
@@ -1033,6 +1189,196 @@ function wireLogContextMenu() {
     el('logCtxSelectAll').addEventListener('click', () => { hide(); selectAllLog(); });
     el('logCtxCopy').addEventListener('click', () => { hide(); copyLog(); });
     el('logCtxClear').addEventListener('click', () => { hide(); clearLog(); });
+}
+
+// isPlainTextInput: the set of <input> types this app's own text-field
+// context menu/clear button apply to - every field a technician actually
+// types free-text into (the grid, Defaults, every modal, Settings),
+// including a combobox's own backing input (Model/Driver - a plain
+// type="text" already). Deliberately excludes checkboxes/radios/selects
+// (nothing to cut/copy/paste/clear there) and a disabled/readOnly field
+// (row-id's own tabindex="-1" field is still type="text" and editable, so
+// stays included; a genuinely disabled field like a placeholder-only combo
+// input is excluded since there's nothing to interact with).
+function isPlainTextInput(target) {
+    if (!(target instanceof HTMLInputElement) || target.disabled || target.readOnly) return false;
+    return ['text', 'password', 'search', 'tel', 'email', 'number', 'url'].includes(target.type);
+}
+
+// clipboardWriteText/clipboardReadText: the async Clipboard API first,
+// falling back to the older execCommand path - mirrors copyLog's own
+// established reasoning (some WebView2 configurations restrict
+// navigator.clipboard outright). For a write, the fallback uses a throwaway
+// offscreen textarea (copyLog's own trick); for a read, there's no
+// offscreen equivalent that makes sense - the fallback instead runs
+// execCommand('paste') directly against the real focused input, letting the
+// browser insert at the real cursor position natively rather than this code
+// needing to compute the insertion itself.
+async function clipboardWriteText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        // Falls through below.
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        return document.execCommand('copy');
+    } finally {
+        document.body.removeChild(textarea);
+    }
+}
+
+async function pasteIntoInput(input) {
+    try {
+        const text = await navigator.clipboard.readText();
+        const {selectionStart, selectionEnd} = input;
+        input.setRangeText(text, selectionStart ?? input.value.length, selectionEnd ?? input.value.length, 'end');
+    } catch {
+        // Some WebView2 configurations restrict navigator.clipboard.readText
+        // outright (same reasoning clipboardWriteText's own fallback
+        // documents) - execCommand against the real, already-focused input
+        // lets the browser handle insertion/undo-stack/selection itself.
+        if (!document.execCommand('paste')) return false;
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        return true;
+    }
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    return true;
+}
+
+// wireTextFieldContextMenu replaces every plain text input's own (never
+// actually shown - see this function's own doc comment history) right-click
+// menu with a small custom one (Select All/Cut/Copy/Paste) - Ken's own
+// explicit ask, 2026-09-19: WebView2's default context menu doesn't appear
+// at all in a production Wails build, so this is the only way to get these
+// at all. One shared instance, delegated on document (contextmenu bubbles),
+// rather than wired per-field - fields are created/destroyed constantly as
+// the grid re-renders, the same reasoning setupCombobox's own per-row
+// instantiation is fine with but a document-wide menu shouldn't repeat.
+function wireTextFieldContextMenu() {
+    const menu = el('textFieldContextMenu');
+    let targetInput = null;
+
+    const hide = () => { menu.hidden = true; targetInput = null; };
+
+    document.addEventListener('contextmenu', (e) => {
+        if (!isPlainTextInput(e.target)) return;
+        e.preventDefault();
+        targetInput = e.target;
+        targetInput.focus();
+        const hasSelection = targetInput.selectionStart !== targetInput.selectionEnd;
+        el('textCtxCut').disabled = !hasSelection;
+        el('textCtxCopy').disabled = !hasSelection;
+        menu.hidden = false;
+        const maxLeft = window.innerWidth - menu.offsetWidth - 4;
+        const maxTop = window.innerHeight - menu.offsetHeight - 4;
+        menu.style.left = `${Math.max(0, Math.min(e.clientX, maxLeft))}px`;
+        menu.style.top = `${Math.max(0, Math.min(e.clientY, maxTop))}px`;
+    });
+
+    document.addEventListener('mousedown', (e) => {
+        if (!menu.hidden && !menu.contains(e.target)) hide();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (!menu.hidden && e.key === 'Escape') hide();
+    });
+
+    el('textCtxSelectAll').addEventListener('click', () => {
+        const input = targetInput;
+        hide();
+        if (!input) return;
+        input.focus();
+        input.select();
+    });
+    el('textCtxCut').addEventListener('click', async () => {
+        const input = targetInput;
+        hide();
+        if (!input) return;
+        input.focus();
+        const {selectionStart: start, selectionEnd: end, value} = input;
+        const selected = value.slice(start, end);
+        if (!selected || !(await clipboardWriteText(selected))) return;
+        input.setRangeText('', start, end, 'end');
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+    });
+    el('textCtxCopy').addEventListener('click', async () => {
+        const input = targetInput;
+        hide();
+        if (!input) return;
+        const selected = input.value.slice(input.selectionStart, input.selectionEnd);
+        if (selected) await clipboardWriteText(selected);
+    });
+    el('textCtxPaste').addEventListener('click', async () => {
+        const input = targetInput;
+        hide();
+        if (!input) return;
+        input.focus();
+        await pasteIntoInput(input);
+    });
+}
+
+// wireTextFieldClearButton floats a single "x" button over whichever plain
+// text input currently has focus AND a non-empty value (Ken's own explicit
+// ask, 2026-09-19), repositioned against that field's own live
+// getBoundingClientRect() rather than requiring a wrapper element on every
+// text input in the app - fixed positioning (see .text-field-clear-btn in
+// app.css) makes that viewport-relative regardless of which scroll
+// container (the grid, a modal, a Settings tab panel) the field is inside.
+function wireTextFieldClearButton() {
+    const btn = el('textFieldClearBtn');
+    let currentInput = null;
+
+    function position(input) {
+        const r = input.getBoundingClientRect();
+        const size = 16;
+        btn.style.left = `${Math.max(0, r.right - size - 3)}px`;
+        btn.style.top = `${r.top + (r.height - size) / 2}px`;
+    }
+
+    function refresh() {
+        const active = document.activeElement;
+        if (isPlainTextInput(active) && active.value) {
+            currentInput = active;
+            position(active);
+            btn.hidden = false;
+        } else {
+            btn.hidden = true;
+            currentInput = null;
+        }
+    }
+
+    document.addEventListener('focusin', refresh);
+    // Deferred - clicking the clear button itself fires the input's own
+    // 'focusout' a moment before the button's own 'click' handler below
+    // would otherwise run, which would hide (and stop positioning) the
+    // button before that click ever registers.
+    document.addEventListener('focusout', () => setTimeout(refresh, 0));
+    document.addEventListener('input', (e) => { if (e.target === currentInput) refresh(); });
+    // Capture phase: "scroll" doesn't bubble, but a listener registered in
+    // the capture phase on a common ancestor (document) still sees it fire
+    // on any descendant scrollable container (.grid-wrap, a modal body, a
+    // Settings tab panel) - the one thing this app actually has several,
+    // independently-scrollable, of.
+    document.addEventListener('scroll', () => { if (currentInput) position(currentInput); }, true);
+    window.addEventListener('resize', () => { if (currentInput) position(currentInput); });
+
+    // preventDefault on mousedown, not just handling click - a plain click
+    // would first blur the input (hiding this button via focusout above)
+    // before the click itself ever fires.
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', () => {
+        if (!currentInput) return;
+        currentInput.value = '';
+        currentInput.dispatchEvent(new Event('input', {bubbles: true}));
+        currentInput.focus();
+        refresh();
+    });
 }
 
 // Drag-to-resize for the log panel: the handle sits between .grid-wrap
@@ -1118,6 +1464,19 @@ function escapeHtml(s) {
 // DriverCandidates' own guess-based fallback - confirmed live, the Driver
 // field flashed the manufacturer's single raw guessed package name while
 // typing, every time, until a real model was actually picked.
+// comboItemLabel/comboItemTooltip: an item is either a plain string (every
+// existing candidate source) or a {label, source} object (GitHub issue #16
+// follow-up, 2026-09-19 - App.MacDriverCandidatesFor's own richer shape, so
+// the macOS Driver dropdown can show which real package/PPD each candidate
+// actually comes from). Normalized here, once, so render()/commit() below
+// don't need to care which shape a given fetchCandidates happens to return.
+function comboItemLabel(it) {
+    return (it && typeof it === 'object') ? it.label : it;
+}
+function comboItemTooltip(it) {
+    return (it && typeof it === 'object' && it.source) ? it.source : '';
+}
+
 function setupCombobox(input, list, fetchCandidates, onChange, onEnter, onCommit) {
     let items = [];
     let highlighted = -1;
@@ -1125,7 +1484,11 @@ function setupCombobox(input, list, fetchCandidates, onChange, onEnter, onCommit
 
     function render() {
         list.innerHTML = items
-            .map((it, i) => `<div class="combo-item${i === highlighted ? ' active' : ''}" data-i="${i}">${escapeHtml(it)}</div>`)
+            .map((it, i) => {
+                const tooltip = comboItemTooltip(it);
+                const titleAttr = tooltip ? ` title="${attr(tooltip)}"` : '';
+                return `<div class="combo-item${i === highlighted ? ' active' : ''}" data-i="${i}"${titleAttr}>${escapeHtml(comboItemLabel(it))}</div>`;
+            })
             .join('');
         list.hidden = items.length === 0;
     }
@@ -1139,7 +1502,8 @@ function setupCombobox(input, list, fetchCandidates, onChange, onEnter, onCommit
         render();
     }
 
-    function commit(value) {
+    function commit(item) {
+        const value = comboItemLabel(item);
         clearTimeout(closeTimer);
         input.value = value;
         onChange(value);
@@ -1148,6 +1512,15 @@ function setupCombobox(input, list, fetchCandidates, onChange, onEnter, onCommit
     }
 
     input.addEventListener('focus', refresh);
+    // A click while the input already has focus fires no new 'focus' event
+    // at all - confirmed live as a real dead-end: pressing Escape hides the
+    // list (below) without blurring the input, so clicking straight back
+    // into that same field did nothing until the user first clicked
+    // elsewhere (a real blur) or toggled the field's own enable checkbox.
+    // Only reopens when the list is actually hidden, so an ordinary click
+    // that's just repositioning the caret while suggestions are already
+    // showing doesn't force a redundant refetch.
+    input.addEventListener('click', () => { if (list.hidden) refresh(); });
     input.addEventListener('input', () => {
         onChange(input.value);
         refresh();
@@ -1187,6 +1560,173 @@ function setupCombobox(input, list, fetchCandidates, onChange, onEnter, onCommit
     });
 }
 
+// --- Driver modal (GitHub issue #16) ---
+
+// The row currently open in the Driver modal, or null when it's closed -
+// the modal's three comboboxes are wired once (wireDriverModal), not
+// per-row like every other grid field, so they all read/write through this
+// rather than closing over a specific row object.
+let driverModalRow = null;
+
+// driverModalModelCandidates merges both platforms' own real per-model data
+// sources for the shared Model field: App.Models is each build's own native
+// source (Kyocera's .inf-derived list on Windows, real per-model macOS PPD
+// data already on a native mac build - see drivercatalog_darwin.go's own
+// Models), and App.MacModelsFor is the new Windows-only method
+// (drivercatalog_windows.go) reading the same background-built macOS-shaped
+// catalog issue #3 already populates there - letting a Windows-run
+// technician pick a real Canon-style model for a macOS print queue too.
+// MacModelsFor has no darwin-side equivalent (there's no Windows-shaped
+// catalog built on a native mac run, and nothing here needs one - Ken's own
+// request was specifically about configuring the *other* platform from
+// Windows), so it's only ever called there.
+function driverModalModelCandidates(manufacturer, filterText) {
+    if (isMac()) return App.Models(manufacturer, filterText);
+    return Promise.all([
+        App.Models(manufacturer, filterText),
+        App.MacModelsFor(manufacturer, filterText),
+    ]).then(([winModels, macModels]) => {
+        const merged = [...winModels];
+        for (const m of macModels) if (!merged.includes(m)) merged.push(m);
+        return merged;
+    });
+}
+
+// updateDriverModalFieldStyling mirrors driverButtonHtml's own
+// windowsIncomplete/macIncomplete rules field-by-field inside the open
+// modal itself, so the technician sees exactly which field is still needed
+// without having to close the modal and reread the grid's own button
+// styling.
+function updateDriverModalFieldStyling() {
+    if (!driverModalRow) return;
+    const r = driverModalRow;
+    el('driverModalModel').classList.toggle('input-needs-value', r.macEnabled && !r.model);
+    el('driverModalWindowsDriver').classList.toggle('input-needs-value', r.windowsEnabled && !r.driver);
+    el('driverModalMacDriver').classList.toggle('input-needs-value', r.macEnabled && !r.macDriver);
+}
+
+// macDriverAutoPick fetches this row's own best macOS driver candidate for
+// its current Model (App.MacDriverCandidatesFor's own ranking already favors
+// whichever real macOS release is actually newest - see its own doc
+// comment, no extra ranking logic needed here) and, unless the row or its
+// Model has since changed again, fills MacDriver with it. Shared by both
+// places this needs to happen: the Model field's own onCommit, and checking
+// the macOS checkbox when a Model is already set. Same bound method on both
+// platforms now (drivercatalog_windows.go/drivercatalog_darwin.go both
+// expose MacDriverCandidatesFor), so no isMac() branch is needed here.
+function macDriverAutoPick(row) {
+    if (!isMacModelDrivenManufacturer(row.manufacturer)) return;
+    const model = row.model;
+    App.MacDriverCandidatesFor(row.manufacturer, model, '').then((candidates) => {
+        if (driverModalRow !== row || row.model !== model) return; // stale - modal moved on, or Model has since changed again
+        const picked = comboItemLabel(candidates[0]) || '';
+        row.macDriver = picked;
+        el('driverModalMacDriver').value = picked;
+        updateDriverModalFieldStyling();
+    });
+}
+
+function openDriverModal(row) {
+    driverModalRow = row;
+    el('driverModalTitle').textContent = row.name ? `Driver - ${row.name}` : 'Driver';
+    el('driverModalModel').value = row.model;
+    el('driverModalWindowsEnabled').checked = row.windowsEnabled;
+    el('driverModalWindowsDriver').value = row.driver;
+    el('driverModalWindowsDriver').disabled = !row.windowsEnabled;
+    el('driverModalMacEnabled').checked = row.macEnabled;
+    el('driverModalMacDriver').value = row.macDriver;
+    el('driverModalMacDriver').disabled = !row.macEnabled;
+    updateDriverModalFieldStyling();
+    el('driverModalBackdrop').hidden = false;
+    el('driverModalModel').focus();
+}
+
+function closeDriverModal() {
+    el('driverModalBackdrop').hidden = true;
+    driverModalRow = null;
+    // Refreshes this row's own Driver button styling (driverButtonHtml)
+    // against whatever was just changed in the modal.
+    renderGrid();
+}
+
+// wireDriverModal sets up the modal's three comboboxes and two checkboxes
+// exactly once (unlike every other grid field's own wireRowEvents wiring,
+// which re-runs per row on every renderGrid()) - there's only ever one
+// Driver modal on screen, editing whichever row openDriverModal last
+// pointed it at.
+function wireDriverModal() {
+    const modelInput = el('driverModalModel');
+    setupCombobox(
+        modelInput,
+        modelInput.closest('.combo').querySelector('.combo-list'),
+        (filterText) => driverModalRow ? driverModalModelCandidates(driverModalRow.manufacturer, filterText) : Promise.resolve([]),
+        (value) => {
+            if (!driverModalRow) return;
+            driverModalRow.model = value;
+            updateDriverModalFieldStyling();
+        },
+        null,
+        (value) => {
+            // onCommit, not onChange - same "don't chase a mid-typed filter
+            // string" reasoning the old per-row wiring already documented,
+            // since MacDriverCandidatesFor's own guess-based fallback would
+            // otherwise flash a raw guessed package name on every keystroke.
+            if (!driverModalRow || driverModalRow.model !== value || !driverModalRow.macEnabled) return;
+            macDriverAutoPick(driverModalRow);
+        },
+    );
+
+    const windowsInput = el('driverModalWindowsDriver');
+    setupCombobox(
+        windowsInput,
+        windowsInput.closest('.combo').querySelector('.combo-list'),
+        (filterText) => driverModalRow ? App.DriverCandidates(driverModalRow.manufacturer, driverModalRow.model, filterText) : Promise.resolve([]),
+        (value) => {
+            if (!driverModalRow) return;
+            driverModalRow.driver = value;
+            updateDriverModalFieldStyling();
+        },
+        null,
+    );
+
+    const macInput = el('driverModalMacDriver');
+    setupCombobox(
+        macInput,
+        macInput.closest('.combo').querySelector('.combo-list'),
+        (filterText) => driverModalRow ? App.MacDriverCandidatesFor(driverModalRow.manufacturer, driverModalRow.model, filterText) : Promise.resolve([]),
+        (value) => {
+            if (!driverModalRow) return;
+            driverModalRow.macDriver = value;
+            updateDriverModalFieldStyling();
+        },
+        null,
+    );
+
+    el('driverModalWindowsEnabled').addEventListener('change', (e) => {
+        if (!driverModalRow) return;
+        driverModalRow.windowsEnabled = e.target.checked;
+        windowsInput.disabled = !driverModalRow.windowsEnabled;
+        updateDriverModalFieldStyling();
+    });
+
+    // Enabling macOS is the one moment this auto-fills MacDriver outright
+    // (rather than waiting for the technician to touch Model again) - Ken's
+    // own explicit ask: checking the box should immediately favor Tahoe for
+    // whichever Model is already set, not leave the field blank until
+    // another edit happens to retrigger it.
+    el('driverModalMacEnabled').addEventListener('change', (e) => {
+        if (!driverModalRow) return;
+        driverModalRow.macEnabled = e.target.checked;
+        macInput.disabled = !driverModalRow.macEnabled;
+        if (driverModalRow.macEnabled && !driverModalRow.macDriver && driverModalRow.model) {
+            macDriverAutoPick(driverModalRow);
+        }
+        updateDriverModalFieldStyling();
+    });
+
+    el('btnDriverModalClose').addEventListener('click', closeDriverModal);
+}
+
 // Deploy progress arrives one event per row, in the same order the rows
 // were submitted in (see deploy() below) - correlated by position via
 // activeDeploy rather than by row.Name, which the tool has never required to
@@ -1223,6 +1763,17 @@ function renderGrid() {
     // from before the ID was cleared back out).
     applySalesChainGate();
     updateDeployButtonEnabled();
+    updateRunbookButtonEnabled();
+}
+
+// Runbook (GitHub issue #15) only needs at least one printer defined to be
+// meaningful at all - unlike Deploy, it has no port-validity or Save ID
+// requirement to gate on here (GenerateRunbook's own click handler warns
+// instead if Save ID is still blank, same as Get Settings already does).
+function updateRunbookButtonEnabled() {
+    const btn = el('btnRunbook');
+    if (!btn) return;
+    btn.disabled = state.rows.length === 0;
 }
 
 // Deploy Checked Printers is only ever meaningfully clickable once every
@@ -1250,12 +1801,12 @@ function rowHtml(r) {
     return `
     <tr data-id="${r._id}" class="${cls}">
       <td class="checkbox-cell"><input type="checkbox" class="row-select" ${r.select ? 'checked' : ''} title="${tip('select')}"></td>
+      <td><input type="text" class="row-id" value="${attr(r.id)}" tabindex="-1" title="${tip('id')}"></td>
       <td><input type="text" class="row-name${isValidName(r.name) ? '' : ' input-needs-value'}" value="${attr(r.name)}" title="${tip('name')}"></td>
       <td><input type="text" class="row-ip${isValidPortValue(r.ip) ? '' : ' input-needs-value'}" value="${attr(r.ip)}" placeholder="or NUL" title="${tip('ip')}"></td>
       <td><input type="text" class="row-lpdqueue" value="${attr(r.lpdQueueName)}" placeholder="optional" title="${tip('lpdQueue')}"></td>
       <td>${mfgSelectHtml(r)}</td>
-      <td><div class="combo"><input type="text" class="row-model${(macModelDriven(r.manufacturer) && !r.model) ? ' input-needs-value' : ''}" value="${attr(r.model)}" title="${tip('model')}"><div class="combo-list" hidden></div></div></td>
-      <td><div class="combo"><input type="text" class="row-driver${r.driver ? '' : ' input-needs-value'}" value="${attr(r.driver)}" title="${tip('driver')}"><div class="combo-list" hidden></div></div></td>
+      <td class="checkbox-cell">${driverButtonHtml(r)}</td>
       <td class="platform-windows-only"><input type="text" class="row-snmp" value="${attr(r.snmpCommunity)}" placeholder="off" title="${tip('snmpGrid')}"></td>
       <td class="checkbox-cell"><input type="checkbox" class="row-mono" ${r.mono ? 'checked' : ''} title="${tip('mono')}"></td>
       <td class="checkbox-cell"><input type="checkbox" class="row-onesided" ${r.oneSided ? 'checked' : ''} title="${tip('oneSided')}"></td>
@@ -1263,6 +1814,21 @@ function rowHtml(r) {
       <td class="platform-windows-only">${devModeButtonHtml(r)}</td>
       <td class="checkbox-cell"><button class="row-remove" title="Double-click to remove this row">&times;</button></td>
     </tr>`;
+}
+
+// driverButtonHtml (GitHub issue #16) replaces the grid's old, always-visible
+// Model/Driver text columns - both now live in a per-row modal (see
+// openDriverModal), reached via this one button, needs-value-styled the same
+// way every other required-but-blank grid field already is: a missing
+// Windows Driver while Windows is checked, or a missing Model/macOS Driver
+// while macOS is checked (Model is mandatory the moment macOS is checked -
+// Ken's own explicit ask, since a real endpoint has nothing else to key its
+// own driver resolution off of).
+function driverButtonHtml(r) {
+    const windowsIncomplete = r.windowsEnabled && !r.driver;
+    const macIncomplete = r.macEnabled && (!r.model || !r.macDriver);
+    const cls = (windowsIncomplete || macIncomplete) ? 'row-driver-btn input-needs-value' : 'row-driver-btn';
+    return `<button type="button" class="${cls}" title="Configure this row's Model and Windows/macOS Driver.">Driver</button>`;
 }
 
 function devModeButtonHtml(r) {
@@ -1315,6 +1881,7 @@ function wireRowEvents() {
             updateSelectAllHeaderState();
             updateDeployButtonEnabled();
         });
+        tr.querySelector('.row-id').addEventListener('input', (e) => { row.id = e.target.value; });
         const nameInput = tr.querySelector('.row-name');
         nameInput.addEventListener('input', (e) => {
             row.name = e.target.value;
@@ -1357,77 +1924,22 @@ function wireRowEvents() {
             wireDevModeButton(tr, row);
         }
 
-        const driverCombo = tr.querySelector('.row-driver').closest('.combo');
-        const driverInput = driverCombo.querySelector('input');
-        setupCombobox(
-            driverInput,
-            driverCombo.querySelector('.combo-list'),
-            // row.model (typed into the Model field below, or left blank)
-            // narrows the candidate list server-side the same way typing
-            // part of a model name straight into Driver's own filter text
-            // already did - a driver/PPD name that's model-specific already
-            // spells the model out (Kyocera's, mainly, on Windows; a macOS
-            // PPD's own filename usually does too - see
-            // driver.ppdMatchLabel), so both keep working together.
-            (filterText) => App.DriverCandidates(row.manufacturer, row.model, filterText),
-            (value) => {
-                row.driver = value;
-                driverInput.classList.toggle('input-needs-value', !value);
-            },
-            () => addPrinterRow(true),
-        );
-
-        const modelCombo = tr.querySelector('.row-model').closest('.combo');
-        const modelInput = modelCombo.querySelector('input');
-        setupCombobox(
-            modelInput,
-            modelCombo.querySelector('.combo-list'),
-            // Optional field - no data lookup pretending to exist where
-            // there's really nothing to search. App.Models exists on both
-            // builds (drivercatalog_windows.go/drivercatalog_darwin.go) -
-            // Kyocera on Windows, Canon on macOS today, empty for every
-            // other manufacturer either way, which just means the dropdown
-            // never appears - same "plain free-text input" behavior either
-            // way.
-            (filterText) => App.Models(row.manufacturer, filterText),
-            (value) => {
-                row.model = value;
-                modelInput.classList.toggle('input-needs-value', macModelDriven(row.manufacturer) && !value);
-            },
-            () => addPrinterRow(true),
-            (value) => {
-                // For a manufacturer with real per-model mac data (Canon),
-                // Driver is fully derived from Model, not a second thing to
-                // pick by hand - DriverCandidates with a blank filterText is
-                // already preference-ordered (UFR II first - see
-                // MacModelCandidates' own doc comment), so its first result
-                // is exactly "the respective model-specific UFR II variant".
-                // onCommit, not onChange - a mid-typed filter string ("5840")
-                // doesn't fold-match any real model yet, so calling this on
-                // every keystroke fell through to DriverCandidates' own
-                // guess-based fallback and flashed the manufacturer's single
-                // raw guessed package name in Driver until a real model was
-                // actually picked (confirmed live - see setupCombobox's own
-                // doc comment on onCommit). Windows' own Kyocera model-
-                // narrowing is unaffected - this only runs for
-                // macModelDriven manufacturers, where the technician was
-                // never expected to pick Driver independently of Model at
-                // all.
-                if (!macModelDriven(row.manufacturer)) return;
-                App.DriverCandidates(row.manufacturer, value, '').then((candidates) => {
-                    if (row.model !== value) return; // stale - model has since changed again
-                    const picked = candidates[0] || '';
-                    row.driver = picked;
-                    driverInput.value = picked;
-                    driverInput.classList.toggle('input-needs-value', !picked);
-                });
-            },
-        );
+        // Model/Driver/MacDriver moved off the grid entirely into the
+        // per-row Driver modal (GitHub issue #16) - this button is the one
+        // remaining thing wireRowEvents itself does for them; the modal's
+        // own three comboboxes are wired once, not per row (see
+        // wireDriverModal), since only one row's worth of fields is ever
+        // visible/editable at a time.
+        tr.querySelector('.row-driver-btn').addEventListener('click', () => openDriverModal(row));
 
         const mfgSelect = tr.querySelector('.row-mfg');
         mfgSelect.addEventListener('change', async (e) => {
             row.manufacturer = e.target.value;
             row.model = '';
+            // A manufacturer change invalidates any macOS driver commitment
+            // picked for the *previous* manufacturer's model - same reasoning
+            // as clearing row.model itself right above.
+            row.macDriver = '';
             // Mirrors addPrinterRow's own "copy the Defaults panel's current
             // Driver" - if the Defaults panel is itself already set to this
             // same manufacturer, its current Driver value (auto-filled or a
@@ -1438,8 +1950,8 @@ function wireRowEvents() {
             // macOS this naturally comes out blank for a manufacturer with
             // real per-model data (Canon) - DefaultDriverFor returns "" for
             // those (see its own doc comment) since Driver isn't meaningful
-            // again until Model (now mandatory - see modelInput above) is
-            // actually picked.
+            // again until Model (now mandatory whenever macOS is checked -
+            // see the Driver modal) is actually picked.
             row.driver = (el('defMfg').value === row.manufacturer) ? el('defDriver').value : await App.DefaultDriverFor(row.manufacturer);
             // Always tracks the newly-picked manufacturer's own default
             // (confirmed live: leaving a stale "raw" behind after switching
@@ -1612,6 +2124,8 @@ function addPrinterRow(focusNewRow = false) {
 }
 
 function wireEvents() {
+    wireDriverModal();
+
     el('salesChainId').addEventListener('input', (e) => {
         const raw = e.target.value;
         const caretWasAtEnd = e.target.selectionStart === raw.length;
@@ -1681,7 +2195,6 @@ function wireEvents() {
     el('btnImportPrinters').addEventListener('click', openImportPrintersModal);
     el('btnImportPrintersCancel').addEventListener('click', closeImportPrintersModal);
     el('btnImportPrintersConfirm').addEventListener('click', confirmImportPrinters);
-    wireBackdropDismiss('importPrintersBackdrop', closeImportPrintersModal);
 
     el('btnGetDevmode').addEventListener('click', async () => {
         const selected = state.rows.filter(r => r.select);
@@ -1703,6 +2216,27 @@ function wireEvents() {
             }
         }
         logStatus('OK', `Captured Settings for ${captured} of ${selected.length} checked row(s).`);
+    });
+
+    // Runbook (GitHub issue #15): every printer currently in the grid, not
+    // just checked ones - a site-survey report documents the whole visit,
+    // regardless of which rows happen to be checked for the next Deploy.
+    el('btnRunbook').addEventListener('click', async () => {
+        if (!state.salesChainId) {
+            logStatus('WARN', 'Set a Save ID before generating a Runbook.');
+            return;
+        }
+        const printers = state.rows.map(r => ({
+            id: r.id, name: r.name, ip: r.ip, lpdQueueName: r.lpdQueueName, useExistingPort: r.useExistingPort,
+            manufacturer: r.manufacturer, model: r.model, driver: r.driver,
+            macDriver: r.macDriver, windowsEnabled: r.windowsEnabled, macEnabled: r.macEnabled,
+        }));
+        const result = await App.GenerateRunbook(state.salesChainId, printers);
+        if (result.error) {
+            logStatus('ERR', `Could not generate the runbook: ${result.error}`);
+        } else {
+            logStatus('OK', `Runbook saved to ${result.path}`);
+        }
     });
 
     el('btnOpenConfig').addEventListener('click', async () => {
@@ -1746,7 +2280,6 @@ function wireEvents() {
     el('btnSyncFlashDrive').addEventListener('click', () => openFlashDriveModal('sync'));
     el('btnFlashDriveCancel').addEventListener('click', closeFlashDriveModal);
     el('btnFlashDriveConfirm').addEventListener('click', confirmWriteToFlashDrive);
-    wireBackdropDismiss('flashDriveBackdrop', closeFlashDriveModal);
     for (const radio of [el('flashSyncDirectionTo'), el('flashSyncDirectionFrom')]) {
         radio.addEventListener('change', () => {
             flashSyncDirection = radio.value;
@@ -1775,7 +2308,6 @@ function wireEvents() {
         for (const p of paths) rescanSelection.set(p, true);
         renderRescanTree();
     });
-    wireBackdropDismiss('rescanBackdrop', closeRescanModal);
     // Delegated for the same reason as cloudSyncTree's own listener below -
     // renderRescanTree replaces the tree's entire innerHTML on every
     // toggle/checkbox change.
@@ -1806,7 +2338,6 @@ function wireEvents() {
     el('btnCloudSync').addEventListener('click', () => openCloudSyncModal());
     el('btnCloudSyncClose').addEventListener('click', closeCloudSyncModal);
     el('btnCloudSyncConfirm').addEventListener('click', confirmCloudSync);
-    wireBackdropDismiss('cloudSyncBackdrop', closeCloudSyncModal);
     // Delegated rather than one listener per row - the tree re-renders its
     // entire innerHTML on every toggle/checkbox change (see
     // renderCloudSyncTree), which would otherwise mean re-wiring listeners
@@ -1855,13 +2386,13 @@ function wireEvents() {
     EventsOn('cloudsync-progress', (progress) => updateCloudSyncProgress(progress));
     EventsOn('cloudsync-total-progress', (progress) => updateCloudSyncTotalProgress(progress));
 
-    wireBackdropDismiss('confirmBackdrop', () => { if (pendingConfirmCancel) pendingConfirmCancel(); });
-    wireBackdropDismiss('stopBackdrop', () => { if (pendingStopCancel) pendingStopCancel(); });
-
     el('btnClearLog').addEventListener('click', clearLog);
+    wireLogVerbosity();
 
     wireLogContextMenu();
     wireLogResize();
+    wireTextFieldContextMenu();
+    wireTextFieldClearButton();
 
     el('btnDeploy').addEventListener('click', deploy);
 
@@ -3097,21 +3628,6 @@ function closeSettingsModal() {
     el('settingsBackdrop').hidden = true;
 }
 
-// Clicking the modal's dim backdrop itself (not the modal box) closes it,
-// same as Cancel - but only when the click started and ended on the
-// backdrop, so dragging a text selection out over the backdrop before
-// releasing doesn't accidentally close it.
-function wireBackdropDismiss(backdropId, onClose) {
-    let mouseDownOnSelf = false;
-    const backdrop = el(backdropId);
-    backdrop.addEventListener('mousedown', (e) => {
-        mouseDownOnSelf = e.target === e.currentTarget;
-    });
-    backdrop.addEventListener('click', (e) => {
-        if (e.target === e.currentTarget && mouseDownOnSelf) onClose();
-    });
-}
-
 // In-app replacement for window.confirm() - a native confirm's title bar is
 // fixed browser/WebView2 chrome ("wails.localhost says"), which can't be
 // removed or reworded from JS/CSS at all, and reads as a broken/unbranded
@@ -3322,8 +3838,6 @@ function wireSettingsModal() {
         btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab));
     }
 
-    wireBackdropDismiss('settingsBackdrop', closeSettingsModal);
-
     // Each Browse button's own App.PickFolder call can reject (e.g. Wails'
     // own runtime.OpenDirectoryDialog refuses to even open when handed a
     // starting directory that no longer exists - see app.go's own
@@ -3394,6 +3908,13 @@ function wireSettingsModal() {
             manufacturerUrls,
             directDownloadUrls,
             manufacturerOrder,
+            // This modal has no UI of its own for either field - carried
+            // through from whatever the toolbar's own Verbose checkbox/
+            // Normal-Debug combobox last set (wireLogVerbosity), so saving
+            // Settings here can never silently reset them back to disabled/
+            // Normal.
+            verboseLoggingDisabled: state.settings.verboseLoggingDisabled,
+            logLevel: state.settings.logLevel,
             cloudSync: {
                 endpoint: el('cloudSyncEndpoint').value,
                 bucket: el('cloudSyncBucket').value,
@@ -3407,6 +3928,7 @@ function wireSettingsModal() {
             cloudSyncSecretKey: el('cloudSyncSecretKey').value,
         });
         state.settings = saved;
+        applyLogVerbositySettings();
         await refreshManufacturerDropdowns();
         closeSettingsModal();
         logStatus('OK', 'Settings saved. Click Refresh (or restart PDT) for a changed Drivers Base Path to take effect.');

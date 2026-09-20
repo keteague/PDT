@@ -41,6 +41,8 @@ export function ForceQuit():Promise<void>;
 
 export function FormatDrives(arg1:Array<string>):Promise<main.BatchDriveResult>;
 
+export function GenerateRunbook(arg1:string,arg2:Array<main.RunbookPrinter>):Promise<main.RunbookResult>;
+
 export function GetAppInfo():Promise<main.AppInfo>;
 
 export function GetCatalogStatus():Promise<main.CatalogStatus>;
@@ -60,6 +62,12 @@ export function ListPreinstallFolders(arg1:string):Promise<main.PreinstallFolder
 export function ListRemovableDrives():Promise<main.ListDrivesResult>;
 
 export function ListRescanTargets():Promise<Array<driver.RescanManufacturer>>;
+
+export function MacDriverCandidatesFor(arg1:string,arg2:string,arg3:string):Promise<Array<main.MacDriverCandidate>>;
+
+export function MacModelManufacturers():Promise<Array<string>>;
+
+export function MacModelsFor(arg1:string,arg2:string):Promise<Array<string>>;
 
 export function Manufacturers():Promise<Array<string>>;
 

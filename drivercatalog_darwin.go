@@ -178,3 +178,26 @@ func (a *App) MacModelManufacturers() []string {
 	sort.Strings(out)
 	return out
 }
+
+// ModelCandidatesWithSource is the Driver modal's Model dropdown data source
+// on macOS - same bound method as Windows' (drivercatalog_windows.go), minus
+// the Windows-side catalog a native mac build never builds.
+func (a *App) ModelCandidatesWithSource(manufacturer, filterText string) []ModelCandidate {
+	<-a.ready
+	macCatalog, macIndex, _ := a.macCatalogSnapshot()
+	return modelCandidatesWithSource(macCatalog, macIndex, nil, nil, manufacturer, filterText)
+}
+
+// DriverProblems is Windows' bound method of the same name
+// (drivercatalog_windows.go), minus the Windows half: a native mac build has
+// no Windows driver catalog to check a Windows commitment against, so that
+// side is always reported clean rather than guessed at.
+func (a *App) DriverProblems(manufacturer, model, winDriver, macDriver string, windowsEnabled, macEnabled bool) RowDriverProblems {
+	<-a.ready
+	var out RowDriverProblems
+	if macEnabled {
+		macCatalog, macIndex, _ := a.macCatalogSnapshot()
+		out.Mac = macDriverProblem(macCatalog, macIndex, manufacturer, model, macDriver)
+	}
+	return out
+}

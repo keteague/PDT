@@ -3,26 +3,24 @@ package printer
 import "testing"
 
 func TestRequiresNulPortWorkaround(t *testing.T) {
-	cases := []struct {
-		mfg, driver string
-		want        bool
-	}{
-		{"HP", "HP Universal Printing PCL 6", true},
-		{"HP", "HP Universal Printing PS", true},
-		{"hp", "hp universal printing pcl 6", true}, // case-insensitive
-		{"HP", "HP LaserJet Pro M404", false},
-		{"Canon", "Canon Generic Plus UFR II", false},
-		{"Ricoh", "RICOH PCL6 UniversalDriver V4.45", false}, // "Universal" match is HP-specific, not any manufacturer
-		{"Kyocera", "Kyocera FS-1100 KX", true},
-		{"Kyocera", "Kyocera TASKalfa MZ6001ci KX", true},
-		{"kyocera", "kyocera ecosys ma4500ifx kx", true}, // case-insensitive
-		{"HP", "", false},
-		{"", "HP Universal Printing PCL 6", false},
-		{"", "Kyocera FS-1100 KX", false},
+	// True for every manufacturer/driver now (Ken, 2026-09-20) - including
+	// blanks, since the Windows deploy path treats it as the default.
+	cases := []struct{ mfg, driver string }{
+		{"HP", "HP Universal Printing PCL 6"},
+		{"HP", "HP LaserJet Pro M404"},
+		{"Canon", "Canon Generic Plus UFR II"},
+		{"Ricoh", "RICOH PCL6 UniversalDriver V4.45"},
+		{"Kyocera", "Kyocera TASKalfa MZ6001ci KX"},
+		{"Lexmark", "Lexmark Universal v2 XL"},
+		{"Xerox", "Xerox GPD PCL6 V5.1076.4.0"},
+		{"Toshiba", "TOSHIBA Universal Printer 2"},
+		{"Sharp", "SHARP UD3 PCL6"},
+		{"Konica Minolta", "KONICA MINOLTA Universal PCL"},
+		{"", ""},
 	}
 	for _, c := range cases {
-		if got := RequiresNulPortWorkaround(c.mfg, c.driver); got != c.want {
-			t.Errorf("RequiresNulPortWorkaround(%q, %q) = %v, want %v", c.mfg, c.driver, got, c.want)
+		if !RequiresNulPortWorkaround(c.mfg, c.driver) {
+			t.Errorf("RequiresNulPortWorkaround(%q, %q) = false, want true", c.mfg, c.driver)
 		}
 	}
 }

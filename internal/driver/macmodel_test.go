@@ -727,3 +727,44 @@ func TestBuildMacModelIndex_RemembersPackageThatFailsToIndex(t *testing.T) {
 		t.Errorf("expected no reported changes on the second pass, got %v", changes2)
 	}
 }
+
+// TestNormalizeModelName uses the real suffix shapes from Ken's own Drivers
+// folder (2026-09-20): Ricoh "... PS", Kyocera "... KPDL", Sharp "... PPD",
+// Xerox "..., 5.10.1" - a Model is the printer, never the language or driver
+// version its PPD happens to advertise.
+func TestNormalizeModelName(t *testing.T) {
+	tests := map[string]string{
+		"RICOH MP C3003 PS":                "RICOH MP C3003",
+		"CS 2553ci KPDL":                   "CS 2553ci",
+		"SHARP MX-3071S PPD":               "SHARP MX-3071S",
+		"Xerox AltaLink B8045, 5.10.1":     "Xerox AltaLink B8045",
+		"Xerox C7120 Color MFP, 5.19.3 PS": "Xerox C7120 Color MFP",
+		"Generic PS Printer":               "Generic PS Printer",
+		"Canon iR-ADV C5840/5850":          "Canon iR-ADV C5840/5850",
+		"TOSHIBA e-STUDIO2000AC":           "TOSHIBA e-STUDIO2000AC",
+		"PS":                               "PS",
+	}
+	for in, want := range tests {
+		if got := NormalizeModelName(in); got != want {
+			t.Errorf("NormalizeModelName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestLookupMacModel_FindsWindowsStyleKyoceraNameByModelNumber: the Model
+// dropdown merges Kyocera's Windows list ("TASKalfa 2554ci") with its macOS
+// one ("CS 2554ci") - picking the Windows-style name used to resolve nothing
+// on macOS, which is what surfaced the raw package name as a "driver".
+func TestLookupMacModel_FindsWindowsStyleKyoceraNameByModelNumber(t *testing.T) {
+	idx := MacModelIndex{"Kyocera": {
+		"CS 2554ci": {{Label: "CS 2554ci (Driver)"}},
+		"CS 2553ci": {{Label: "CS 2553ci (Driver)"}},
+	}}
+	key, _, ok := lookupMacModel(idx, "Kyocera", "TASKalfa 2554ci")
+	if !ok || key != "CS 2554ci" {
+		t.Errorf("lookupMacModel(TASKalfa 2554ci) = (%q, %v), want CS 2554ci", key, ok)
+	}
+	if _, _, ok := lookupMacModel(idx, "Kyocera", "TASKalfa 9999ci"); ok {
+		t.Error("an unknown model number must not resolve")
+	}
+}

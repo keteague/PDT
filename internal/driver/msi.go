@@ -154,8 +154,8 @@ func ensureMsiInfsExtracted(root string) {
 		}
 
 		destDir := infCacheDestDir(root, path)
-		if info, statErr := os.Stat(destDir); statErr == nil && info.IsDir() {
-			return nil // already cached
+		if prepareInfCacheDest(destDir) {
+			return nil // already cached (see prepareInfCacheDest)
 		}
 
 		if err := extractInfsFromMsi(path, destDir); err != nil {

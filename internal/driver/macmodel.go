@@ -188,10 +188,51 @@ func stripLanguageSuffix(nickName string, tokens []string) (model, matchedToken 
 	for _, tok := range tokens {
 		suffix := " " + tok
 		if strings.HasSuffix(nickName, suffix) {
-			return strings.TrimSuffix(nickName, suffix), tok
+			return normalizeModelName(strings.TrimSuffix(nickName, suffix)), tok
 		}
 	}
-	return nickName, ""
+	return normalizeModelName(nickName), ""
+}
+
+// genericLanguageSuffixes are printer-language/driver-flavor words a vendor's
+// own PPD *NickName routinely tacks onto the end of a model name - real data
+// from Ken's own Drivers folder: Ricoh "RICOH MP C3003 PS", Kyocera "CS
+// 2553ci KPDL", Sharp "SHARP MX-3071S PPD". A Model is the printer, not the
+// language its driver speaks - so these never belong in the Model list, for
+// any manufacturer whose models are derived from a macOS driver catalog.
+// Longest-first so "PCL6" wins over "PCL".
+var genericLanguageSuffixes = []string{"PostScript", "PCL5e", "PCL5c", "PCL6", "PCL5", "UFR II", "UFRII", "KPDL", "PCL", "PS3", "PXL", "XPS", "PDF", "PPD", "PS"}
+
+// trailingVersionRe matches a driver-version suffix baked into a *NickName
+// - Xerox's own convention ("Xerox AltaLink B8045, 5.10.1"). Left in, the
+// same physical model from each driver version registers as a separate model
+// (real data: 1,165 of Xerox's 1,166 indexed "models" carried one), which is
+// exactly the "multiple selections for the same model but different
+// versions" clutter this exists to remove - the versions still exist, as
+// coexisting variants of one model, the way every other manufacturer's do.
+var trailingVersionRe = regexp.MustCompile(`,\s*\d+(\.\d+)+$`)
+
+// normalizeModelName strips trailing driver-version and printer-language
+// noise (see genericLanguageSuffixes/trailingVersionRe) from a model name,
+// repeatedly, so "Xerox C300 Color Printer, 5.19.3" and "RICOH MP C3003 PS"
+// both come out as the bare model.
+func normalizeModelName(name string) string {
+	out := strings.TrimSpace(name)
+	for i := 0; i < 3; i++ {
+		before := out
+		out = strings.TrimSpace(trailingVersionRe.ReplaceAllString(out, ""))
+		for _, tok := range genericLanguageSuffixes {
+			suffix := " " + tok
+			if len(out) > len(suffix) && strings.HasSuffix(out, suffix) {
+				out = strings.TrimSpace(strings.TrimSuffix(out, suffix))
+				break
+			}
+		}
+		if out == before {
+			break
+		}
+	}
+	return out
 }
 
 // ricohJapanModelNumberRe matches Ricoh's own second real Japan-market
@@ -620,6 +661,13 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 					// result, even though their real packages were untouched.
 					if len(cachedModels) > 0 && cachedVariantFilesExist(cachedModels) {
 						for model, variants := range cachedModels {
+							// A catalog.<mfg>.json written before
+							// normalizeModelName existed still carries the
+							// old, suffixed keys ("RICOH MP C3003 PS") -
+							// cleaned here on every load rather than forcing
+							// a full re-index of every cached package just to
+							// rename them.
+							model = normalizeModelName(model)
 							for _, v := range variants {
 								byModel[model] = append(byModel[model], toMacPPDVariant(model, v, driversRoot))
 							}
@@ -871,7 +919,51 @@ func lookupMacModel(index MacModelIndex, manufacturer, model string) (canonicalM
 			return key, v, true
 		}
 	}
+	// A Model saved (or typed) before normalizeModelName existed still has
+	// its "... PS"/", 5.10.1" noise attached.
+	if clean := normalizeModelName(model); clean != model {
+		for key, v := range models {
+			if foldMatchIgnoringSpaces(key, clean) {
+				return key, v, true
+			}
+		}
+	}
+	// The Model dropdown merges a manufacturer's Windows-side list with its
+	// macOS-side one, and the two name the same printer differently (real
+	// data: Kyocera Windows "TASKalfa 2554ci" vs macOS "CS 2554ci") - so a
+	// Windows-derived pick found nothing here and the macOS Driver field
+	// fell back to showing the whole package's own name instead of the
+	// model's PPD. Falls back to the model number itself, only when exactly
+	// one macOS model carries it (never a guess between several).
+	if code := modelNumberToken(model); code != "" {
+		var foundKey string
+		matches := 0
+		for key := range models {
+			if modelNumberToken(key) == code {
+				foundKey = key
+				matches++
+			}
+		}
+		if matches == 1 {
+			return foundKey, models[foundKey], true
+		}
+	}
 	return "", nil, false
+}
+
+// modelNumberToken is a model name's own model-number word - its last
+// whitespace-separated token containing a digit and at least 3 characters,
+// lowercased ("TASKalfa 2554ci" -> "2554ci", "CS 2554ci KPDL" -> "2554ci"
+// once normalized). "" when nothing qualifies.
+func modelNumberToken(name string) string {
+	fields := strings.Fields(normalizeModelName(name))
+	for i := len(fields) - 1; i >= 0; i-- {
+		f := fields[i]
+		if len(f) >= 3 && strings.ContainsAny(f, "0123456789") {
+			return strings.ToLower(f)
+		}
+	}
+	return ""
 }
 
 // MacModels lists manufacturer's known models from index (see
@@ -1092,4 +1184,27 @@ func MacVariantForDeploy(index MacModelIndex, manufacturer, model, driverLabel s
 		}
 	}
 	return variants[0], true
+}
+
+// NormalizeModelName is normalizeModelName for callers outside this package
+// (the Model dropdown's OpenPrinting-derived entries need the same cleanup
+// the macOS model index applies).
+func NormalizeModelName(name string) string { return normalizeModelName(name) }
+
+// MacModelSourcePaths lists the distinct driver packages (absolute paths,
+// sorted) one model's variants come from - the Model dropdown's tooltip
+// data. Direct index access, not lookupMacModel: callers iterate the
+// index's own already-exact keys, and the fuzzy fallbacks there are far too
+// costly to run per model across a 1,100-model manufacturer.
+func MacModelSourcePaths(index MacModelIndex, manufacturer, model string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, v := range index[manufacturer][model] {
+		if v.SourcePackagePath != "" && !seen[v.SourcePackagePath] {
+			seen[v.SourcePackagePath] = true
+			out = append(out, v.SourcePackagePath)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

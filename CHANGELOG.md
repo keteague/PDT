@@ -4,6 +4,46 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-20 (v0.9.37) - Driver-list tooltips and cleanup, red Driver button, stale driver-cache fix, NUL-first for every deploy
+
+### Fixed
+- Spooler menu (Restart/Start/Stop) did nothing: the click handler still referenced bare
+  `RestartSpooler`/`StartSpooler`/`StopSpooler` names left over from before main.js switched to the
+  namespace import (`App.*`), so it threw an uncaught ReferenceError. Failures now log an error line.
+- Toshiba's Windows driver never appeared, and Lexmark failed at Deploy with `msiexec` exit 1619:
+  both had a `.pdt-infcache` folder left by an older PDT version, and every archive type trusted
+  any existing cache folder as "already extracted". A finished entry always ends with its
+  `.pdt-source` marker, so `prepareInfCacheDest` now removes and rebuilds any folder without one -
+  for zips, self-extracting `.exe` packages and `.msi` files.
+- The clear-field "x" button and the right-click text menu were hidden behind modals (z-index 45/40
+  vs. the modal backdrop's 100) - now 150, so they work inside the Driver modal and Settings.
+- The macOS Driver list no longer offers a raw package name ("Kyocera Web build 2026.07.03") as a
+  driver for a manufacturer that has a model index; a Windows-style Kyocera model name ("TASKalfa
+  2554ci") now finds its macOS entry ("CS 2554ci") by model number when exactly one matches.
+
+### Changed
+- Model lists no longer carry printer-language or driver-version noise: Ricoh "... PS", Kyocera
+  "... KPDL", Sharp "... PPD", Xerox "..., 5.10.1" are stripped for every manufacturer whose models
+  come from a macOS catalog (`normalizeModelName`). Xerox went from 1,166 entries to 208 because
+  each driver version had registered as a separate model. Old catalogs and old saved Model values
+  still resolve with no re-index.
+- HP (no model index) now gets its Model list from OpenPrinting's real model names.
+- Every Windows deploy now creates the printer object against `NUL:` first and rebinds it to the
+  Standard TCP/IP port afterward (previously only HP Universal, Kyocera and Lexmark). On a nine-
+  printer test set, whole-deploy time went from 5m01s to 4m20s (about 33s to 29s per printer);
+  object creation for Xerox/Toshiba/Canon dropped from 16-21s to 0-6s. Driver installs (HP, Toshiba,
+  Xerox) are unchanged and now dominate the total.
+
+### Added
+- Hover tooltips naming the source package on the Model dropdown (every driver package that offers
+  the model, relative to the Drivers folder) and on the Windows Driver dropdown, including the
+  Defaults panel's (manufacturer plus package path) - so several near-identical entries can be told
+  apart. Model tooltip text no longer refers to Kyocera only.
+- The grid Driver button turns red, with the reason as its tooltip, when a manufacturer has no
+  driver at all for an enabled platform, or the driver on the row isn't one of that manufacturer's
+  candidates, or the macOS model isn't in the catalog. The yellow "still blank" state now actually
+  shows on the button too.
+
 ## 2026-09-20 (v0.9.36) - Settings > Direct Downloads now covers every manufacturer PDT knows about (GitHub issue #19)
 
 ### Added

@@ -6,8 +6,21 @@ import (
 )
 
 type candidate struct {
-	Label string
-	Date  time.Time
+	Label   string
+	Date    time.Time
+	Sources []string
+}
+
+// CandidateDetail is one Candidates entry paired with the real package(s) it
+// comes from - the archive (.zip/.msi/self-extracting .exe) when one exists,
+// else the extracted .inf itself. Sources is sorted and de-duplicated (a
+// single label can span an x64 and an arm64 package). Used by the Windows
+// Driver dropdown's tooltip so a technician choosing between several
+// similarly-named drivers can see which manufacturer folder and package each
+// one actually comes from.
+type CandidateDetail struct {
+	Label   string
+	Sources []string
 }
 
 // Candidates ports Get-DriverCandidates: manufacturer(+model) -> selectable
@@ -16,6 +29,17 @@ type candidate struct {
 // version gets its own decorated "<name> (vVersion - yyyy-MM-dd[, arch])"
 // label so an intentionally-kept older version stays individually selectable.
 func Candidates(catalog Catalog, modelIndex map[string]map[string][]string, manufacturer, model, filterText string) []string {
+	details := CandidateDetails(catalog, modelIndex, manufacturer, model, filterText)
+	out := make([]string, len(details))
+	for i, d := range details {
+		out[i] = d.Label
+	}
+	return out
+}
+
+// CandidateDetails is Candidates' own richer sibling - identical ordering
+// and filtering, but each label also carries its source package path(s).
+func CandidateDetails(catalog Catalog, modelIndex map[string]map[string][]string, manufacturer, model, filterText string) []CandidateDetail {
 	mfgCatalog, ok := catalog[manufacturer]
 	if !ok {
 		// []string{}, not nil - a nil slice marshals to JSON `null`, and the
@@ -25,7 +49,7 @@ func Candidates(catalog Catalog, modelIndex map[string]map[string][]string, manu
 		// bug) - an unrecognized/not-yet-selected manufacturer (blank, in
 		// particular, when zero manufacturers have any drivers at all) is a
 		// routine "nothing to offer yet" result, not an error.
-		return []string{}
+		return []CandidateDetail{}
 	}
 
 	var names []string
@@ -73,26 +97,39 @@ func Candidates(catalog Catalog, modelIndex map[string]map[string][]string, manu
 				}
 				label += ")"
 			}
-			labeled = append(labeled, candidate{Label: label, Date: sample.Date})
+			seen := map[string]bool{}
+			var sources []string
+			for _, e := range archesInGroup {
+				src := e.ArchivePath
+				if src == "" {
+					src = e.InfPath
+				}
+				if src != "" && !seen[src] {
+					seen[src] = true
+					sources = append(sources, src)
+				}
+			}
+			sort.Strings(sources)
+			labeled = append(labeled, candidate{Label: label, Date: sample.Date, Sources: sources})
 		}
 	}
 
 	if filterText != "" {
 		type scored struct {
-			label string
+			c     candidate
 			score int
 		}
 		var results []scored
 		for _, c := range labeled {
 			s := FuzzyMatchScore(c.Label, filterText)
 			if s >= 0 {
-				results = append(results, scored{c.Label, s})
+				results = append(results, scored{c, s})
 			}
 		}
 		sort.SliceStable(results, func(i, j int) bool { return results[i].score > results[j].score })
-		out := make([]string, len(results))
+		out := make([]CandidateDetail, len(results))
 		for i, r := range results {
-			out[i] = r.label
+			out[i] = CandidateDetail{Label: r.c.Label, Sources: r.c.Sources}
 		}
 		return out
 	}
@@ -103,9 +140,9 @@ func Candidates(catalog Catalog, modelIndex map[string]map[string][]string, manu
 		}
 		return labeled[i].Label < labeled[j].Label
 	})
-	out := make([]string, len(labeled))
+	out := make([]CandidateDetail, len(labeled))
 	for i, c := range labeled {
-		out[i] = c.Label
+		out[i] = CandidateDetail{Label: c.Label, Sources: c.Sources}
 	}
 	return out
 }

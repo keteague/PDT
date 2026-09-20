@@ -58,6 +58,14 @@ export function DriverCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['DriverCandidates'](arg1, arg2, arg3);
 }
 
+export function DriverCandidatesWithSource(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DriverCandidatesWithSource'](arg1, arg2, arg3);
+}
+
+export function DriverProblems(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['DriverProblems'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function EnumerateLocalPrinters() {
   return window['go']['main']['App']['EnumerateLocalPrinters']();
 }
@@ -136,6 +144,10 @@ export function Manufacturers() {
 
 export function MatchDirectDownloadFamily(arg1, arg2, arg3) {
   return window['go']['main']['App']['MatchDirectDownloadFamily'](arg1, arg2, arg3);
+}
+
+export function ModelCandidatesWithSource(arg1, arg2) {
+  return window['go']['main']['App']['ModelCandidatesWithSource'](arg1, arg2);
 }
 
 export function Models(arg1, arg2) {

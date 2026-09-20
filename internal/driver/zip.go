@@ -91,8 +91,8 @@ func ensureZipInfsExtracted(root string) {
 		}
 
 		destDir := infCacheDestDir(root, path)
-		if info, statErr := os.Stat(destDir); statErr == nil && info.IsDir() {
-			return nil // already extracted
+		if prepareInfCacheDest(destDir) {
+			return nil // already extracted (see prepareInfCacheDest)
 		}
 
 		if err := extractInfsFromZip(path, destDir); err != nil {

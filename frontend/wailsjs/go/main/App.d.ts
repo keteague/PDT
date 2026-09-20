@@ -33,6 +33,10 @@ export function DirectDownloadManufacturers():Promise<Array<string>>;
 
 export function DriverCandidates(arg1:string,arg2:string,arg3:string):Promise<Array<string>>;
 
+export function DriverCandidatesWithSource(arg1:string,arg2:string,arg3:string):Promise<Array<main.WindowsDriverCandidate>>;
+
+export function DriverProblems(arg1:string,arg2:string,arg3:string,arg4:string,arg5:boolean,arg6:boolean):Promise<main.RowDriverProblems>;
+
 export function EnumerateLocalPrinters():Promise<Array<main.LocalPrinterCandidate>>;
 
 export function ExportConfigs(arg1:string,arg2:string,arg3:string,arg4:Array<string>):Promise<main.ExportResult>;
@@ -72,6 +76,8 @@ export function MacModelsFor(arg1:string,arg2:string):Promise<Array<string>>;
 export function Manufacturers():Promise<Array<string>>;
 
 export function MatchDirectDownloadFamily(arg1:string,arg2:string,arg3:string):Promise<string>;
+
+export function ModelCandidatesWithSource(arg1:string,arg2:string):Promise<Array<main.ModelCandidate>>;
 
 export function Models(arg1:string,arg2:string):Promise<Array<string>>;
 

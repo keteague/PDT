@@ -103,6 +103,8 @@ func TestBuildCatalog_DoesNotReExtractExistingCache(t *testing.T) {
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A finished extraction always ends with its source marker.
+	writeSourceMarker(cacheDir, filepath.Join(canonDir, "ZippedPackage.zip"))
 
 	cat, err := BuildCatalog(root)
 	if err != nil {
@@ -174,11 +176,41 @@ func TestEnsureZipInfsExtracted_SkipsAlreadyCached(t *testing.T) {
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSourceMarker(cacheDir, filepath.Join(canonDir, "ZippedPackage.zip"))
 
 	ensureZipInfsExtracted(canonDir)
 
 	if _, err := os.Stat(filepath.Join(cacheDir, "Driver", "zipped.inf")); !os.IsNotExist(err) {
-		t.Errorf("expected the pre-existing (empty) cache folder to be left alone, not (re-)extracted into, got err=%v", err)
+		t.Errorf("expected the completed cache folder to be left alone, not (re-)extracted into, got err=%v", err)
+	}
+}
+
+// TestEnsureZipInfsExtracted_RebuildsIncompleteCache is the regression test
+// for Toshiba's universal driver (Ken, 2026-09-20): its cache folder existed
+// (left by an older PDT version) but held none of the package's own .inf files
+// and had no top-level source marker, so the "folder exists = done" check
+// skipped it forever and Toshiba never produced a single Windows driver. A
+// folder without the marker - written last by a successful pass - is rebuilt.
+func TestEnsureZipInfsExtracted_RebuildsIncompleteCache(t *testing.T) {
+	root := t.TempDir()
+	canonDir := filepath.Join(root, "Canon")
+	if err := os.MkdirAll(canonDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestZip(t, filepath.Join(canonDir, "ZippedPackage.zip"), "Driver/zipped.inf", testZipInf)
+
+	cacheDir := filepath.Join(canonDir, PdtInfCacheDirName, "ZippedPackage")
+	if err := os.MkdirAll(filepath.Join(cacheDir, "Driver", "leftover"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureZipInfsExtracted(canonDir)
+
+	if _, err := os.Stat(filepath.Join(cacheDir, "Driver", "zipped.inf")); err != nil {
+		t.Errorf("expected the incomplete cache folder to be rebuilt with the package's .inf, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, pdtSourceMarkerName)); err != nil {
+		t.Errorf("expected the rebuilt cache to carry its source marker, got err=%v", err)
 	}
 }
 

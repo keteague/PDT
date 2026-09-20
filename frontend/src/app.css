@@ -194,7 +194,7 @@ button.danger:hover:not(:disabled) {
     border: 1px solid #3f5978;
     border-radius: 4px;
     overflow: hidden;
-    z-index: 40;
+    z-index: 150;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
@@ -220,6 +220,8 @@ button.danger:hover:not(:disabled) {
     background: #3f5978;
 }
 
+/* z-index 150 (this button and .context-menu): above .modal-backdrop (100) so both
+   still show inside the Driver modal, Settings, and every other dialog. */
 /* Floating "clear this field" button (GitHub issue #16 follow-up,
    2026-09-19) - one shared instance, positioned via inline left/top styles
    over whichever text input currently has focus and a value
@@ -230,7 +232,7 @@ button.danger:hover:not(:disabled) {
    happens to be inside. */
 .text-field-clear-btn {
     position: fixed;
-    z-index: 45;
+    z-index: 150;
     width: 16px;
     height: 16px;
     padding: 0;
@@ -1240,4 +1242,19 @@ table.grid td.checkbox-cell {
     background: #2f6f4f;
     border-color: #3f8f66;
     color: #fff;
+}
+
+/* Grid Driver button states (GitHub issue #16 follow-up, 2026-09-20): yellow =
+   a required driver/model is still blank, red = what's there can't work (no
+   candidate for the manufacturer, or the selected driver isn't one of them) -
+   red wins; its tooltip carries the reason. */
+button.row-driver-btn.input-needs-value {
+    background: #ffe066;
+    color: #111;
+    border-color: #c9a92c;
+}
+button.row-driver-btn.driver-problem {
+    background: #c0392b;
+    color: white;
+    border-color: #e74c3c;
 }

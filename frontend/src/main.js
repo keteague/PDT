@@ -24,7 +24,7 @@ const TIP = {
     manufacturer: 'Printer manufacturer - determines which drivers are offered.',
     driver: 'Windows driver to install/use for this printer. Type to fuzzy-search; multiple local versions of the same driver appear as separate dated entries - for a model-specific driver name (Kyocera, mainly), typing part of the model narrows the list the same way.',
     macDriver: 'macOS driver commitment for this printer - lets a technician configuring from Windows pre-select what a real Mac should use later. Disabled until the macOS checkbox is checked; auto-filled once Model resolves (favoring the newest macOS release available), but always overridable.',
-    model: 'Printer model - narrows the Windows Driver list the same way typing it there does (a dropdown of known models only appears when that data is actually available - Kyocera, today) and drives the macOS Driver entirely once the macOS checkbox is checked. Mandatory the moment macOS is checked - a real Mac has nothing else to resolve its own driver from.',
+    model: 'The printer\'s model. Choosing one narrows the Windows Driver list, and drives the macOS Driver entirely once the macOS checkbox is checked. Mandatory then, since a real Mac has nothing else to resolve its own driver from. Suggestions come from every driver catalog PDT has for this manufacturer (Windows drivers, macOS drivers, OpenPrinting PPDs); hover an entry to see which driver package(s) it comes from.',
     driverButton: 'Configure this row\'s Model and Windows/macOS Driver.',
     driverWindowsEnabled: 'Deploy this printer\'s Windows print queue. Checked by default - uncheck for a row that only ever defines a macOS-only queue.',
     driverMacEnabled: 'Also deploy this printer\'s macOS print queue, using the driver commitment below - lets a technician configuring from Windows pre-select what a real Mac endpoint should use. Unchecked by default.',
@@ -1581,15 +1581,10 @@ let driverModalRow = null;
 // request was specifically about configuring the *other* platform from
 // Windows), so it's only ever called there.
 function driverModalModelCandidates(manufacturer, filterText) {
-    if (isMac()) return App.Models(manufacturer, filterText);
-    return Promise.all([
-        App.Models(manufacturer, filterText),
-        App.MacModelsFor(manufacturer, filterText),
-    ]).then(([winModels, macModels]) => {
-        const merged = [...winModels];
-        for (const m of macModels) if (!merged.includes(m)) merged.push(m);
-        return merged;
-    });
+    // One bound method on both platforms now (ModelCandidatesWithSource) - it
+    // merges every catalog that can name a model for this manufacturer and
+    // attaches a per-entry tooltip naming the driver package(s) behind it.
+    return App.ModelCandidatesWithSource(manufacturer, filterText);
 }
 
 // updateDriverModalFieldStyling mirrors driverButtonHtml's own
@@ -1680,7 +1675,13 @@ function wireDriverModal() {
     setupCombobox(
         windowsInput,
         windowsInput.closest('.combo').querySelector('.combo-list'),
-        (filterText) => driverModalRow ? App.DriverCandidates(driverModalRow.manufacturer, driverModalRow.model, filterText) : Promise.resolve([]),
+        // Windows: DriverCandidatesWithSource carries a per-item tooltip (manufacturer
+        // + real package path); a native mac build keeps plain DriverCandidates.
+        (filterText) => driverModalRow
+            ? (isMac()
+                ? App.DriverCandidates(driverModalRow.manufacturer, driverModalRow.model, filterText)
+                : App.DriverCandidatesWithSource(driverModalRow.manufacturer, driverModalRow.model, filterText))
+            : Promise.resolve([]),
         (value) => {
             if (!driverModalRow) return;
             driverModalRow.driver = value;
@@ -2035,7 +2036,9 @@ function setupDefaultsComboboxes() {
         el('defDriverList'),
         // No separate Model field here either - see the grid row driver
         // combobox's own comment.
-        (filterText) => App.DriverCandidates(el('defMfg').value, '', filterText),
+        (filterText) => isMac()
+            ? App.DriverCandidates(el('defMfg').value, '', filterText)
+            : App.DriverCandidatesWithSource(el('defMfg').value, '', filterText),
         // Blank is fine, not "needs a value", for a manufacturer with real
         // per-model mac data (Canon) - the Defaults panel has no Model field
         // to narrow by, so there's no single correct driver to require here
@@ -2810,12 +2813,24 @@ async function refreshSpoolerButtonState() {
 // then the actual resulting state the Go side already re-queried once it
 // resolves.
 async function controlSpooler(action) {
-    const fns = {restart: RestartSpooler, start: StartSpooler, stop: StopSpooler};
+    // App.* (namespace import - see this file's own top-of-file comment), not
+    // bare RestartSpooler/StartSpooler/StopSpooler identifiers: those names
+    // were only ever in scope back when this file used named imports, and
+    // referencing them now throws an uncaught ReferenceError - which looked
+    // exactly like "clicking a menu item does nothing."
+    const fns = {restart: App.RestartSpooler, start: App.StartSpooler, stop: App.StopSpooler};
     const pastTense = {restart: 'restarted', start: 'started', stop: 'stopped'};
     const fn = fns[action];
     if (!fn) return;
     applySpoolerButtonState('pending');
-    const result = await fn();
+    let result;
+    try {
+        result = await fn();
+    } catch (err) {
+        applySpoolerButtonState('pending');
+        logStatus('ERR', `Could not ${action} the Print Spooler service: ${err}`);
+        return;
+    }
     applySpoolerButtonState(result.error ? 'pending' : result.state);
     if (result.error) {
         logStatus('ERR', `Could not ${action} the Print Spooler service: ${result.error}`);

@@ -3,6 +3,7 @@ package driver
 import (
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestCandidates_MultiVersionDecoratesBothWithArchNote(t *testing.T) {
@@ -60,5 +61,34 @@ func TestCandidates_SingleCompatibleVersionStaysPlain(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected plain 'HP Universal Printing PCL 6' label (arm64-only version filtered out), got %v", got)
+	}
+}
+
+// TestCandidateDetails_CarriesSourcePackagePerVersion: three versions of the
+// same driver name each report their own package (archive when known, else
+// the .inf) - the Windows Driver dropdown's tooltip data.
+func TestCandidateDetails_CarriesSourcePackagePerVersion(t *testing.T) {
+	d1 := time.Date(2025, 9, 1, 0, 0, 0, 0, time.UTC)
+	d2 := time.Date(2025, 9, 8, 0, 0, 0, 0, time.UTC)
+	catalog := Catalog{
+		"Konica Minolta": {
+			"KONICA MINOLTA Universal PCL": {
+				"v1|2025-09-01": {"x64": {InfPath: "cache/a.inf", ArchivePath: "KM/Universal_v1.zip", Date: d1, Version: "3.9.1310.0"}},
+				"v2|2025-09-08": {"x64": {InfPath: "KM/extracted/b.inf", Date: d2, Version: "3.9.1203.500"}},
+			},
+		},
+	}
+	got := CandidateDetails(catalog, nil, "Konica Minolta", "", "")
+	if len(got) != 2 {
+		t.Fatalf("expected 2 candidates, got %+v", got)
+	}
+	if got[0].Sources[0] != "KM/extracted/b.inf" {
+		t.Errorf("newest version should list its .inf (no archive), got %+v", got[0])
+	}
+	if got[1].Sources[0] != "KM/Universal_v1.zip" {
+		t.Errorf("older version should list its archive, got %+v", got[1])
+	}
+	if plain := Candidates(catalog, nil, "Konica Minolta", "", ""); len(plain) != 2 || plain[0] != got[0].Label {
+		t.Errorf("Candidates and CandidateDetails must agree on labels/order, got %v vs %+v", plain, got)
 	}
 }

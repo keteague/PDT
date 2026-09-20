@@ -23,6 +23,30 @@ type MacDriverCandidate struct {
 	Source string `json:"source"`
 }
 
+// WindowsDriverCandidate is one entry in the Windows Driver dropdown, shaped
+// like MacDriverCandidate so the frontend's combobox tooltip handling is
+// shared. Source is a two-part tooltip: the manufacturer, then the real
+// package path(s) relative to the Drivers folder (an x64 and an arm64
+// package behind one label each get their own line).
+type WindowsDriverCandidate struct {
+	Label  string `json:"label"`
+	Source string `json:"source"`
+}
+
+// windowsDriverCandidateSource builds WindowsDriverCandidate.Source.
+func windowsDriverCandidateSource(manufacturer string, sources []string) string {
+	root := driversRoot()
+	lines := []string{manufacturer}
+	for _, src := range sources {
+		if rel, err := filepath.Rel(root, src); err == nil && !strings.HasPrefix(rel, "..") {
+			lines = append(lines, rel)
+		} else {
+			lines = append(lines, src)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // macDriverCandidateGenericSource is MacDriverCandidate.Source's value for
 // one of GenericDriverCandidates' own entries (macgeneric.go) - these are
 // bundled with macOS itself, never a real file under the Drivers folder.
@@ -82,7 +106,14 @@ func macDriverCandidatesWithSource(catalog driver.MacCatalog, modelIndex driver.
 		for _, v := range variants {
 			out = append(out, MacDriverCandidate{Label: v.Label, Source: macDriverCandidateSource(v.SourcePackagePath)})
 		}
-	} else if resolved := driver.ResolveMac(catalog, manufacturer); resolved != nil {
+	} else if resolved := driver.ResolveMac(catalog, manufacturer); resolved != nil && len(modelIndex[manufacturer]) == 0 {
+		// Only for a manufacturer with no model index at all (nothing
+		// smarter to offer than the one guessed package). With one - Kyocera's
+		// single "Kyocera Web build" download is the real example - that
+		// package name is not a driver a technician can meaningfully pick:
+		// the package is a container of per-model PPDs, and the candidates
+		// are those models' own entries, or nothing when Model doesn't
+		// resolve to one (Ken, 2026-09-20).
 		if driver.FuzzyMatchScore(resolved.Label, filterText) >= 0 {
 			out = append(out, MacDriverCandidate{Label: resolved.Label, Source: macDriverCandidateSource(resolved.Path)})
 		}
@@ -126,4 +157,62 @@ func macDriverCandidatesWithSource(catalog driver.MacCatalog, modelIndex driver.
 		out = append(out, MacDriverCandidate{Label: label, Source: macDriverCandidateGenericSource})
 	}
 	return out
+}
+
+// RowDriverProblems is DriverProblems' result: one human-readable sentence
+// per platform ("" = no problem found, or nothing to check) - shown as the
+// grid Driver button's tooltip when it turns red.
+type RowDriverProblems struct {
+	Windows string `json:"windows"`
+	Mac     string `json:"mac"`
+}
+
+// windowsDriverProblem reports why row's Windows driver commitment can't
+// work, or "" if it can (or there's nothing committed yet - a blank field is
+// the existing yellow "needs a value" state, not an error). Two real cases,
+// both from Ken (2026-09-20): no candidate exists at all for the
+// manufacturer (Toshiba's universal driver never cataloged), or the driver
+// on the row isn't one of the manufacturer's candidates (a Canon row whose
+// driver belongs to another manufacturer).
+func windowsDriverProblem(catalog driver.Catalog, modelIndex map[string]map[string][]string, manufacturer, winDriver string) string {
+	details := driver.CandidateDetails(catalog, modelIndex, manufacturer, "", "")
+	if len(details) == 0 {
+		return "No Windows driver is available for " + manufacturer + " in the Drivers folder."
+	}
+	if winDriver == "" {
+		return ""
+	}
+	for _, d := range details {
+		if d.Label == winDriver || strings.HasPrefix(d.Label, winDriver+" (v") {
+			return ""
+		}
+	}
+	return "\"" + winDriver + "\" isn't an available Windows driver for " + manufacturer + "."
+}
+
+// macDriverProblem is windowsDriverProblem's macOS counterpart: a Model the
+// manufacturer's own macOS catalog doesn't know, or a committed macOS Driver
+// that isn't among that model's candidates (any real vendor/OpenPrinting
+// entry, either label form - see OpenPrintingPPDByLabel - or one of Apple's
+// own Generic drivers). Apple Generic PostScript is always a candidate, so
+// "no candidate at all" can't happen here the way it can on Windows.
+func macDriverProblem(catalog driver.MacCatalog, modelIndex driver.MacModelIndex, manufacturer, model, macDriver string) string {
+	if model != "" && len(modelIndex[manufacturer]) > 0 && len(driver.MacModelCandidateDetails(modelIndex, manufacturer, model, "")) == 0 {
+		return "\"" + model + "\" isn't a model in the macOS " + manufacturer + " catalog."
+	}
+	if macDriver == "" {
+		return ""
+	}
+	if _, ok := driver.GenericDriverModelByLabel(macDriver); ok {
+		return ""
+	}
+	if _, ok := driver.OpenPrintingPPDByLabel(catalog, manufacturer, macDriver); ok {
+		return ""
+	}
+	for _, c := range macDriverCandidatesWithSource(catalog, modelIndex, manufacturer, model, "") {
+		if c.Label == macDriver {
+			return ""
+		}
+	}
+	return "\"" + macDriver + "\" isn't an available macOS driver for this " + manufacturer + " model."
 }

@@ -194,8 +194,8 @@ func ensureSfxArchiveInfsExtracted(root string) {
 		}
 
 		destDir := infCacheDestDir(root, path)
-		if info, statErr := os.Stat(destDir); statErr == nil && info.IsDir() {
-			return nil // already extracted
+		if prepareInfCacheDest(destDir) {
+			return nil // already extracted (see prepareInfCacheDest)
 		}
 		if !isSelfExtractingArchive(path) {
 			return nil // an ordinary .exe, not an archive - leave it alone

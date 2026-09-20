@@ -99,6 +99,22 @@ func (a *App) DriverCandidates(manufacturer, model, filterText string) []string 
 	return driver.Candidates(catalog, modelIndex, manufacturer, model, filterText)
 }
 
+// DriverCandidatesWithSource is DriverCandidates' own sibling for the Driver
+// modal's Windows Driver field - identical candidates and ordering, but each
+// carries a tooltip naming its manufacturer and the real package it comes
+// from, so several similarly-named drivers (e.g. three KONICA MINOLTA
+// Universal PCL versions) can be told apart.
+func (a *App) DriverCandidatesWithSource(manufacturer, model, filterText string) []WindowsDriverCandidate {
+	<-a.ready
+	catalog, modelIndex, _ := a.catalogSnapshot()
+	details := driver.CandidateDetails(catalog, modelIndex, manufacturer, model, filterText)
+	out := make([]WindowsDriverCandidate, len(details))
+	for i, d := range details {
+		out[i] = WindowsDriverCandidate{Label: d.Label, Source: windowsDriverCandidateSource(manufacturer, d.Sources)}
+	}
+	return out
+}
+
 // DefaultDriverFor is the Defaults panel's pre-selected driver name for
 // manufacturer (e.g. Canon -> its UFR II driver), or "" if there's no such
 // rule for manufacturer or no matching driver is present locally.
@@ -179,4 +195,33 @@ func (a *App) MacDriverCandidatesFor(manufacturer, model, filterText string) []M
 	<-a.ready
 	catalog, modelIndex := a.macCatalogSnapshot()
 	return macDriverCandidatesWithSource(catalog, modelIndex, manufacturer, model, filterText)
+}
+
+// ModelCandidatesWithSource is the Driver modal's Model dropdown data source
+// on Windows: Kyocera's .inf-derived models, the background-built macOS
+// catalog's models, and OpenPrinting-derived ones, each with a tooltip naming
+// the driver package(s) it comes from - see modelCandidatesWithSource.
+func (a *App) ModelCandidatesWithSource(manufacturer, filterText string) []ModelCandidate {
+	<-a.ready
+	winCatalog, winModelIndex, _ := a.catalogSnapshot()
+	macCatalog, macIndex := a.macCatalogSnapshot()
+	return modelCandidatesWithSource(macCatalog, macIndex, winCatalog, winModelIndex, manufacturer, filterText)
+}
+
+// DriverProblems checks one grid row's Windows/macOS driver commitments
+// against what the catalogs actually offer - the grid Driver button turns red
+// (with the returned sentence as its tooltip) when either side reports a
+// problem. Only platforms that are switched on for the row are checked.
+func (a *App) DriverProblems(manufacturer, model, winDriver, macDriver string, windowsEnabled, macEnabled bool) RowDriverProblems {
+	<-a.ready
+	var out RowDriverProblems
+	if windowsEnabled {
+		catalog, modelIndex, _ := a.catalogSnapshot()
+		out.Windows = windowsDriverProblem(catalog, modelIndex, manufacturer, winDriver)
+	}
+	if macEnabled {
+		macCatalog, macIndex := a.macCatalogSnapshot()
+		out.Mac = macDriverProblem(macCatalog, macIndex, manufacturer, model, macDriver)
+	}
+	return out
 }

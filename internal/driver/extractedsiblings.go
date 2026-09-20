@@ -69,6 +69,31 @@ func IsIgnoredDotEntry(name string) bool {
 // its own marker pointing at *that* .msi, not the outermost one).
 const pdtSourceMarkerName = ".pdt-source"
 
+// prepareInfCacheDest decides what to do about an .inf-only cache
+// destination that already exists: skip=true when it's a finished entry
+// (carries the source marker writeSourceMarker leaves as the very last step
+// of a successful pass), so the caller leaves it alone; otherwise it's an
+// interrupted or pre-rework leftover and gets removed so the caller
+// re-extracts into a clean folder. Confirmed live (Ken, 2026-09-20) as the
+// real cause of two separate "driver never shows up / fails at Deploy"
+// reports from the same drivers folder: Toshiba's universal zip (no .inf
+// files in its cache at all, so zero Windows drivers) and Lexmark's
+// self-extracting package (inner .msi markers pointing at a full-extraction
+// folder that no longer exists, so Deploy ran msiexec on a missing file and
+// failed with 1619) - both left by an older PDT version, both previously
+// trusted purely because the folder existed. A folder that can't be removed
+// (write-protected media) is left alone (skip=true) rather than retried into.
+func prepareInfCacheDest(destDir string) (skip bool) {
+	info, err := os.Stat(destDir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if _, markerErr := os.Stat(filepath.Join(destDir, pdtSourceMarkerName)); markerErr == nil {
+		return true
+	}
+	return os.RemoveAll(destDir) != nil
+}
+
 // writeSourceMarker is best-effort - a missing marker just means
 // findSourceArchive won't resolve an ArchivePath for whatever .inf ends up
 // under destDir (ArchEntry.ArchivePath stays ""), which only disables lazy

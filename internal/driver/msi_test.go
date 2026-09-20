@@ -148,6 +148,9 @@ func TestEnsureMsiInfsExtracted_SkipsAlreadyCached(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A finished extraction always ends with its source marker.
+	writeSourceMarker(cacheDir, filepath.Join(dir, "Foo.msi"))
+
 	ensureMsiInfsExtracted(dir)
 	// No assertion beyond "didn't try to run msiexec against this
 	// deliberately-invalid fake .msi" - if the skip check didn't fire,

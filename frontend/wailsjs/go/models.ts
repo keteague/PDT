@@ -466,6 +466,20 @@ export namespace main {
 	        this.source = source["source"];
 	    }
 	}
+	export class ModelCandidate {
+	    label: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ModelCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.source = source["source"];
+	    }
+	}
 	export class OpenConfigResult {
 	    canceled: boolean;
 	    config: config.SavedConfig;
@@ -536,6 +550,20 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.folders = source["folders"];
 	        this.error = source["error"];
+	    }
+	}
+	export class RowDriverProblems {
+	    windows: string;
+	    mac: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RowDriverProblems(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.windows = source["windows"];
+	        this.mac = source["mac"];
 	    }
 	}
 	export class RunbookPrinter {
@@ -668,6 +696,20 @@ export namespace main {
 	        this.releaseUrl = source["releaseUrl"];
 	        this.assetUrl = source["assetUrl"];
 	        this.error = source["error"];
+	    }
+	}
+	export class WindowsDriverCandidate {
+	    label: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WindowsDriverCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.source = source["source"];
 	    }
 	}
 

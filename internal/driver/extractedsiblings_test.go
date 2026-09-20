@@ -207,3 +207,37 @@ func TestPruneOrphanedInfCache_LeavesUnmarkedEntryAlone(t *testing.T) {
 		t.Errorf("expected an entry with no marker at all to be left alone rather than guessed at, got err=%v", err)
 	}
 }
+
+// TestPrepareInfCacheDest covers the three states an .inf-only cache
+// destination can be in (Ken, 2026-09-20 - Toshiba's zip and Lexmark's
+// self-extracting package both sat in the second one, left by an older PDT
+// version, and were trusted forever because the folder merely existed).
+func TestPrepareInfCacheDest(t *testing.T) {
+	root := t.TempDir()
+
+	missing := filepath.Join(root, "missing")
+	if prepareInfCacheDest(missing) {
+		t.Error("a destination that doesn't exist is not 'already extracted'")
+	}
+
+	incomplete := filepath.Join(root, "incomplete", "Driver")
+	if err := os.MkdirAll(incomplete, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	top := filepath.Join(root, "incomplete")
+	if prepareInfCacheDest(top) {
+		t.Error("a folder with no source marker is a leftover, not a finished extraction")
+	}
+	if _, err := os.Stat(top); !os.IsNotExist(err) {
+		t.Errorf("the incomplete folder should have been removed for a clean re-extract, got err=%v", err)
+	}
+
+	done := filepath.Join(root, "done")
+	if err := os.MkdirAll(done, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSourceMarker(done, filepath.Join(root, "x.zip"))
+	if !prepareInfCacheDest(done) {
+		t.Error("a folder carrying its source marker is a finished extraction and must be left alone")
+	}
+}

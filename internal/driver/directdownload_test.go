@@ -24,10 +24,15 @@ func TestMatchDirectDownloadFamily_Windows(t *testing.T) {
 		// candidates.go) must still match - the family tokens are a
 		// substring check, decoration or not.
 		{"Kyocera", "Kyocera FS-1100 KX (v8.7.0422.0 - 2026-04-22, 64bit)", "KX", true},
-		// No match: an unrelated real name, and a manufacturer/platform with
-		// no Direct Downloads entry at all.
+		// No match: an unrelated real name.
 		{"Canon", "Canon Generic Plus LIPS4", "", false},
-		{"HP", "HP Universal Printing PCL 6", "", false},
+		// HP's own confirmed real UPD name (defaultDriverTokens' own "PCL","6"
+		// - see candidates_test.go) - added 2026-09-20.
+		{"HP", "HP Universal Printing PCL 6", "PCL6", true},
+		{"HP", "HP Universal Printing PS", "PS", true},
+		// Xerox's own confirmed real GPD display name
+		// (defaultDriverTokens' own "GPD","PCL","6") - added 2026-09-20.
+		{"Xerox", "Xerox GPD PCL6 V5.1076.4.0", "PCL", true},
 	}
 	for _, tt := range tests {
 		family, ok := MatchDirectDownloadFamily(tt.manufacturer, DirectDownloadPlatformWindows, tt.driver)
@@ -53,8 +58,11 @@ func TestMatchDirectDownloadFamily_Mac(t *testing.T) {
 		{"Kyocera", "Kyocera CS 255c (Driver)", "KPDL", true},
 		{"Ricoh", "RICOH IM C3000 (PostScript)", "PPD", true},
 		{"Sharp", "SHARP MX-C55 (Driver)", "PPD", true},
+		// Xerox's own sole mac family - added 2026-09-20 - matches
+		// unconditionally too.
+		{"Xerox", "Xerox C300 Color Printer, 5.19.3 (Driver)", "PPD", true},
 		// No entry at all for this manufacturer/platform.
-		{"Xerox", "Xerox C300 Color Printer, 5.19.3 (Driver)", "", false},
+		{"Nonexistent Brand", "anything", "", false},
 	}
 	for _, tt := range tests {
 		family, ok := MatchDirectDownloadFamily(tt.manufacturer, DirectDownloadPlatformMac, tt.label)
@@ -67,7 +75,10 @@ func TestMatchDirectDownloadFamily_Mac(t *testing.T) {
 
 func TestDirectDownloadManufacturers_OnlyThoseWithEntries(t *testing.T) {
 	got := DirectDownloadManufacturers()
-	want := map[string]bool{"Canon": true, "Kyocera": true, "Ricoh": true, "Sharp": true}
+	want := map[string]bool{
+		"Canon": true, "Kyocera": true, "Ricoh": true, "Sharp": true,
+		"HP": true, "Lexmark": true, "Toshiba": true, "Xerox": true, "Konica Minolta": true,
+	}
 	if len(got) != len(want) {
 		t.Fatalf("DirectDownloadManufacturers() = %v, want exactly %v", got, want)
 	}
@@ -79,8 +90,8 @@ func TestDirectDownloadManufacturers_OnlyThoseWithEntries(t *testing.T) {
 }
 
 func TestDirectDownloadFamiliesFor_UnknownManufacturerIsNil(t *testing.T) {
-	if got := DirectDownloadFamiliesFor("HP", DirectDownloadPlatformWindows); got != nil {
-		t.Errorf("DirectDownloadFamiliesFor(HP, Windows) = %v, want nil (no Direct Downloads entry)", got)
+	if got := DirectDownloadFamiliesFor("Nonexistent Brand", DirectDownloadPlatformWindows); got != nil {
+		t.Errorf("DirectDownloadFamiliesFor(Nonexistent Brand, Windows) = %v, want nil (no Direct Downloads entry)", got)
 	}
 }
 

@@ -204,6 +204,54 @@ func defaultDirectDownloadURLs() map[string]map[string]map[string]string {
 				"PPD": "https://global.sharp/restricted/print/mfpdl/sites/default/files/Global_Download_Data/18415/MX-C55c_2512a_MacPS.dmg",
 			},
 		},
+		// Konica Minolta/HP/Lexmark/Toshiba/Xerox added 2026-09-20 (Ken's own
+		// real, hand-verified links, GitHub issue #19's own remaining scope)
+		// - see driver.directDownloadFamilies' own doc comment for each
+		// family's Label/Tokens provenance.
+		"Konica Minolta": {
+			driver.DirectDownloadPlatformWindows: {
+				"PCL & PS": "https://onyxweb.mykonicaminolta.com/OneStopProductSupport?appMode=public&productId=2275&categoryId=1&subCategoryId=ft17",
+			},
+			driver.DirectDownloadPlatformMac: {
+				"PS": "https://onyxweb.mykonicaminolta.com/OneStopProductSupport?appMode=public&productId=2275&categoryId=1&subCategoryId=ft0",
+			},
+		},
+		"HP": {
+			driver.DirectDownloadPlatformWindows: {
+				"PCL6": "https://ftp.hp.com/pub/softlib/software13/printers/UPD/upd-pcl6-win11-x64-8.2.0.26819.zip",
+				"PS":   "https://ftp.hp.com/pub/softlib/software13/printers/UPD/upd-ps-win11-x64-8.2.0.26819.zip",
+			},
+			driver.DirectDownloadPlatformMac: {
+				"HP Easy Start": "https://ftp.hp.com/pub/softlib/software12/HP_Quick_Start/osx/HP_Easy_Start.app.zip",
+			},
+		},
+		"Lexmark": {
+			driver.DirectDownloadPlatformWindows: {
+				"PCL6 & PS": "https://downloads.lexmark.com/downloads/drivers/Lexmark_Universal_v2_UD1_Installation_Package_06092026.exe",
+			},
+			driver.DirectDownloadPlatformMac: {
+				"Color": "https://downloads.lexmark.com/downloads/drivers/Lexmark_UC1_PrinterSoftware_04022026.dmg",
+				"Mono":  "https://downloads.lexmark.com/downloads/drivers/Lexmark_UM1_PrinterSoftware_11202025.dmg",
+			},
+		},
+		"Toshiba": {
+			driver.DirectDownloadPlatformWindows: {
+				"PCL6 & PS": "https://business.toshiba.com/downloads/KB/f1Ulds/18128/eb4-ebn-Uni-3264bit-7212483517.zip",
+			},
+			driver.DirectDownloadPlatformMac: {
+				"Color": "https://business.toshiba.com/downloads/KB/f1Ulds/21838/TOSHIBA_ColorMFP.dmg.gz",
+				"Mono":  "https://business.toshiba.com/downloads/KB/f1Ulds/21840/TOSHIBA_MonoMFP.dmg.gz",
+			},
+		},
+		"Xerox": {
+			driver.DirectDownloadPlatformWindows: {
+				"PCL": "https://download.support.xerox.com/pub/drivers/GLOBALPRINTDRIVER/drivers/win10x64/ar/UNIV_5.1076.4.0_PCL6_x64.zip",
+				"PS":  "https://download.support.xerox.com/pub/drivers/VLC8000W/drivers/win10x64/ar/UNIV_5.1076.4.0_PS_x64.zip",
+			},
+			driver.DirectDownloadPlatformMac: {
+				"PPD": "https://download.support.xerox.com/pub/drivers/ALB80XX/drivers/macOS13/en_GB/XeroxDrivers_5.19.3_2562.dmg",
+			},
+		},
 	}
 }
 

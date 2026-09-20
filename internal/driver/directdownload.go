@@ -117,6 +117,109 @@ var directDownloadFamilies = map[string]map[string][]directDownloadFamily{
 			{Label: "PPD"}, // sole family - see doc comment above
 		},
 	},
+	// Konica Minolta/HP/Lexmark/Toshiba/Xerox added 2026-09-20 (GitHub issue
+	// #19's own remaining scope) - Ken's own real, hand-verified links, the
+	// same "primary vendors I work with" set default.go's own
+	// defaultDriverTokens already covers for the Defaults panel.
+	"Konica Minolta": {
+		// Windows and macOS each ship exactly one real universal download
+		// covering every real driver-language variant at once (a single PCL
+		// & PS combo installer on Windows; a single PS package on macOS,
+		// confirmed by Ken's own two URLs) - sole family either way, same
+		// "nothing to disambiguate" reasoning as Kyocera/Sharp/Ricoh(mac)
+		// above.
+		DirectDownloadPlatformWindows: {
+			{Label: "PCL & PS"},
+		},
+		DirectDownloadPlatformMac: {
+			{Label: "PS"},
+		},
+	},
+	"HP": {
+		DirectDownloadPlatformWindows: {
+			// "PCL","6" is defaultDriverTokens' own confirmed real HP UPD
+			// display name ("HP Universal Printing PCL 6" - see its own doc
+			// comment/candidates_test.go). "PS" for the sibling PostScript
+			// UPD isn't independently confirmed the same way, but follows
+			// this codebase's own established bare-"PS" convention
+			// (Ricoh's own Windows PS family, right above).
+			{Label: "PCL6", Tokens: []string{"PCL", "6"}},
+			{Label: "PS", Tokens: []string{"PS"}},
+		},
+		DirectDownloadPlatformMac: {
+			// HP Easy Start is an installer *app* (HP's own guided setup
+			// bundle), not a PPD/driver package the way every other mac
+			// family here is - still the one real, sole download HP
+			// provides for macOS, so it gets the same "sole family, no
+			// tokens" treatment.
+			{Label: "HP Easy Start"},
+		},
+	},
+	"Lexmark": {
+		// Windows ships one real universal combo installer (PCL6 & PS at
+		// once, "Lexmark Universal v2 UD1") - sole family, same reasoning
+		// as Konica Minolta's own Windows entry above. This is a different,
+		// broader package than defaultDriverTokens' own "Universal v2 XL"
+		// preferred-driver rule (an extra-large-format *variant* of the
+		// same base driver, not a different family) - no conflict, just a
+		// different concern.
+		DirectDownloadPlatformWindows: {
+			{Label: "PCL6 & PS"},
+		},
+		// macOS genuinely ships two separate real packages (Color/Mono),
+		// unlike Windows' single combo installer - Label/Tokens both
+		// best-effort inferred from the download filenames themselves
+		// (UC1/UM1 - "Universal Color 1"/"Universal Mono 1"), not confirmed
+		// against a real installed Lexmark mac PPD's own displayed
+		// Driver-field text the way Canon's UFR II/PS/PPD labels are -
+		// matching may not always succeed against a real Lexmark mac
+		// deploy's own Driver value, same epistemic caveat this file's own
+		// top-of-file doc comment already applies to Canon's inferred
+		// PCL6/PS3 Windows tokens.
+		DirectDownloadPlatformMac: {
+			{Label: "Color", Tokens: []string{"Color"}},
+			{Label: "Mono", Tokens: []string{"Mono"}},
+		},
+	},
+	"Toshiba": {
+		// Windows ships one real universal combo installer (PCL6 & PS at
+		// once) - sole family. Distinct from defaultDriverTokens' own
+		// "Universal Printer 2" rule, which names the *installed driver's*
+		// own display text, not this download package's own contents.
+		DirectDownloadPlatformWindows: {
+			{Label: "PCL6 & PS"},
+		},
+		// macOS genuinely ships two separate real packages (Color/Mono,
+		// confirmed real filenames: TOSHIBA_ColorMFP.dmg.gz/
+		// TOSHIBA_MonoMFP.dmg.gz - see mactoshiba.go's own real
+		// "TOSHIBA_ColorMFP_X7.gz" reference) - same best-effort,
+		// inferred-not-confirmed Label/Tokens caveat as Lexmark's own mac
+		// entry above: Toshiba's real mac PPDs expand into many per-model
+		// *Product entries (toshibaExpandProductEntries) whose own
+		// Driver-field text is the specific model name, not literally
+		// "Color"/"Mono" - this token set is a best-effort convenience for
+		// direct free-text searching, not a guaranteed auto-match.
+		DirectDownloadPlatformMac: {
+			{Label: "Color", Tokens: []string{"Color"}},
+			{Label: "Mono", Tokens: []string{"Mono"}},
+		},
+	},
+	"Xerox": {
+		// Unlike every other manufacturer added here, Xerox genuinely ships
+		// two distinct real Windows downloads (PCL from the Global Print
+		// Driver bundle, PS from a separate model-specific driver page) -
+		// "GPD" is defaultDriverTokens' own confirmed real Xerox display
+		// name prefix ("Xerox GPD PCL6 V5.1076.4.0"); "PS" isn't
+		// independently confirmed the same way but follows the same
+		// bare-token convention as Ricoh/HP's own PS families above.
+		DirectDownloadPlatformWindows: {
+			{Label: "PCL", Tokens: []string{"GPD", "PCL", "6"}},
+			{Label: "PS", Tokens: []string{"GPD", "PS"}},
+		},
+		DirectDownloadPlatformMac: {
+			{Label: "PPD"}, // sole family - see doc comment above
+		},
+	},
 }
 
 // DirectDownloadManufacturers lists, in Manufacturers' own fixed order,

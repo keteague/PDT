@@ -4,6 +4,28 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-20 (v0.9.36) - Settings > Direct Downloads now covers every manufacturer PDT knows about (GitHub issue #19)
+
+### Added
+- Konica Minolta, HP, Lexmark, Toshiba, and Xerox now have Direct Downloads entries alongside the
+  existing Canon/Kyocera/Ricoh/Sharp ones - Ken's own real, hand-verified URLs, split into separate
+  families where a manufacturer genuinely ships distinct downloads (HP/Xerox: PCL vs PS on Windows;
+  Lexmark/Toshiba: Color vs Mono on macOS) or a single combined family where it doesn't. Auto-match
+  tokens reuse this codebase's own already-confirmed real driver-name evidence
+  (`internal/driver/default.go`'s `defaultDriverTokens`) where available, and are flagged inferred/
+  best-effort in `directDownloadFamilies`' own doc comment where they aren't.
+- The Direct Downloads tab was already alphabetized by manufacturer (`App.DirectDownloadManufacturers`
+  sorts, mirroring `AllManufacturers`) - this simply becomes visible now that more than 4 (coincidentally
+  already-alphabetical) manufacturers are listed.
+
+### Fixed
+- Add Printer now focuses the new row's own Name field, the same way pressing Enter from Name/IP
+  already did - the toolbar button itself never passed `addPrinterRow`'s existing `focusNewRow` flag.
+
+Also: issue #18 ("Check for Update" button next to Defaults' Driver field) is abandoned - the
+existing Download Center button already covers this need well enough to not justify a separate
+per-driver auto-download button.
+
 ## 2026-09-20 (v0.9.35) - Configure a macOS print queue from Windows, before ever touching the endpoint (GitHub issue #16)
 
 The grid can now define both a Windows and a macOS commitment for the same printer row at once,

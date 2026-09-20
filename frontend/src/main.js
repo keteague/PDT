@@ -2172,7 +2172,7 @@ function wireEvents() {
         renderGrid();
     });
 
-    el('btnAddRow').addEventListener('click', () => addPrinterRow());
+    el('btnAddRow').addEventListener('click', () => addPrinterRow(true));
 
     el('btnRemoveRow').addEventListener('click', () => {
         state.rows = state.rows.filter(r => !r.select);

@@ -4,7 +4,7 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
-## 2026-09-21 (v0.9.42) - Windows Driver candidate fixes on macOS, Konica/Ricoh/Xerox cleanup
+## 2026-09-21 (v0.9.43) - Windows Driver candidate fixes on macOS, Konica/Ricoh/Xerox cleanup
 
 ### Fixed
 - Windows Driver candidates were filtered by the CPU architecture of the machine running PDT

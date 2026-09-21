@@ -553,12 +553,15 @@ document.querySelector('#app').innerHTML = `
   <div class="modal-backdrop" id="rescanBackdrop" hidden>
     <div class="modal rescan-modal">
       <h3>Rescan Drivers</h3>
-      <p class="modal-hint">Pick which manufacturers or driver packages to rescan.</p>
+      <p class="modal-hint">Pick which driver packages or macOS catalog files to rescan.</p>
       <div id="rescanTree" class="rescan-tree"></div>
       <div class="modal-actions rescan-actions">
         <button id="btnRescanSelectAll">Select All</button>
-        <label class="platform-windows-only" title="Delete the cached .inf files for the selected manufacturer(s)/package(s) first, so they're re-extracted fresh from the archive.">
+        <label title="Delete the cached .inf files for the selected package(s) first, so they're re-extracted fresh from the archive.">
           <input type="checkbox" id="rescanRemoveInf"> Remove INF
+        </label>
+        <label title="Delete the cached catalog.&lt;manufacturer&gt;.json for the selected manufacturer(s) first, so it's rebuilt fresh instead of reused.">
+          <input type="checkbox" id="rescanRemoveCatalog"> Delete catalog files
         </label>
       </div>
       <div class="modal-actions">
@@ -994,12 +997,12 @@ function isMacModelDrivenManufacturer(manufacturer) {
     return state.macModelManufacturers.has(manufacturer);
 }
 
-// applyCatalogStatus is the shared tail end of both the mac one-click
-// Refresh Drivers handler and the Windows Rescan dialog's own confirm
-// handler - both end up with the exact same CatalogStatus shape
-// (App.RefreshDriverCatalog/App.RescanDrivers) and need the exact same UI
-// refresh afterward. verb is just "refreshed"/"rescanned" for the OK/ERR log
-// line's own wording.
+// applyCatalogStatus is the shared tail end of the Rescan dialog's own
+// confirm handler on either platform, plus anywhere else a plain
+// App.RefreshDriverCatalog is called directly without the dialog - all end
+// up with the exact same CatalogStatus shape (App.RefreshDriverCatalog/
+// App.RescanDrivers) and need the exact same UI refresh afterward. verb is
+// just "refreshed"/"rescanned" for the OK/ERR log line's own wording.
 async function applyCatalogStatus(status, verb) {
     el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
     if (!status.ok) {
@@ -3743,19 +3746,32 @@ function closeCloudSyncModal() {
     el('cloudSyncBackdrop').hidden = true;
 }
 
-// ---- Rescan (GitHub issue #10 - Windows only, see btnRefreshDrivers) ----
+// ---- Rescan (GitHub issue #10, extended to macOS and to catalog.<mfg>.json
+// deletion - see btnRefreshDrivers) ----
 //
 // A simpler two-level version of the Cloud Sync tree above: manufacturer
 // rows, each expandable to its own individual driver packages
 // (App.ListRescanTargets), with the exact same tri-state folder-checkbox
 // pattern (folderCheckState/collectActionableRelPaths there) reused here as
 // rescanFolderCheckState/collectRescanLeafPaths - no size/action column
-// needed, since every leaf is just "included in this rescan or not". Leaf
-// paths are "Manufacturer/RelPath" strings, matching exactly what
+// needed, since every leaf is just "included in this rescan or not". Package
+// leaf paths are "Manufacturer/RelPath" strings, matching exactly what
 // App.RescanDrivers' own removeInf scope expects
 // (driver.RemoveInfCacheForSelection) - no separate encode/decode step.
+//
+// A manufacturer with a real catalog.<mfg>.json (RescanManufacturer.HasMacCatalogFile)
+// additionally gets one synthetic leaf of its own, path equal to the bare
+// manufacturer name (no "/" - exactly the shape App.RescanDrivers' own
+// removeCatalog scope expects, driver.RemoveMacCatalogFilesForSelection), so
+// selecting it (alone, or via the manufacturer's own folder checkbox/Select
+// All, same as any package leaf) queues that manufacturer's catalog file for
+// deletion-and-rebuild when "Delete catalog files" is checked. This is the
+// only leaf a manufacturer with no local Windows archives ever has - it
+// still renders as an expandable folder row with this one child, not a bare
+// leaf itself, so folder rendering never needs a manufacturer-with-no-
+// packages special case.
 let rescanTargets = [];
-let rescanSelection = new Map(); // "Manufacturer/RelPath" -> checked
+let rescanSelection = new Map(); // "Manufacturer/RelPath" or bare "Manufacturer" -> checked
 let rescanCollapsed = new Set();
 let rescanTreeRoot = null;
 
@@ -3767,6 +3783,9 @@ function buildRescanTree(targets) {
         for (const pkg of mfg.packages || []) {
             const leafPath = `${mfg.name}/${pkg.relPath}`;
             mfgNode.children.set(leafPath, { name: pkg.name, path: leafPath, children: new Map(), leaf: true });
+        }
+        if (mfg.hasMacCatalogFile) {
+            mfgNode.children.set(mfg.name, { name: 'macOS catalog file', path: mfg.name, children: new Map(), leaf: true });
         }
     }
     return root;
@@ -3848,6 +3867,7 @@ async function openRescanModal() {
     el('rescanBackdrop').hidden = false;
     el('rescanTree').innerHTML = '';
     el('rescanRemoveInf').checked = false;
+    el('rescanRemoveCatalog').checked = false;
     el('btnRescanConfirm').disabled = true;
     rescanSelection = new Map();
 
@@ -3867,7 +3887,7 @@ async function confirmRescan() {
     btn.disabled = true;
     logStatus('INFO', 'Rescanning driver catalog...');
     try {
-        const status = await App.RescanDrivers(selected, el('rescanRemoveInf').checked);
+        const status = await App.RescanDrivers(selected, el('rescanRemoveInf').checked, el('rescanRemoveCatalog').checked);
         closeRescanModal();
         await applyCatalogStatus(status, 'rescanned');
     } finally {
@@ -4382,32 +4402,15 @@ function wireSettingsModal() {
     // extra refreshing here - only things this snapshots at fetch time
     // (the banner, and the Defaults panel's currently-shown Driver value)
     // need an explicit nudge.
-    // Windows opens the selective Rescan dialog (GitHub issue #10) instead
-    // of immediately rescanning - macOS has no .pdt-infcache/"Remove INF"
-    // concept to be selective about (its own catalog.<mfg>.json staleness
-    // handling already runs automatically on every refresh), so it keeps
-    // this exact one-click behavior unchanged.
-    el('btnRefreshDrivers').addEventListener('click', async () => {
-        if (!isMac()) {
-            openRescanModal();
-            return;
-        }
-        const btn = el('btnRefreshDrivers');
-        btn.disabled = true;
-        // A first-ever/genuinely-changed driver folder scan can still take a
-        // while (extracting/inspecting archives - see loadCatalog on either
-        // platform; macOS itself is fast on every later refresh once a
-        // package's been indexed once - see driver.MacManufacturerCatalog),
-        // with nothing else visible changing until it finishes - confirmed
-        // live that the disabled button alone reads as "did the click even
-        // register?" rather than "working on it". This is the only signal
-        // until the OK/ERR line below replaces it.
-        logStatus('INFO', 'Refreshing driver catalog...');
-        try {
-            await applyCatalogStatus(await App.RefreshDriverCatalog(), 'refreshed');
-        } finally {
-            btn.disabled = false;
-        }
+    // Opens the selective Rescan dialog (GitHub issue #10, extended to
+    // macOS - see the Rescan section below) on both platforms now: a plain
+    // one-click refresh is still just "Select All, then Rescan" away, but
+    // the dialog is the only way to reach "Remove INF"/"Delete catalog
+    // files", and macOS now has real uses for both (a local Windows archive
+    // to re-extract, or its own catalog.<mfg>.json to force a full rebuild
+    // of) since issue #3 made catalog.<mfg>.json a cross-platform concern.
+    el('btnRefreshDrivers').addEventListener('click', () => {
+        openRescanModal();
     });
 
     // Opens the current Drivers Base Path in File Explorer - the same

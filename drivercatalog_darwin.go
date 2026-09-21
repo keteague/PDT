@@ -34,6 +34,41 @@ func (a *App) RefreshDriverCatalog() CatalogStatus {
 	return CatalogStatus{OK: true, HasDrivers: len(driver.MacManufacturersWithPackages(catalog)) > 0, ModelChanges: changes}
 }
 
+// ListRescanTargets: see driver.RescanManufacturer - identical bound method
+// name/signature to Windows' own (drivercatalog_windows.go), so the frontend
+// needs no platform branch to open the Rescan dialog either way. On macOS
+// Packages reflects whatever local Windows archives happen to be sitting in
+// the shared Drivers folder (real when synced in from a Windows machine, or
+// mid-way through issue #3's cross-platform work locally) - HasMacCatalogFile
+// is the far more common non-empty case here.
+func (a *App) ListRescanTargets() []driver.RescanManufacturer {
+	<-a.ready
+	return driver.ListRescanTargets(driversRoot())
+}
+
+// RescanDrivers: identical bound method name/signature and behavior to
+// Windows' own (drivercatalog_windows.go) - removeInf clears .pdt-infcache
+// entries for the selection before the rebuild, removeCatalog deletes
+// catalog.<mfg>.json for the selected manufacturer(s) so RefreshDriverCatalog's
+// own loadCatalog call below rebuilds each fresh instead of reusing what was
+// there, and the same full-rebuild-not-scoped-rebuild rationale applies
+// (RescanDrivers' own doc comment on Windows). Unlike Windows' own background
+// mac-catalog build, RefreshDriverCatalog here rebuilds the mac catalog in the
+// foreground (a native mac build's primary catalog, not a background mirror -
+// see RefreshDriverCatalog's own doc comment above), so the returned
+// CatalogStatus already reflects any deletion this makes, with no separate
+// completion signal needed.
+func (a *App) RescanDrivers(selected []string, removeInf, removeCatalog bool) CatalogStatus {
+	<-a.ready
+	if removeInf {
+		driver.RemoveInfCacheForSelection(driversRoot(), selected)
+	}
+	if removeCatalog {
+		driver.RemoveMacCatalogFilesForSelection(driversRoot(), selected)
+	}
+	return a.RefreshDriverCatalog()
+}
+
 func (a *App) GetCatalogStatus() CatalogStatus {
 	<-a.ready
 	catalog, _, catalogErr := a.macCatalogSnapshot()

@@ -88,3 +88,97 @@ func TestRemoveInfCacheForSelection_SinglePackageLeavesOthersAlone(t *testing.T)
 		t.Errorf("expected Keep's cache entry to be left alone, got err=%v", err)
 	}
 }
+
+// TestListRescanTargets_IncludesManufacturerWithOnlyAMacCatalogFile guards
+// the real scenario neither of the two tests above covers: a manufacturer
+// with a real catalog.<mfg>.json already on disk (GitHub issue #3 - built by
+// either platform now) but zero local Windows archives - the common case on
+// a Mac-only Drivers folder, or a Windows machine that's only ever synced in
+// someone else's already-built mac catalog. Must still appear as its own
+// row, with Packages empty and HasMacCatalogFile true, so the Rescan dialog
+// can offer "delete catalog file" for it even though there's nothing to
+// offer "Remove INF" for.
+func TestListRescanTargets_IncludesManufacturerWithOnlyAMacCatalogFile(t *testing.T) {
+	root := t.TempDir()
+	catalogPath := macCatalogPath(root, "Ricoh")
+	if err := os.MkdirAll(filepath.Dir(catalogPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := ListRescanTargets(root)
+	if len(targets) != 1 || targets[0].Name != "Ricoh" {
+		t.Fatalf("expected exactly one Ricoh row, got %+v", targets)
+	}
+	if len(targets[0].Packages) != 0 {
+		t.Errorf("expected no packages (no local Windows archives), got %+v", targets[0].Packages)
+	}
+	if !targets[0].HasMacCatalogFile {
+		t.Error("expected HasMacCatalogFile to be true")
+	}
+}
+
+// TestListRescanTargets_ManufacturerWithBothPackagesAndMacCatalogFile guards
+// the two axes being independent, not mutually exclusive - a manufacturer
+// can genuinely have both a local Windows archive and a real
+// catalog.<mfg>.json at once (RescanManufacturer's own doc comment).
+func TestListRescanTargets_ManufacturerWithBothPackagesAndMacCatalogFile(t *testing.T) {
+	root := t.TempDir()
+	canonPath := filepath.Join(root, "Windows", "11", "Canon")
+	if err := os.MkdirAll(canonPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canonPath, "Driver.zip"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalogPath := macCatalogPath(root, "Canon")
+	if err := os.MkdirAll(filepath.Dir(catalogPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := ListRescanTargets(root)
+	if len(targets) != 1 || targets[0].Name != "Canon" {
+		t.Fatalf("expected exactly one Canon row, got %+v", targets)
+	}
+	if len(targets[0].Packages) != 1 {
+		t.Errorf("expected the one local Windows package to still be listed, got %+v", targets[0].Packages)
+	}
+	if !targets[0].HasMacCatalogFile {
+		t.Error("expected HasMacCatalogFile to be true")
+	}
+}
+
+// TestRemoveMacCatalogFilesForSelection_SingleManufacturerLeavesOthersAlone
+// mirrors TestRemoveInfCacheForSelection_SinglePackageLeavesOthersAlone for
+// the new "Delete catalog files" checkbox - only the selected manufacturer's
+// own catalog.<mfg>.json is removed, a sibling manufacturer's own is left
+// untouched, and a "Manufacturer/RelPath"-shaped entry (RemoveInfCacheForSelection's
+// own selection shape, a different concern) is silently ignored rather than
+// matched against anything real.
+func TestRemoveMacCatalogFilesForSelection_SingleManufacturerLeavesOthersAlone(t *testing.T) {
+	root := t.TempDir()
+	removePath := macCatalogPath(root, "Canon")
+	keepPath := macCatalogPath(root, "Ricoh")
+	for _, p := range []string{removePath, keepPath} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(`{}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	RemoveMacCatalogFilesForSelection(root, []string{"Canon", "Kyocera/SomePackage.zip"})
+
+	if _, err := os.Stat(removePath); !os.IsNotExist(err) {
+		t.Errorf("expected Canon's own catalog file to be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(keepPath); err != nil {
+		t.Errorf("expected Ricoh's own catalog file to be left alone, got err=%v", err)
+	}
+}

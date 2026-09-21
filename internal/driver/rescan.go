@@ -20,40 +20,62 @@ type RescanPackage struct {
 }
 
 // RescanManufacturer is one manufacturer row in the Rescan dialog's own
-// tree - only manufacturers that actually have at least one recognized
-// archive present locally are included (see ListRescanTargets).
+// tree - included whenever it has either a recognized Windows archive
+// present locally (Packages, non-empty) or a real catalog.<mfg>.json already
+// on disk (HasMacCatalogFile) - see ListRescanTargets. Both concerns are
+// independent and can coexist: a technician's own laptop, mid-way through
+// GitHub issue #3's cross-platform work, can easily have both a real
+// Windows .inf archive locally (Packages) and a real macOS-shaped
+// catalog.<mfg>.json (HasMacCatalogFile) for the same manufacturer, whether
+// this build is running on Windows or macOS - catalog.<mfg>.json is the
+// exact same file/format/location either way (Drivers/macOS/<Mfg>/, see
+// macCatalogPath), maintained by whichever platform's own background (or,
+// on native Mac, primary) mac-catalog build last ran.
 type RescanManufacturer struct {
-	Name     string          `json:"name"`
-	Packages []RescanPackage `json:"packages"`
+	Name              string          `json:"name"`
+	Packages          []RescanPackage `json:"packages"`
+	HasMacCatalogFile bool            `json:"hasMacCatalogFile"`
+}
+
+// macCatalogPath returns where manufacturer's own catalog.<mfg>.json would
+// live under driversRoot - Drivers/macOS/<Mfg, spaces stripped>/catalog.
+// <mfg, lowercased>.json, exactly mirroring BuildMacModelIndex's own
+// mfgFolder/CatalogFileName construction (macmodel.go) so this always
+// resolves to the identical real path that function reads/writes, on
+// either platform.
+func macCatalogPath(driversRoot, mfg string) string {
+	mfgFolder := strings.ReplaceAll(mfg, " ", "")
+	return filepath.Join(driversRoot, "macOS", mfgFolder, CatalogFileName(mfg))
 }
 
 // ListRescanTargets lists every manufacturer actually present under
-// driversRoot (Windows/<any version folder>/<Manufacturer>, or the older
-// flat driversRoot/<Manufacturer> layout - same back-compat rule
-// buildCatalog itself uses) along with the archive files sitting in its own
-// folder - exactly the same packages
-// ensureZipInfsExtracted/ensureSfxArchiveInfsExtracted/
-// ensureMsiInfsExtracted/ensureKyoceraExeInfsExtracted would themselves find
-// and process. Feeds the Rescan dialog's manufacturer/package tree; a
-// manufacturer present under more than one Windows version folder is merged
-// into a single row, matching buildCatalog's own multi-version-merge
-// behavior.
+// driversRoot, along two independent axes:
+//   - Windows archive files (Windows/<any version folder>/<Manufacturer>, or
+//     the older flat driversRoot/<Manufacturer> layout - same back-compat
+//     rule buildCatalog itself uses) - exactly the same packages
+//     ensureZipInfsExtracted/ensureSfxArchiveInfsExtracted/
+//     ensureMsiInfsExtracted/ensureKyoceraExeInfsExtracted would themselves
+//     find and process. A manufacturer present under more than one Windows
+//     version folder is merged into a single row, matching buildCatalog's
+//     own multi-version-merge behavior.
+//   - A real catalog.<mfg>.json already on disk (macCatalogPath) - present
+//     regardless of which platform built it (GitHub issue #3: both
+//     platforms maintain this same file/format now).
+//
+// A manufacturer with neither is simply absent from the result - nothing
+// for the Rescan dialog to offer it for.
 func ListRescanTargets(driversRoot string) []RescanManufacturer {
 	byName := map[string]*RescanManufacturer{}
 	var order []string
 
-	addPackages := func(mfg, mfgPath string) {
-		packages := listRescanPackages(mfgPath)
-		if len(packages) == 0 {
-			return
-		}
+	get := func(mfg string) *RescanManufacturer {
 		rm, ok := byName[mfg]
 		if !ok {
 			rm = &RescanManufacturer{Name: mfg}
 			byName[mfg] = rm
 			order = append(order, mfg)
 		}
-		rm.Packages = append(rm.Packages, packages...)
+		return rm
 	}
 
 	for _, mfgPath := range manufacturerRoots(driversRoot) {
@@ -61,7 +83,15 @@ func ListRescanTargets(driversRoot string) []RescanManufacturer {
 		if !ok {
 			continue
 		}
-		addPackages(mfg, mfgPath)
+		if packages := listRescanPackages(mfgPath); len(packages) > 0 {
+			get(mfg).Packages = append(get(mfg).Packages, packages...)
+		}
+	}
+
+	for _, mfg := range Manufacturers {
+		if _, err := os.Stat(macCatalogPath(driversRoot, mfg)); err == nil {
+			get(mfg).HasMacCatalogFile = true
+		}
 	}
 
 	out := make([]RescanManufacturer, 0, len(order))
@@ -202,5 +232,33 @@ func RemoveInfCacheForSelection(driversRoot string, selected []string) {
 			archivePath := filepath.Join(mfgPath, filepath.FromSlash(relPath))
 			os.RemoveAll(infCacheDestDir(mfgPath, archivePath))
 		}
+	}
+}
+
+// RemoveMacCatalogFilesForSelection best-effort deletes catalog.<mfg>.json
+// (macCatalogPath) for each manufacturer named in selected - the Rescan
+// dialog's own "Delete catalog files" checkbox, forcing a full re-index for
+// exactly that manufacturer on the next BuildMacModelIndex call (whichever
+// platform's loadCatalog runs it - see RescanManufacturer's own doc comment
+// on why this is meaningful on both). selected here is bare manufacturer
+// names (RescanManufacturer.Name, no "/RelPath" suffix - that shape is
+// RemoveInfCacheForSelection's own, a different concern this deliberately
+// ignores by construction: any entry containing "/" is a package selection,
+// never a manufacturer one, and simply won't match anything real here).
+//
+// Best-effort and silent on failure, same write-protected-media contract
+// RemoveInfCacheForSelection's own doc comment already explains - deleting
+// nothing here just means that manufacturer's existing catalog keeps being
+// reused as before, not a broken state.
+func RemoveMacCatalogFilesForSelection(driversRoot string, selected []string) {
+	for _, sel := range selected {
+		if strings.Contains(sel, "/") {
+			continue
+		}
+		mfg, ok := matchManufacturer(sel)
+		if !ok {
+			continue
+		}
+		os.Remove(macCatalogPath(driversRoot, mfg))
 	}
 }

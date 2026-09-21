@@ -55,17 +55,31 @@ func (a *App) ListRescanTargets() []driver.RescanManufacturer {
 // RescanDrivers applies the Rescan dialog's own selection: if removeInf is
 // checked, best-effort clears the .pdt-infcache entries named in selected
 // (see driver.RemoveInfCacheForSelection) so they're re-extracted fresh
-// below, then always runs the exact same full rebuild RefreshDriverCatalog
-// already does. A full rebuild rather than one scoped just to the
-// selection: now that .inf-only extraction (GitHub issue #10) replaced full-
-// package extraction, a full rescan is cheap regardless - bounded by archive
-// count, not extracted-file count - so there's no performance reason for
-// separate partial-rebuild machinery just to mirror the dialog's own
-// selective removal scope.
-func (a *App) RescanDrivers(selected []string, removeInf bool) CatalogStatus {
+// below; if removeCatalog is checked, best-effort deletes catalog.<mfg>.json
+// for whichever manufacturers were selected (see
+// driver.RemoveMacCatalogFilesForSelection), so the next mac-catalog build -
+// on Windows, the background one RefreshDriverCatalog's own loadCatalog call
+// kicks off (GitHub issue #3) - rebuilds that manufacturer's own catalog
+// from scratch instead of reusing whatever was already there. Then always
+// runs the exact same full rebuild RefreshDriverCatalog already does. A full
+// rebuild rather than one scoped just to the selection: now that .inf-only
+// extraction (GitHub issue #10) replaced full-package extraction, a full
+// rescan is cheap regardless - bounded by archive count, not extracted-file
+// count - so there's no performance reason for separate partial-rebuild
+// machinery just to mirror the dialog's own selective removal scope.
+//
+// removeCatalog's own effect on Windows is backgrounded and silent, same as
+// the mac-catalog build it forces fresh already always was here - the
+// CatalogStatus this returns reflects the Windows .inf catalog only (see
+// RefreshDriverCatalog's own doc comment); there's no separate completion
+// signal for the mac-catalog side today, on either platform.
+func (a *App) RescanDrivers(selected []string, removeInf, removeCatalog bool) CatalogStatus {
 	<-a.ready
 	if removeInf {
 		driver.RemoveInfCacheForSelection(driversRoot(), selected)
+	}
+	if removeCatalog {
+		driver.RemoveMacCatalogFilesForSelection(driversRoot(), selected)
 	}
 	return a.RefreshDriverCatalog()
 }

@@ -1131,6 +1131,8 @@ table.grid td.checkbox-cell {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px 12px;
 }
 
 /* Cloud Sync's own progress dialog - a rolling single "spotlight" file

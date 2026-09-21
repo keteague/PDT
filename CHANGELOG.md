@@ -4,6 +4,22 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-21 (v0.9.42) - Windows Driver candidate fixes on macOS, Konica/Ricoh/Xerox cleanup
+
+### Fixed
+- Windows Driver candidates were filtered by the CPU architecture of the machine running PDT
+  itself, not the remote Windows machine the driver is actually for - on Apple Silicon Macs this
+  hid every manufacturer with no real ARM64 Windows driver (Canon, Sharp, Toshiba, Xerox all
+  showed zero candidates). Now uses a fixed x64 > arm64 > 32bit preference, independent of host.
+- Konica Minolta's Windows Driver list no longer shows fax "drivers" or duplicate bare/versioned
+  names for the identical driver (only the versioned name is kept).
+- The Model dropdown's OpenPrinting fallback (manufacturers with no local per-model index) now
+  applies the same Japan-market filter the indexed path already had, canonicalizes a PPD
+  nickname's manufacturer-name casing (fixes Ricoh showing both "RICOH" and "Ricoh" entries for
+  the same model), and excludes Xerox's FFPS print-server variants.
+- The grid's Driver button now has an explicit tabindex so Tab reaches it in PDT.app (WebKit only
+  Tab-stops on form fields by default, unlike Chromium on Windows).
+
 ## 2026-09-21 (v0.9.41) - Rescan dialog extended to macOS, catalog-file deletion
 
 ### Added

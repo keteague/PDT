@@ -4,6 +4,19 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-21 (v0.9.41) - Rescan dialog extended to macOS, catalog-file deletion
+
+### Added
+- The Rescan dialog (previously Windows-only) now works on macOS too, and gets a new
+  "Delete catalog files" checkbox on both platforms: forces the selected manufacturer(s)'
+  `catalog.<mfg>.json` to rebuild from scratch on the next refresh, alongside the existing
+  "Remove INF" option. A manufacturer with only a catalog file and no local Windows archive
+  now gets its own row in the dialog.
+
+### Changed
+- The toolbar's Refresh Drivers button now always opens the Rescan dialog instead of macOS
+  refreshing in place with no selection.
+
 ## 2026-09-21 (v0.9.40) - Faster small-file copies to flash, PDT.app.zip dropped
 
 ### Changed

@@ -4,6 +4,23 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-21 (v0.9.45) - .pdt-infcache no longer keeps nested .msi files
+
+### Fixed
+- **`.msi` files were left behind inside `.pdt-infcache`**, which is meant to hold `.inf` files
+  only. Lexmark's package (an outer self-extracting RAR) has the bundled 7z pull every inner
+  `.msi` into the cache so `msiexec /a` can then extract each one's `.inf`; the `.msi` files were
+  never removed afterward - 12 of them, ~152MB for one Lexmark version, all of it also carried
+  along by Sync. Six held the real driver `.inf` files; the other six (support link,
+  TP/phonebook helpers) held none and were re-run through `msiexec` on every catalog scan.
+  `ensureMsiInfsExtracted` now deletes an `.msi` inside the cache once its `.inf` files are cached
+  (which also clears the ones an older PDT version left behind), or when it unpacked fine but
+  contained no `.inf` at all. An `msiexec` failure keeps the `.msi` so a transient error can
+  retry, and an `.msi` in the real Drivers folder is the source archive and is never touched.
+  Deploy is unaffected: the marker's recorded path is only ever used as a string, and
+  `lazyextract.ensureLocked` re-resolves it to the real file inside a fresh full extraction of
+  the outer archive.
+
 ## 2026-09-21 (v0.9.44) - WARN log line for silent Windows driver-extraction failures
 
 ### Added

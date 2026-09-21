@@ -1,7 +1,6 @@
 package driver
 
 import (
-	"runtime"
 	"testing"
 )
 
@@ -120,12 +119,20 @@ func TestBuildCatalog_WindowsVersionNestedLayout(t *testing.T) {
 	}
 }
 
-func TestPreferredArchTokens_HostArch(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
-		t.Skip("this table assumes the dev/CI host is amd64")
-	}
+// TestPreferredArchTokens_FixedUniversalOrder guards against PreferredArchTokens
+// ever going back to switching on runtime.GOARCH - the host machine running
+// PDT (including a macOS technician's own arm64/amd64 Mac) has nothing to do
+// with the architecture of the remote Windows machine a driver is actually
+// being deployed to (see PreferredArchTokens' own doc comment).
+func TestPreferredArchTokens_FixedUniversalOrder(t *testing.T) {
 	toks := PreferredArchTokens()
-	if len(toks) != 2 || toks[0] != "x64" || toks[1] != "64bit" {
-		t.Errorf("PreferredArchTokens() on amd64 = %v, want [x64 64bit]", toks)
+	want := []string{"x64", "64bit", "arm64", "32bit"}
+	if len(toks) != len(want) {
+		t.Fatalf("PreferredArchTokens() = %v, want %v", toks, want)
+	}
+	for i := range want {
+		if toks[i] != want[i] {
+			t.Errorf("PreferredArchTokens()[%d] = %q, want %q (full: %v)", i, toks[i], want[i], toks)
+		}
 	}
 }

@@ -21,6 +21,21 @@ type ModelCandidate struct {
 
 const modelCandidateMaxSourceLines = 8
 
+// canonicalizeManufacturerPrefix replaces a case-insensitive-matching
+// leading manufacturer token in name with manufacturer's own canonical
+// spelling. OpenPrinting's real PPD nicknames spell a manufacturer's own
+// name inconsistently across its own PPDs (Ricoh's real data ships both
+// "RICOH IM C3510" and "Ricoh IM C3510" for the identical model, confirmed
+// 2026-09-21), which would otherwise dedup (the add() closure below keys by
+// exact string) into two separate Model dropdown entries differing only by
+// that leading token's case.
+func canonicalizeManufacturerPrefix(name, manufacturer string) string {
+	if len(name) < len(manufacturer) || !strings.EqualFold(name[:len(manufacturer)], manufacturer) {
+		return name
+	}
+	return manufacturer + name[len(manufacturer):]
+}
+
 // modelCandidatesWithSource builds the Model dropdown's list from every
 // source that can name a model for manufacturer: the Windows driver catalog's
 // own per-model index (Kyocera's .inf-derived one - winCatalog/winModelIndex
@@ -80,6 +95,10 @@ func modelCandidatesWithSource(macCatalog driver.MacCatalog, macIndex driver.Mac
 		if name == "" {
 			name = strings.ReplaceAll(strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".gz"), ".ppd"), "_", " ")
 		}
+		if driver.IsExcludedModelVariant(name) {
+			continue
+		}
+		name = canonicalizeManufacturerPrefix(name, manufacturer)
 		add(driver.NormalizeModelName(name), rel(path))
 	}
 

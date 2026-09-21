@@ -1,9 +1,73 @@
 package driver
 
 import (
+	"regexp"
 	"sort"
 	"time"
 )
+
+// faxDriverNameRe excludes fax "drivers" from the Windows Driver candidate
+// list - PDT only ever deploys print queues, never fax queues, so a fax
+// driver name (Konica Minolta's own real data ships "KONICA MINOLTA
+// Universal FAX" alongside its real PCL/PS drivers, confirmed 2026-09-21) is
+// never a usable answer here. Matched as a whole word so a hypothetical
+// print driver whose own name merely contains "fax" as a substring - none
+// observed in any real catalog inspected so far - wouldn't be caught by
+// accident.
+var faxDriverNameRe = regexp.MustCompile(`(?i)\bfax\b`)
+
+// trailingVDottedVersionRe matches a trailing " vX.Y[.Z...]" version suffix
+// some vendors' own .inf files append to an otherwise-identical driver name -
+// Konica Minolta's own real data (confirmed 2026-09-21) declares the exact
+// same underlying driver under both "KONICA MINOLTA Universal PCL" and
+// "KONICA MINOLTA Universal PCL v3.9.13" as two separate Model entries
+// inside the identical .inf, both resolving to the identical installed
+// files. See bareNameDuplicates. Distinct from default.go's own
+// versionSuffixRe (a looser "does this name contain a version number
+// anywhere" check, unanchored) - this one specifically anchors to the end
+// of the string with a leading " v", the exact shape a name/name-pair needs
+// to be treated as the same driver declared twice.
+var trailingVDottedVersionRe = regexp.MustCompile(`^(.+) v[0-9]+(?:\.[0-9]+)*$`)
+
+// bareNameDuplicates returns the set of driver names in mfgCatalog that
+// should be dropped from the candidate list because a version-suffixed
+// sibling name exists sharing at least one identical InfPath - Ken's own
+// explicit ask (2026-09-21): "Only show the one that has a driver version
+// number in it." Keying off a shared InfPath, not just the name match,
+// means two genuinely different drivers that merely happen to share a name
+// prefix are never conflated into one.
+func bareNameDuplicates(mfgCatalog map[string]map[string]map[string]ArchEntry) map[string]bool {
+	infPaths := func(dname string) map[string]bool {
+		set := map[string]bool{}
+		for _, byArch := range mfgCatalog[dname] {
+			for _, e := range byArch {
+				if e.InfPath != "" {
+					set[e.InfPath] = true
+				}
+			}
+		}
+		return set
+	}
+	suppressed := map[string]bool{}
+	for dname := range mfgCatalog {
+		m := trailingVDottedVersionRe.FindStringSubmatch(dname)
+		if m == nil {
+			continue
+		}
+		bareName := m[1]
+		if _, ok := mfgCatalog[bareName]; !ok {
+			continue
+		}
+		versionedPaths := infPaths(dname)
+		for p := range infPaths(bareName) {
+			if versionedPaths[p] {
+				suppressed[bareName] = true
+				break
+			}
+		}
+	}
+	return suppressed
+}
 
 type candidate struct {
 	Label   string
@@ -66,8 +130,13 @@ func CandidateDetails(catalog Catalog, modelIndex map[string]map[string][]string
 		}
 	}
 
+	suppressed := bareNameDuplicates(mfgCatalog)
+
 	var labeled []candidate
 	for _, dname := range names {
+		if suppressed[dname] || faxDriverNameRe.MatchString(dname) {
+			continue
+		}
 		versionGroups := mfgCatalog[dname]
 		var compatibleKeys []string
 		for vkey, archMap := range versionGroups {

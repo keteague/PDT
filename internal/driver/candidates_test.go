@@ -1,15 +1,14 @@
 package driver
 
 import (
-	"runtime"
 	"testing"
 	"time"
 )
 
+// PreferredArchTokens is a fixed, universal order now (arch.go) - not
+// switched on runtime.GOARCH anymore - so every test in this file runs the
+// same way regardless of which host actually runs it.
 func TestCandidates_MultiVersionDecoratesBothWithArchNote(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
-		t.Skip("this table assumes the dev/CI host is amd64")
-	}
 	cat := testCatalog(t)
 	modelIndex := BuildModelIndex(cat)
 	got := Candidates(cat, modelIndex, "Kyocera", "FS-1100", "")
@@ -29,9 +28,6 @@ func TestCandidates_MultiVersionDecoratesBothWithArchNote(t *testing.T) {
 }
 
 func TestCandidates_SingleCompatibleVersionStaysPlain(t *testing.T) {
-	if runtime.GOARCH != "amd64" {
-		t.Skip("this table assumes the dev/CI host is amd64")
-	}
 	cat := testCatalog(t)
 	modelIndex := BuildModelIndex(cat)
 
@@ -48,19 +44,35 @@ func TestCandidates_SingleCompatibleVersionStaysPlain(t *testing.T) {
 	if !found {
 		t.Errorf("expected plain 'Canon Generic Plus UFR II' label (only 1 version group, no decoration), got %v", got)
 	}
+}
 
-	got = Candidates(cat, modelIndex, "HP", "", "")
-	found = false
-	for _, c := range got {
-		if c == "HP Universal Printing PCL 6" {
-			found = true
-		}
-		if c != "HP Universal Printing PCL 6" {
-			t.Errorf("expected the incompatible arm64-only HP version group to be filtered out on amd64, got extra candidate %q", c)
-		}
+// TestCandidates_CrossArchVersionsBothOfferedRegardlessOfHost guards
+// PreferredArchTokens' own fixed, universal order (arch.go): an x64-only
+// version and an arm64-only version of the same driver name (HP's real
+// testdata - different DriverVer/date per architecture, same shape as HP's
+// real Universal Print Driver releases) must both show up as candidates on
+// every host PDT itself runs on, x64-labeled one first - never filtered
+// down to whichever one happens to match the host machine's own CPU
+// architecture (the real, reported bug this fixed: on an Apple Silicon Mac,
+// GOARCH-based filtering used to hide every non-arm64-only driver
+// entirely, including manufacturers with no real ARM64 Windows build at
+// all - Canon, Sharp, Toshiba, Xerox, confirmed live 2026-09-21).
+func TestCandidates_CrossArchVersionsBothOfferedRegardlessOfHost(t *testing.T) {
+	cat := testCatalog(t)
+	modelIndex := BuildModelIndex(cat)
+
+	got := Candidates(cat, modelIndex, "HP", "", "")
+	want := []string{
+		"HP Universal Printing PCL 6 (v61.360.01.26819 - 2026-05-20, x64)",
+		"HP Universal Printing PCL 6 (v61.360.01.26778 - 2026-04-23, arm64)",
 	}
-	if !found {
-		t.Errorf("expected plain 'HP Universal Printing PCL 6' label (arm64-only version filtered out), got %v", got)
+	if len(got) != len(want) {
+		t.Fatalf("Candidates() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Candidates()[%d] = %q, want %q (x64 preferred/newest-first order)", i, got[i], want[i])
+		}
 	}
 }
 
@@ -90,5 +102,50 @@ func TestCandidateDetails_CarriesSourcePackagePerVersion(t *testing.T) {
 	}
 	if plain := Candidates(catalog, nil, "Konica Minolta", "", ""); len(plain) != 2 || plain[0] != got[0].Label {
 		t.Errorf("Candidates and CandidateDetails must agree on labels/order, got %v vs %+v", plain, got)
+	}
+}
+
+// TestCandidateDetails_ExcludesFaxDrivers guards the real, reported bug: a
+// Konica Minolta Universal Driver .inf declares a real "...Universal FAX"
+// entry alongside its real print drivers - PDT only ever deploys print
+// queues, so a fax "driver" is never a usable Windows Driver candidate.
+func TestCandidateDetails_ExcludesFaxDrivers(t *testing.T) {
+	catalog := Catalog{
+		"Konica Minolta": {
+			"KONICA MINOLTA Universal PCL": {"v1|2025-09-01": {"any": {InfPath: "a.inf"}}},
+			"KONICA MINOLTA Universal FAX": {"v1|2025-09-01": {"any": {InfPath: "b.inf"}}},
+		},
+	}
+	got := Candidates(catalog, nil, "Konica Minolta", "", "")
+	if len(got) != 1 || got[0] != "KONICA MINOLTA Universal PCL" {
+		t.Errorf("expected only the PCL driver, FAX excluded, got %v", got)
+	}
+}
+
+// TestCandidateDetails_PrefersVersionedNameOverBareDuplicate guards the
+// other real, reported Konica Minolta bug: the identical .inf declares the
+// exact same driver under both a bare name and a " vX.Y" version-suffixed
+// name (bareNameDuplicates) - only the versioned one should ever reach the
+// dropdown ("Only show the one that has a driver version number in it").
+// The bare name stays selectable when no version-suffixed sibling shares its
+// own InfPath, so an unrelated real driver that merely happens to share a
+// name prefix is never suppressed by mistake.
+func TestCandidateDetails_PrefersVersionedNameOverBareDuplicate(t *testing.T) {
+	catalog := Catalog{
+		"Konica Minolta": {
+			"KONICA MINOLTA Universal PCL":         {"v1|2025-09-01": {"any": {InfPath: "shared.inf"}}},
+			"KONICA MINOLTA Universal PCL v3.9.13": {"v1|2025-09-01": {"any": {InfPath: "shared.inf"}}},
+			"KONICA MINOLTA Universal PS":          {"v1|2025-09-01": {"any": {InfPath: "unrelated.inf"}}},
+		},
+	}
+	got := Candidates(catalog, nil, "Konica Minolta", "", "")
+	want := map[string]bool{"KONICA MINOLTA Universal PCL v3.9.13": true, "KONICA MINOLTA Universal PS": true}
+	if len(got) != len(want) {
+		t.Fatalf("Candidates() = %v, want exactly %v", got, want)
+	}
+	for _, c := range got {
+		if !want[c] {
+			t.Errorf("unexpected candidate %q (bare duplicate should have been suppressed): %v", c, got)
+		}
 	}
 }

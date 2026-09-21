@@ -275,6 +275,30 @@ func isJapanMarketOnly(nickName string) bool {
 	return ricohJapanModelNumberRe.MatchString(nickName)
 }
 
+// ffpsVariantSuffixRe matches Xerox's own "FFPS" naming convention - a
+// FreeFlow Print Server-targeted driver variant, not a plain client PPD -
+// real OpenPrinting data for Xerox (confirmed 2026-09-21) lists it as a
+// trailing " FFPS" token on an otherwise-identical model name ("Xerox D125
+// Copier-Printer" vs "Xerox D125 Copier-Printer FFPS"). Excluded outright
+// rather than stripped-and-merged the way genericLanguageSuffixes are: a
+// technician configuring a plain network printer queue has no use for
+// either form once the plain one already exists, and even standing alone
+// it isn't a driver PDT's own macOS Deployer can actually install.
+var ffpsVariantSuffixRe = regexp.MustCompile(`(?i)\bFFPS$`)
+
+// IsExcludedModelVariant reports whether nickName names a real PPD/model
+// variant that should never be offered as a selectable Model at all -
+// Japan-market-only SKUs (isJapanMarketOnly) or Xerox's own FFPS print-
+// server variant (ffpsVariantSuffixRe). Exported for
+// modelCandidatesWithSource's own OpenPrinting-PPD path (modelcandidate.go,
+// package main) - the one Model-dropdown source that never goes through
+// indexFamilyPackage's own inline isJapanMarketOnly check above, since it
+// lists PPDs OpenPrinting itself ships rather than ones extracted from a
+// local vendor package.
+func IsExcludedModelVariant(nickName string) bool {
+	return isJapanMarketOnly(nickName) || ffpsVariantSuffixRe.MatchString(nickName)
+}
+
 // indexFamilyPackage inspects family's own newest package (pkg) once,
 // returning every PPD it would register (keyed by friendly model name)
 // alongside the full provenance chain that produced them - see

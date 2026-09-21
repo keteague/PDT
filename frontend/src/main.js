@@ -1912,7 +1912,15 @@ function driverButtonHtml(r) {
     const windowsIncomplete = r.windowsEnabled && !r.driver;
     const macIncomplete = r.macEnabled && (!r.model || !r.macDriver);
     const cls = (windowsIncomplete || macIncomplete) ? 'row-driver-btn input-needs-value' : 'row-driver-btn';
-    return `<button type="button" class="${cls}" title="Configure this row's Model and Windows/macOS Driver.">Driver</button>`;
+    // tabindex="0" (PDT.app, confirmed live 2026-09-21): WebKit/Safari - the
+    // engine behind Wails' own macOS webview - only includes actual form
+    // fields in the Tab order by default, not buttons/links, unless macOS's
+    // own "keyboard navigation" accessibility setting is on (off by default)
+    // - a Chromium-only-vs-Safari difference that never showed up testing on
+    // Windows. An explicit tabindex overrides that default regardless of the
+    // system setting, so Tabbing across a row (ID -> Name -> IP -> LPD Queue
+    // -> Manufacturer -> Driver) reaches this button on both platforms.
+    return `<button type="button" class="${cls}" tabindex="0" title="Configure this row's Model and Windows/macOS Driver.">Driver</button>`;
 }
 
 function devModeButtonHtml(r) {

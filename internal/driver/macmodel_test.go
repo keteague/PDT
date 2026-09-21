@@ -71,6 +71,32 @@ func TestIsJapanMarketOnly(t *testing.T) {
 	}
 }
 
+// TestIsExcludedModelVariant guards the OpenPrinting-PPD Model dropdown
+// path (modelCandidatesWithSource, package main) getting the same
+// exclusions indexFamilyPackage's own local-package path already applies
+// (isJapanMarketOnly) plus Xerox's own real FFPS print-server variant,
+// confirmed against real OpenPrinting data (2026-09-21).
+func TestIsExcludedModelVariant(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"Xerox D125 Copier-Printer", false},
+		{"Xerox D125 Copier-Printer FFPS", true},
+		{"Xerox D110 Printer FFPS", true},
+		// Case-insensitive, and a real trailing token only, not a substring.
+		{"Xerox D125 Printer ffps", true},
+		{"Xerox FFPSomethingElse", false},
+		{"RICOH IM C3510 JPN", true},
+		{"RICOH IM C3510", false},
+	}
+	for _, tt := range tests {
+		if got := IsExcludedModelVariant(tt.name); got != tt.want {
+			t.Errorf("IsExcludedModelVariant(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestBuildMacModelIndex_UnifiesModelAcrossAllThreeLanguageFamilies(t *testing.T) {
 	cat := testModelCatalog(t)
 	dir := t.TempDir()

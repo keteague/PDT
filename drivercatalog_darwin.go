@@ -115,15 +115,42 @@ func (a *App) DriverCandidates(manufacturer, model, filterText string) []string 
 	return driver.GenericDriverCandidates(filterText)
 }
 
+// DriverCandidatesWithSource is the Driver modal's own dedicated "Windows
+// Driver" field data source on macOS - identical bound method name/
+// signature to Windows' own (drivercatalog_windows.go), so the frontend
+// needs no platform branch to fetch Windows Driver candidates either way
+// (mirrors MacDriverCandidatesFor's own cross-platform symmetry below).
+// Sourced from the Windows-shaped catalog app_darwin.go's own loadCatalog
+// builds in the background (GitHub issue #3's mirror image - see its own
+// doc comment) - real local .inf-derived driver names, not the macOS-
+// flavored candidates DriverCandidates above returns. Confirmed live as a
+// real, actively misleading bug before this existed: the frontend used to
+// call DriverCandidates (this file's own macOS-native implementation) for
+// the Windows Driver field on a mac build, since App.DriverCandidatesWithSource
+// didn't exist here at all - silently offering Canon UFR II/PostScript
+// variants, OpenPrinting mac PPD fallbacks, and Kyocera/Ricoh's own generic
+// mac package labels in a field meant to hold a real Windows driver name.
+func (a *App) DriverCandidatesWithSource(manufacturer, model, filterText string) []WindowsDriverCandidate {
+	<-a.ready
+	catalog, modelIndex := a.catalogSnapshot()
+	details := driver.CandidateDetails(catalog, modelIndex, manufacturer, model, filterText)
+	out := make([]WindowsDriverCandidate, len(details))
+	for i, d := range details {
+		out[i] = WindowsDriverCandidate{Label: d.Label, Source: windowsDriverCandidateSource(manufacturer, d.Sources)}
+	}
+	return out
+}
+
 // MacDriverCandidatesFor is the Driver modal's own dedicated "macOS Driver"
 // field data source (GitHub issue #16 follow-up, 2026-09-19) - identical
 // bound method name/signature to Windows' own (drivercatalog_windows.go), so
 // the frontend needs no platform branch to fetch macOS Driver candidates
-// either way. Distinct from DriverCandidates above (which the modal's own
-// Windows Driver field keeps using unchanged, on both platforms): that
-// returns plain labels with no source-path metadata, while this additionally
-// carries each candidate's own real package/PPD path
-// (MacDriverCandidate.Source) for the frontend's own tooltip - see
+// either way. Distinct from DriverCandidates above (which stays the
+// Defaults panel's own single, generic Driver field's data source on macOS,
+// unrelated to the Driver modal's now fully-split Windows Driver/macOS
+// Driver fields - see DriverCandidatesWithSource just above for the
+// former): this additionally carries each candidate's own real package/PPD
+// path (MacDriverCandidate.Source) for the frontend's own tooltip - see
 // macDriverCandidatesWithSource (macdrivercandidate.go), the exact same
 // gathering logic Windows' own MacDriverCandidatesFor calls.
 func (a *App) MacDriverCandidatesFor(manufacturer, model, filterText string) []MacDriverCandidate {

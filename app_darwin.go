@@ -97,16 +97,79 @@ func (a *App) loadCatalog(driversRoot string) error {
 	if persist {
 		go a.buildOpenPrintingCatalogAsync(catalog, macRoot)
 	}
+
+	// Also builds the Windows-shaped catalog (driver.Catalog/model index),
+	// the mirror image of app_windows.go's own background macOS-catalog
+	// build (GitHub issue #3): BuildCatalog itself has no Windows-only
+	// dependency (it's a plain cross-platform file), and its four
+	// ensure*InfsExtracted archive helpers each already degrade gracefully
+	// with no platform-specific code needed here at all - a .zip extracts
+	// for real (Go's own archive/zip, no external tool), while .msi
+	// (msiexec.exe) and self-extracting .exe (the bundled 7z.exe, a Windows
+	// PE binary that can't run here) each simply fail per-package and are
+	// skipped, the same best-effort discipline every other extraction
+	// failure already gets. In the common case - a Drivers folder built or
+	// synced from a real Windows machine - the real .inf text is already
+	// sitting in each package's own .pdt-infcache (issue #10's lazy-
+	// extraction rework), so this usually needs no extraction at all: a
+	// pure filesystem read, no tooling required either way. Backgrounded
+	// for the same reason the OpenPrinting build above is - nothing on
+	// macOS blocks on this being ready (the Driver modal's Windows Driver
+	// field just sees an empty candidate list until it finishes, the same
+	// graceful "background build hasn't caught up yet" degrade
+	// macCatalogSnapshot's own doc comment already documents for Windows).
+	go func() {
+		catalog, err := driver.BuildCatalog(driversRoot)
+		if err != nil {
+			return
+		}
+		a.catalogMu.Lock()
+		a.catalog = catalog
+		a.modelIndex = driver.BuildModelIndex(catalog)
+		a.catalogMu.Unlock()
+	}()
+
 	return nil
 }
 
+// catalogSnapshot returns the current Windows-shaped catalog/modelIndex
+// under catalogMu's read lock - the darwin analog of
+// drivercatalog_windows.go's own catalogSnapshot, reading the fields
+// loadCatalog's own background goroutine above populates. Unlike that
+// method's own <-a.ready gating (a.ready only ever covers the macOS catalog
+// build on this platform - see loadCatalog's own doc comment on why the
+// Windows-shaped build runs backgrounded and unblocking), a call landing
+// before that goroutine finishes just sees a zero-value catalog/modelIndex,
+// which every caller already treats as a normal "nothing resolved yet"
+// result, not an error.
+func (a *App) catalogSnapshot() (driver.Catalog, map[string]map[string][]string) {
+	a.catalogMu.RLock()
+	defer a.catalogMu.RUnlock()
+	return a.catalog, a.modelIndex
+}
+
 // resolveOtherPlatformDriver is runbook.go's own resolveOtherPlatformDriverFunc
-// seam on macOS: always "not found" - unlike Windows (which builds a
-// macOS-shaped catalog alongside its own, see GitHub issue #3), a macOS
-// build has no Windows driver catalog at all to resolve against, so the
-// Runbook's own "Windows:" lines simply stay blank here, for the technician
-// to fill in by hand.
+// seam on macOS: resolves against the Windows-shaped catalog loadCatalog's
+// own background goroutine builds above (GitHub issue #3's mirror - Windows
+// already does the equivalent lookup against a background-built macOS
+// catalog, app_windows.go's own resolveOtherPlatformDriver). Favors
+// DefaultDriverNameFor's own preferred-driver rule when one applies and
+// actually matches something local (e.g. HP's "PCL","6" tokens resolving to
+// "HP Universal Printing PCL 6") - the same rule the Windows Defaults panel
+// itself trusts - falling back to the single best-ranked Candidates entry
+// (multiVersion-sorted, so the newest date wins) for a manufacturer with no
+// such rule, or whose preferred driver isn't present locally. ok is false
+// whenever nothing resolves at all - no local Windows driver package for
+// this manufacturer, or the background catalog build just hasn't finished
+// yet on a very fresh launch.
 func (a *App) resolveOtherPlatformDriver(manufacturer, model string) (string, bool) {
+	catalog, modelIndex := a.catalogSnapshot()
+	if name := driver.DefaultDriverNameFor(catalog, manufacturer); name != "" {
+		return name, true
+	}
+	if candidates := driver.Candidates(catalog, modelIndex, manufacturer, model, ""); len(candidates) > 0 {
+		return candidates[0], true
+	}
 	return "", false
 }
 

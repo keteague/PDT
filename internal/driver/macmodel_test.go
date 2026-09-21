@@ -103,6 +103,77 @@ func TestBuildMacModelIndex_UnifiesModelAcrossAllThreeLanguageFamilies(t *testin
 	if byLang["PPD"].LooseCachedPPDPath == "" {
 		t.Error("PPD (loose) variant should have a LooseCachedPPDPath (no-installer family)")
 	}
+	if !filepath.IsAbs(byLang["PPD"].LooseCachedPPDPath) {
+		t.Errorf("live in-memory LooseCachedPPDPath should be a real, directly-openable absolute path, got %q", byLang["PPD"].LooseCachedPPDPath)
+	}
+	if _, err := os.Stat(byLang["PPD"].LooseCachedPPDPath); err != nil {
+		t.Errorf("live in-memory LooseCachedPPDPath should point at a real cached file, got %v", err)
+	}
+}
+
+// TestBuildMacModelIndex_LooseCachedPPDPathPersistsCacheDirRelative guards
+// the real bug this session found live: LooseCachedPPDPath used to be
+// persisted absolute (installedAppDataDir-based, e.g.
+// "/Users/ken/Library/.../PPDCache/Canon/..."), baking the current
+// machine's own username straight into catalog.<mfg>.json - a file Cloud
+// Sync diffs by raw byte size (internal/cloudsync/plan.go). Two
+// technicians' machines could never produce a byte-identical catalog for
+// any manufacturer with loose (no-installer) PPD variants this way, even
+// with 100% identical real driver data - a perpetual, never-resolving
+// Cloud Sync conflict, not a one-time staleness blip. Fixed the same way
+// GitHub issue #13 already fixed PackagePath/SourcePackagePath: persist
+// relative to a known root (ppdCacheDir here, driversRoot there), resolve
+// back to absolute only at read time (toMacPPDVariant).
+func TestBuildMacModelIndex_LooseCachedPPDPathPersistsCacheDirRelative(t *testing.T) {
+	cat := testModelCatalog(t)
+
+	// Two separate "machines" - distinct macRoot (so each builds its own
+	// catalog.json from scratch) and distinct ppdCacheDir (so each caches
+	// the real PPD under its own root, the way two different technicians'
+	// own installedAppDataDir()s never coincide) - built from the exact same
+	// real source packages.
+	machineA := filepath.Join(t.TempDir(), "machineA")
+	machineB := filepath.Join(t.TempDir(), "machineB")
+	if err := os.MkdirAll(machineA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(machineB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	BuildMacModelIndex(cat, machineA, machineA, true)
+	BuildMacModelIndex(cat, machineB, machineB, true)
+
+	pathA := LoadMacManufacturerCatalog(filepath.Join(machineA, "Canon", CatalogFileName("Canon")))
+	pathB := LoadMacManufacturerCatalog(filepath.Join(machineB, "Canon", CatalogFileName("Canon")))
+
+	var relA, relB string
+	for _, vs := range pathA.Models {
+		for _, v := range vs {
+			if v.Language == "PPD" {
+				relA = v.LooseCachedPPDPath
+			}
+		}
+	}
+	for _, vs := range pathB.Models {
+		for _, v := range vs {
+			if v.Language == "PPD" {
+				relB = v.LooseCachedPPDPath
+			}
+		}
+	}
+
+	if relA == "" || relB == "" {
+		t.Fatalf("expected both machines to persist a LooseCachedPPDPath, got A=%q B=%q", relA, relB)
+	}
+	if filepath.IsAbs(relA) || strings.Contains(relA, machineA) {
+		t.Errorf("machine A's persisted LooseCachedPPDPath should be ppdCacheDir-relative, got absolute/machine-specific: %q", relA)
+	}
+	if filepath.IsAbs(relB) || strings.Contains(relB, machineB) {
+		t.Errorf("machine B's persisted LooseCachedPPDPath should be ppdCacheDir-relative, got absolute/machine-specific: %q", relB)
+	}
+	if relA != relB {
+		t.Errorf("two machines caching the same real content under different roots should persist byte-identical LooseCachedPPDPath (the exact property that keeps Cloud Sync from flagging a spurious conflict) - got A=%q B=%q", relA, relB)
+	}
 }
 
 func TestBuildMacModelIndex_ModelWithOnlyOneFamilyGetsOneVariant(t *testing.T) {

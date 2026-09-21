@@ -408,20 +408,20 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 // Label is recomputed here rather than persisted - see MacCatalogVariant's
 // own doc comment for why. PackagePath/SourcePackagePath are resolved back
 // to a real, absolute, directly-openable path via absFromDriversRoot
-// (GitHub issue #13) - every real deploy-time consumer (installVariant,
-// canonbatch_darwin.go, LocatePkg) needs one, and this is the one place a
-// persisted (driversRoot-relative, or pre-fix absolute) value gets turned
-// back into that form. LooseCachedPPDPath is untouched - always
-// per-machine-absolute already, never relativized (see MacCatalogVariant's
-// own doc comment).
-func toMacPPDVariant(model string, v MacCatalogVariant, driversRoot string) MacPPDVariant {
+// (GitHub issue #13), and LooseCachedPPDPath the same way via
+// absFromPPDCacheRoot (its own sibling fix) - every real deploy-time
+// consumer (installVariant, canonbatch_darwin.go, LocatePkg,
+// lpadmin -P against the cached PPD directly) needs a real absolute path,
+// and this is the one place a persisted (root-relative, or pre-fix
+// absolute) value gets turned back into that form.
+func toMacPPDVariant(model string, v MacCatalogVariant, driversRoot, ppdCacheDir string) MacPPDVariant {
 	return MacPPDVariant{
 		Language:           v.Language,
 		Label:              macVariantLabel(model, v.Language, v.Filename, ""),
 		NickName:           v.NickName,
 		Filename:           v.Filename,
 		PackagePath:        absFromDriversRoot(driversRoot, v.PackagePath),
-		LooseCachedPPDPath: v.LooseCachedPPDPath,
+		LooseCachedPPDPath: absFromPPDCacheRoot(ppdCacheDir, v.LooseCachedPPDPath),
 		SourcePackagePath:  absFromDriversRoot(driversRoot, v.SourcePackagePath),
 		PackageModTime:     v.PackageModTime,
 		OSVersionFolder:    v.OSVersionFolder,
@@ -511,14 +511,16 @@ func decorateMultiVersionLabels(byModel map[string][]MacPPDVariant) {
 // re-inspect (cheap now - see packagePPDEntries) rather than reuse a
 // LooseCachedPPDPath that doesn't resolve to anything on this machine.
 // Irrelevant (always true) for an installer-backed family, which has no
-// LooseCachedPPDPath entries at all.
-func cachedVariantFilesExist(variants map[string][]MacCatalogVariant) bool {
+// LooseCachedPPDPath entries at all. v.LooseCachedPPDPath is persisted
+// ppdCacheDir-relative (relToPPDCacheRoot) - resolved back to a real,
+// stat-able path here via absFromPPDCacheRoot before ever touching disk.
+func cachedVariantFilesExist(variants map[string][]MacCatalogVariant, ppdCacheDir string) bool {
 	for _, vs := range variants {
 		for _, v := range vs {
 			if v.LooseCachedPPDPath == "" {
 				continue
 			}
-			if _, err := os.Stat(v.LooseCachedPPDPath); err != nil {
+			if _, err := os.Stat(absFromPPDCacheRoot(ppdCacheDir, v.LooseCachedPPDPath)); err != nil {
 				return false
 			}
 		}
@@ -659,7 +661,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 					// of falling through to a real reindex - Kyocera/Ricoh
 					// disappeared from the Model dropdown entirely as a
 					// result, even though their real packages were untouched.
-					if len(cachedModels) > 0 && cachedVariantFilesExist(cachedModels) {
+					if len(cachedModels) > 0 && cachedVariantFilesExist(cachedModels, ppdCacheDir) {
 						for model, variants := range cachedModels {
 							// A catalog.<mfg>.json written before
 							// normalizeModelName existed still carries the
@@ -669,7 +671,7 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 							// rename them.
 							model = normalizeModelName(model)
 							for _, v := range variants {
-								byModel[model] = append(byModel[model], toMacPPDVariant(model, v, driversRoot))
+								byModel[model] = append(byModel[model], toMacPPDVariant(model, v, driversRoot, ppdCacheDir))
 							}
 						}
 						continue
@@ -737,10 +739,13 @@ func BuildMacModelIndex(catalog MacCatalog, macRoot, ppdCacheDir string, persist
 						// live values indexFamilyPackage just built) -
 						// relativized here, at the one point they cross into
 						// the persisted MacCatalogVariant shape (GitHub
-						// issue #13).
+						// issue #13). v.LooseCachedPPDPath gets the same
+						// treatment, relative to ppdCacheDir instead of
+						// driversRoot - a gap issue #13 itself missed (see
+						// relToPPDCacheRoot's own doc comment).
 						current[model] = append(current[model], MacCatalogVariant{
 							Language: v.Language, NickName: v.NickName, Filename: v.Filename,
-							PackagePath: relToDriversRoot(driversRoot, v.PackagePath), LooseCachedPPDPath: v.LooseCachedPPDPath,
+							PackagePath: relToDriversRoot(driversRoot, v.PackagePath), LooseCachedPPDPath: relToPPDCacheRoot(ppdCacheDir, v.LooseCachedPPDPath),
 							SourcePackagePath: relToDriversRoot(driversRoot, v.SourcePackagePath), PackageModTime: v.PackageModTime,
 							OSVersionFolder: v.OSVersionFolder,
 						})

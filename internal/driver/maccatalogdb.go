@@ -249,6 +249,32 @@ func absFromDriversRoot(driversRoot, relPath string) string {
 	return filepath.Join(driversRoot, filepath.FromSlash(relPath))
 }
 
+// relToPPDCacheRoot/absFromPPDCacheRoot are relToDriversRoot/
+// absFromDriversRoot's own siblings for MacCatalogVariant.LooseCachedPPDPath
+// - the same GitHub issue #13 portability problem, on a field issue #13's
+// own fix missed. Confirmed live: LooseCachedPPDPath used to be persisted
+// absolute and untouched (installedAppDataDir-based, e.g.
+// "/Users/ken/Library/.../PPDCache/Canon/PPD/<hash>/<file>.PPD.gz"), which
+// bakes the current machine's own username straight into catalog.<mfg>.json
+// - a file Cloud Sync diffs by raw byte size (internal/cloudsync/plan.go).
+// Two technicians' machines can never produce a byte-identical catalog for
+// any manufacturer with loose (no-installer) PPD variants this way, even
+// with 100% identical real driver data, so it showed up as a perpetual,
+// never-resolving Cloud Sync conflict rather than a one-time staleness blip.
+// The subpath under ppdCacheDir (CachePPDFile's own destDir/filename) is
+// fully content-derived - manufacturer, family, a package-identity hash,
+// and the real PPD filename, nothing machine-specific - so relativizing it
+// the same way issue #13 already relativizes PackagePath/SourcePackagePath
+// is safe and produces identical bytes across any two machines with the
+// same real cached content.
+func relToPPDCacheRoot(ppdCacheDir, absPath string) string {
+	return relToDriversRoot(ppdCacheDir, absPath)
+}
+
+func absFromPPDCacheRoot(ppdCacheDir, relPath string) string {
+	return absFromDriversRoot(ppdCacheDir, relPath)
+}
+
 // IsCurrent reports whether cat already has provenance recorded for family
 // whose outermost chain entry exactly matches pkg (Path, ModTime, and Size
 // all equal) - the cheap, mount-free check that lets BuildMacModelIndex

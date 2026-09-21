@@ -32,6 +32,27 @@ func TestRelToDriversRoot_StoresForwardSlashRegardlessOfOSSeparator(t *testing.T
 	}
 }
 
+// TestRelToPPDCacheRoot_RoundTrips mirrors
+// TestRelToDriversRoot_StoresForwardSlashRegardlessOfOSSeparator for
+// relToPPDCacheRoot/absFromPPDCacheRoot - LooseCachedPPDPath's own
+// portability fix (see relToPPDCacheRoot's own doc comment for the real
+// Cloud Sync conflict this closes).
+func TestRelToPPDCacheRoot_RoundTrips(t *testing.T) {
+	ppdCacheDir := filepath.Join("C:", "Users", "Ken", "AppData", "Local", "PDT", "PPDCache")
+	absPath := filepath.Join(ppdCacheDir, "Canon", "PPD", "PPDv5.50_mac.zip-485534ad", "CNADV529X1.PPD.gz")
+
+	rel := relToPPDCacheRoot(ppdCacheDir, absPath)
+	want := "Canon/PPD/PPDv5.50_mac.zip-485534ad/CNADV529X1.PPD.gz"
+	if rel != want {
+		t.Errorf("relToPPDCacheRoot returned %q, want forward-slash-normalized %q", rel, want)
+	}
+
+	got := absFromPPDCacheRoot(ppdCacheDir, rel)
+	if got != absPath {
+		t.Errorf("absFromPPDCacheRoot(%q, %q) = %q, want %q", ppdCacheDir, rel, got, absPath)
+	}
+}
+
 func TestCatalogFileName(t *testing.T) {
 	tests := []struct{ mfg, want string }{
 		{"Canon", "catalog.canon.json"},

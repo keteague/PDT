@@ -160,6 +160,7 @@ func ensureMsiInfsExtracted(root string) {
 
 		if err := extractInfsFromMsi(path, destDir); err != nil {
 			os.RemoveAll(destDir)
+			warnExtraction("%s: could not extract .inf from %s: %v", filepath.Base(root), filepath.Base(path), err)
 			return nil
 		}
 		writeSourceMarker(destDir, path)

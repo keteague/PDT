@@ -158,6 +158,7 @@ func ensureKyoceraExeInfsExtracted(root string) {
 		exePath := filepath.Join(root, e.Name())
 		if err := extractInfsFromKyoceraExe(exePath, destDir); err != nil {
 			os.RemoveAll(destDir)
+			warnExtraction("%s: could not extract .inf from %s: %v", filepath.Base(root), e.Name(), err)
 			continue
 		}
 		writeSourceMarker(destDir, exePath)

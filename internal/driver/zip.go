@@ -97,6 +97,7 @@ func ensureZipInfsExtracted(root string) {
 
 		if err := extractInfsFromZip(path, destDir); err != nil {
 			os.RemoveAll(destDir)
+			warnExtraction("%s: could not extract .inf from %s: %v", filepath.Base(root), filepath.Base(path), err)
 			return nil
 		}
 		flattenRedundantWrapperDir(destDir)

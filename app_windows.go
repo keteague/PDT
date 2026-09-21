@@ -70,6 +70,14 @@ func (a *App) platformStartup() {
 // concurrent catalog mutation (RefreshDriverCatalog can already land at any
 // moment) - just on its own goroutine's own schedule instead of inline.
 func (a *App) loadCatalog(driversRoot string) error {
+	// Surfaces an otherwise-silent archive-extraction failure (a real .zip/
+	// .msi/self-extracting .exe that BuildCatalog found but couldn't pull an
+	// .inf out of) as a WARN line in PDT's own Log panel - see
+	// driver.ExtractionWarning's own doc comment. Re-set on every call
+	// (RefreshDriverCatalog/RescanDrivers call loadCatalog again, not just
+	// startup) - cheap, and always keeps the closure bound to this exact *App.
+	driver.ExtractionWarning = func(msg string) { a.logCatalog("WARN", msg) }
+
 	buildFn := driver.BuildCatalog
 	isRemovable := false
 	if exe, err := os.Executable(); err == nil {

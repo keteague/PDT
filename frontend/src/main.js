@@ -1743,12 +1743,25 @@ function wireDriverModal() {
     setupCombobox(
         windowsInput,
         windowsInput.closest('.combo').querySelector('.combo-list'),
-        // Windows: DriverCandidatesWithSource carries a per-item tooltip (manufacturer
-        // + real package path); a native mac build keeps plain DriverCandidates.
-        (filterText) => driverModalRow
-            ? (isMac()
-                ? App.DriverCandidates(driverModalRow.manufacturer, driverModalRow.model, filterText)
-                : App.DriverCandidatesWithSource(driverModalRow.manufacturer, driverModalRow.model, filterText))
+        // Windows only: DriverCandidatesWithSource carries a per-item tooltip
+        // (manufacturer + real package path), sourced from a real local scan
+        // of the Windows Drivers folder. A mac build has no such catalog to
+        // scan at all - App.DriverCandidates is still bound on a mac build,
+        // but only to drivercatalog_darwin.go's own implementation (there is
+        // no Windows one compiled in), so calling it here used to silently
+        // return macOS-flavored labels (Canon UFR II/PostScript variants,
+        // OpenPrinting mac PPD fallbacks, a Kyocera/Ricoh mac package's own
+        // generic "(Driver)"/"(PostScript)" language label) into a field
+        // that's supposed to hold a real Windows driver name - confirmed
+        // live as a real, actively misleading bug across HP, Kyocera, and
+        // Ricoh (the exact same label duplicated in both the Windows Driver
+        // and macOS Driver fields is the tell). No candidates at all on mac
+        // instead, matching the exact same "no real Windows catalog to
+        // resolve against" precedent resolveOtherPlatformDriver
+        // (app_darwin.go) already applies to the Runbook's own "Windows:"
+        // lines - plain free text, filled in by hand, rather than guessed.
+        (filterText) => driverModalRow && !isMac()
+            ? App.DriverCandidatesWithSource(driverModalRow.manufacturer, driverModalRow.model, filterText)
             : Promise.resolve([]),
         (value) => {
             if (!driverModalRow) return;

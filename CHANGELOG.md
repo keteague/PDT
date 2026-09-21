@@ -4,6 +4,15 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-21 (v0.9.44) - WARN log line for silent Windows driver-extraction failures
+
+### Added
+- A real archive (.zip/.msi/self-extracting .exe) that PDT finds but fails to extract an .inf
+  from during a driver scan now logs a WARN line in the Log panel on Windows, instead of failing
+  completely silently. Surfaced a real bug: Lexmark's own driver extracts to several .msi files
+  via the bundled 7z.exe, but `msiexec /a` was failing to pull a real .inf out of any of them with
+  no visible sign anywhere - previously indistinguishable from "macOS just can't do this."
+
 ## 2026-09-21 (v0.9.43) - Windows Driver candidate fixes on macOS, Konica/Ricoh/Xerox cleanup
 
 ### Fixed

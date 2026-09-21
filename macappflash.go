@@ -23,11 +23,17 @@ import (
 
 const (
 	macAppBundleName = "PDT.app"
-	// macAppAssetName is the release asset .github/workflows/release.yml
-	// builds and uploads: `ditto -c -k --sequesterRsrc --keepParent` of
-	// PDT.app, so every real entry sits under a top-level "PDT.app/".
-	macAppAssetName = "PDT-macOS.zip"
+	// macAppAssetFile is the local temp name the downloaded release zip is
+	// saved under.
+	macAppAssetFile = "PDT-macOS.zip"
 )
+
+// macAppAssetRe matches the release asset .github/workflows/release.yml
+// builds and uploads: `ditto -c -k --sequesterRsrc --keepParent` of PDT.app,
+// so every real entry sits under a top-level "PDT.app/". Releases from
+// v0.9.39 on carry the version in the name (PDT-macOS-0.9.39.zip); earlier
+// ones are plain PDT-macOS.zip - both match.
+var macAppAssetRe = regexp.MustCompile(`^PDT-macOS(-[0-9][0-9A-Za-z.+-]*)?\.zip$`)
 
 // FlashNote is one informational/warning line a flash-drive operation wants
 // logged beyond plain per-drive success/failure - Level is a logStatus level
@@ -63,9 +69,9 @@ func (s *macAppSource) zip() (string, error) {
 		return "", err
 	}
 	s.tmpDir = dir
-	path, err := s.download(s.assetURL, filepath.Join(dir, macAppAssetName))
+	path, err := s.download(s.assetURL, filepath.Join(dir, macAppAssetFile))
 	if err != nil {
-		s.dlErr = fmt.Errorf("downloading %s: %w", macAppAssetName, err)
+		s.dlErr = fmt.Errorf("downloading the macOS app zip: %w", err)
 		return "", s.dlErr
 	}
 	s.zipPath = path
@@ -92,9 +98,9 @@ func fetchMacAppSource() (*macAppSource, error) {
 
 // macAppSourceFrom picks the macOS asset out of an already-fetched release.
 func macAppSourceFrom(rel update.Release) (*macAppSource, error) {
-	asset := rel.Asset(macAppAssetName)
+	asset := rel.AssetMatching(macAppAssetRe)
 	if asset == nil {
-		return nil, fmt.Errorf("release %s has no %s asset", rel.TagName, macAppAssetName)
+		return nil, fmt.Errorf("release %s has no macOS app zip (PDT-macOS-<version>.zip) asset", rel.TagName)
 	}
 	return &macAppSource{
 		version:  strings.TrimPrefix(rel.TagName, "v"),

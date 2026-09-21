@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"PDT/internal/update"
 )
 
 const testInfoPlist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -185,5 +187,28 @@ func TestExtractMacAppZip_DownloadIsSharedAcrossDrives(t *testing.T) {
 	}
 	if *downloads != 1 {
 		t.Errorf("the release zip should be downloaded once for all drives, got %d", *downloads)
+	}
+}
+
+// The macOS asset is found whether or not its name carries the version
+// (PDT-macOS-0.9.39.zip from v0.9.39 on, plain PDT-macOS.zip before).
+func TestMacAppSourceFrom_MatchesVersionedAndPlainAssetNames(t *testing.T) {
+	for _, name := range []string{"PDT-macOS-0.9.39.zip", "PDT-macOS.zip"} {
+		rel := update.Release{TagName: "v0.9.39", Assets: []update.ReleaseAsset{
+			{Name: "PDT.exe", DownloadURL: "https://example.invalid/PDT.exe"},
+			{Name: name, DownloadURL: "https://example.invalid/" + name},
+		}}
+		src, err := macAppSourceFrom(rel)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if src.assetURL != "https://example.invalid/"+name || src.version != "0.9.39" {
+			t.Errorf("%s: got %+v", name, src)
+		}
+	}
+	rel := update.Release{TagName: "v0.9.39", Assets: []update.ReleaseAsset{{Name: "PDT-macOS-notes.txt"}, {Name: "PDT-Setup-0.9.39.exe"}}}
+	if _, err := macAppSourceFrom(rel); err == nil {
+		t.Error("expected an error when no macOS zip asset exists")
 	}
 }

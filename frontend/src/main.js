@@ -386,7 +386,7 @@ document.querySelector('#app').innerHTML = `
           <div class="about-row"><span class="about-label">7-Zip</span><span id="aboutSevenZipVersion"></span></div>
         </div>
         <div class="about-update platform-windows-only">
-          <button type="button" id="btnCheckSevenZipUpdate" title="Check 7-Zip's own releases for a newer version.">Check for 7-Zip Updates</button>
+          <button type="button" id="btnCheckSevenZipUpdate" title="Check 7-zip.org for a newer version.">Check for 7-Zip Updates</button>
           <button type="button" class="primary" id="btnApplySevenZipUpdate" hidden title="Download and install the update.">Update 7-Zip Now</button>
           <span class="modal-hint" id="sevenZipUpdateStatus"></span>
         </div>

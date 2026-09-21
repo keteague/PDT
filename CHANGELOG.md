@@ -4,6 +4,20 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-21 (v0.9.39) - Versioned macOS zip, PDT.app.zip direct download, 7-Zip update check via 7-zip.org
+
+### Changed
+- The macOS release zip now carries the version in its name (`PDT-macOS-<version>.zip`, e.g.
+  `PDT-macOS-0.9.39.zip`) instead of the fixed `PDT-macOS.zip`. PDT's flash-drive PDT.app top-up finds
+  the asset by pattern, so it works with both the new names and older releases.
+- Each release now also attaches **PDT.app.zip** - a fixed-name zip of the same PDT.app, the macOS
+  counterpart of PDT.exe's direct download - so the newest PDT.app is always one click away with no
+  .dmg to open (a .app is a folder, and a release asset has to be one file, so the zip is the
+  download; unzipping it gives PDT.app). The versioned `PDT-macOS-<version>.zip` is still attached.
+- **Check for 7-Zip Updates** now reads 7-Zip's own download page (www.7-zip.org) for the latest
+  version and its x64 installer, falling back to 7-Zip's GitHub releases if the page can't be read.
+  A downloaded 7z.exe must run before it replaces the cached one.
+
 ## 2026-09-20 (v0.9.38) - Cloud/local flash-write overhaul, OpenPrinting PPD sync, temp-folder driver extraction
 
 v0.9.37 was tagged but its release build failed on a macOS-only test bug (fixed below), so it was

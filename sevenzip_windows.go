@@ -96,13 +96,12 @@ func (a *App) OpenSevenZipHomepage() {
 	runtime.BrowserOpenURL(a.ctx, sevenZipHomepageURL)
 }
 
-// CheckSevenZipUpdate queries 7-Zip's own GitHub Releases (ip7z/7zip, where
-// 7-Zip's development now lives) for a version newer than the one currently
-// cached - Settings > About's "Check for 7-Zip Updates" button. Reuses
-// internal/update's FetchLatest (written for PDT's own releases, but generic
-// enough that this needs no update-package changes beyond AssetMatching, for
-// 7-Zip's own release asset names embedding a version number that PDT's
-// exact-name Asset lookup can't match).
+// CheckSevenZipUpdate looks for a 7-Zip version newer than the one currently
+// cached - Settings > About's "Check for 7-Zip Updates" button. The source is
+// 7-Zip's own download page (www.7-zip.org, Ken 2026-09-20): its newest
+// Windows section names the latest version and links the x64 installer. If
+// the page can't be read or its layout has changed, it falls back to
+// 7-Zip's GitHub Releases (ip7z/7zip), which hosts the same installers.
 func (a *App) CheckSevenZipUpdate() UpdateCheckResult {
 	<-a.ready
 	current, err := currentSevenZipVersion()
@@ -110,21 +109,39 @@ func (a *App) CheckSevenZipUpdate() UpdateCheckResult {
 		return UpdateCheckResult{Error: err.Error()}
 	}
 
-	rel, err := update.FetchLatest(sevenZipRepoSlug)
+	latest, assetURL, releaseURL, err := latestSevenZip()
 	if err != nil {
 		return UpdateCheckResult{CurrentVersion: current, Error: err.Error()}
 	}
 
-	result := UpdateCheckResult{CurrentVersion: current, LatestVersion: rel.TagName, ReleaseURL: rel.HTMLURL}
-	if driver.CompareVersions(rel.TagName, current) > 0 {
+	result := UpdateCheckResult{CurrentVersion: current, LatestVersion: latest, ReleaseURL: releaseURL}
+	if driver.CompareVersions(latest, current) > 0 {
 		result.Available = true
-		if asset := rel.AssetMatching(sevenZipInstallerAssetRe); asset != nil {
-			result.AssetURL = asset.DownloadURL
+		if assetURL != "" {
+			result.AssetURL = assetURL
 		} else {
-			result.Error = fmt.Sprintf("release %s has no x64 installer asset to download", rel.TagName)
+			result.Error = fmt.Sprintf("7-Zip %s has no x64 installer to download", latest)
 		}
 	}
 	return result
+}
+
+// latestSevenZip returns the newest 7-Zip version, its x64 installer URL
+// ("" if none could be found) and the page to send the user to - from the
+// 7-Zip website, else from GitHub Releases.
+func latestSevenZip() (version, installerURL, pageURL string, err error) {
+	rel, siteErr := update.FetchSevenZipLatest()
+	if siteErr == nil {
+		return rel.Version, rel.InstallerURL, rel.PageURL, nil
+	}
+	gh, ghErr := update.FetchLatest(sevenZipRepoSlug)
+	if ghErr != nil {
+		return "", "", "", fmt.Errorf("could not check for a 7-Zip update: %v (GitHub fallback: %v)", siteErr, ghErr)
+	}
+	if asset := gh.AssetMatching(sevenZipInstallerAssetRe); asset != nil {
+		installerURL = asset.DownloadURL
+	}
+	return gh.TagName, installerURL, gh.HTMLURL, nil
 }
 
 // UpdateSevenZip downloads assetURL (7-Zip's own x64 GUI installer - a
@@ -156,6 +173,12 @@ func (a *App) UpdateSevenZip(assetURL string) ApplyUpdateResult {
 	args := append([]string{"e", installerPath, "-o" + extractDir, "-y"}, names...)
 	if out, err := exec.Command(driver.SevenZipPath, args...).CombinedOutput(); err != nil {
 		return ApplyUpdateResult{Error: fmt.Sprintf("extracting the new 7-Zip failed: %v: %s", err, out)}
+	}
+
+	// Make sure the new 7z.exe actually runs before it replaces the working
+	// one - a bad download that still extracted must not brick extraction.
+	if out, err := exec.Command(filepath.Join(extractDir, "7z.exe"), "i").CombinedOutput(); err != nil || sevenZipVersionRe.Find(out) == nil {
+		return ApplyUpdateResult{Error: fmt.Sprintf("the downloaded 7-Zip didn't run correctly, so it was not installed (%v)", err)}
 	}
 
 	for _, name := range names {

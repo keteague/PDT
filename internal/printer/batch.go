@@ -19,6 +19,12 @@ func DeployAll(ctx context.Context, deployer Deployer, reqs []DeployRequest, con
 // rather than wait for a run of many rows (some taking minutes each) to
 // finish before showing anything.
 func DeployAllWithProgress(ctx context.Context, deployer Deployer, reqs []DeployRequest, confirm Confirm, onResult func(DeployResult)) []DeployResult {
+	// A deployer that holds run-scoped resources (Windows: temporary driver
+	// extractions shared by rows that need the same package) is closed once
+	// the whole run is over, however it ends.
+	if c, ok := deployer.(interface{ Close() }); ok {
+		defer c.Close()
+	}
 	if bp, ok := deployer.(BatchPreparer); ok {
 		bp.PrepareBatch(ctx, reqs, confirm)
 	}

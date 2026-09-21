@@ -10,13 +10,15 @@ import (
 	"time"
 
 	"github.com/minio/minio-go/v7"
+
+	"PDT/internal/driver"
 )
 
 // partialSuffix marks a download still in progress - never mistaken for the
 // real, complete file it's building toward. Kept across runs (unlike a
 // canceled transfer's own cleanup) specifically so a later Sync can resume
 // it via a Range request starting at this file's own current size.
-const partialSuffix = ".pdt-partial"
+const partialSuffix = driver.PartialDownloadSuffix
 
 // PauseGate is Sync's own pause/resume switch, shared by every in-flight
 // Upload/Download call for one Sync run - unlike ctx cancellation (Cancel:
@@ -326,10 +328,10 @@ func Download(ctx context.Context, gate *PauseGate, core *minio.Core, bucket, pr
 	if info, err := os.Stat(partialPath); err == nil {
 		offset = info.Size()
 	}
-	if offset > expectedSize {
-		// A partial larger than the real object can't be a valid resume
-		// point (the object shrank, or this partial is from an unrelated
-		// earlier version) - start over rather than trust it.
+	if offset >= expectedSize {
+		// A partial as large as (or larger than) the real object can't be a
+		// valid resume point - there is nothing left to range-request, or the
+		// object changed - so start over rather than trust it.
 		offset = 0
 		_ = os.Remove(partialPath)
 	}
@@ -375,12 +377,9 @@ func Download(ctx context.Context, gate *PauseGate, core *minio.Core, bucket, pr
 	closeErr := out.Close()
 
 	if copyErr != nil || closeErr != nil {
-		if ctx.Err() != nil {
-			// Cancel: delete whatever was in transit - unlike Pause or a
-			// transient error, where the partial file is deliberately kept
-			// so the next Sync can resume it.
-			_ = os.Remove(partialPath)
-		}
+		// Whatever arrived is kept on ctx cancel too (Ken, 2026-09-20), like
+		// Pause or a transient error: the next Sync resumes from this
+		// partial's size rather than re-downloading it.
 		if copyErr != nil {
 			return copyErr
 		}

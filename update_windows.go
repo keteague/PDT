@@ -25,11 +25,6 @@ import (
 // upload build/bin/PDT.exe under this same name to each GitHub release.
 const updateAssetName = "PDT.exe"
 
-// repoSlug is appRepoURL in GitHub API "owner/name" form.
-func repoSlug() string {
-	return strings.TrimPrefix(appRepoURL, "https://github.com/")
-}
-
 // UpdateCheckResult is CheckForUpdate's outcome.
 type UpdateCheckResult struct {
 	Available      bool   `json:"available"`

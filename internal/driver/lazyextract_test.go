@@ -4,8 +4,9 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 // writeZipEntries creates a .zip at zipPath with one entry per name->content
@@ -35,7 +36,7 @@ func writeZipEntries(t *testing.T, zipPath string, entries map[string]string) {
 	}
 }
 
-// TestEnsureArchiveExtracted_NestedArchiveInsideInfCache is the direct
+// TestExtractionCache_NestedArchiveInsideInfCache is the direct
 // regression test for a real bug found live: a driver deploy failed with
 // "SetupCopyOEMInf(...): The system cannot find the file specified" for a
 // Lexmark driver whose real archive (ArchEntry.ArchivePath) was a nested
@@ -44,7 +45,7 @@ func writeZipEntries(t *testing.T, zipPath string, entries map[string]string) {
 // several inner .msi files (needed to find their own .inf entries in turn -
 // see ensureMsiInfsExtracted's own ordering comment in catalog.go).
 //
-// EnsureArchiveExtracted's own "already extracted, skip" check used to treat
+// ExtractionCache's own "already extracted, skip" check used to treat
 // the nested archive's own PRE-EXISTING .inf-only cache folder (created
 // earlier by the catalog-scan side, containing just the cached .inf, none
 // of the companion files a real deploy needs alongside it) as if it were
@@ -53,8 +54,8 @@ func writeZipEntries(t *testing.T, zipPath string, entries map[string]string) {
 // reproduces that exact shape with a synthetic zip-in-zip fixture (Lexmark's
 // own real self-extracting-RAR-in-an-.exe/.msi shape needs 7z/msiexec to
 // even construct a fixture for - a zip-in-zip exercises the identical
-// EnsureArchiveExtracted code path without either).
-func TestEnsureArchiveExtracted_NestedArchiveInsideInfCache(t *testing.T) {
+// ExtractionCache code path without either).
+func TestExtractionCache_NestedArchiveInsideInfCache(t *testing.T) {
 	root := t.TempDir()
 
 	outerZip := filepath.Join(root, "Outer.zip")
@@ -104,14 +105,15 @@ func TestEnsureArchiveExtracted_NestedArchiveInsideInfCache(t *testing.T) {
 	// This is exactly ArchEntry.ArchivePath's own real-world shape for a
 	// Lexmark driver found this way - a nested archive path already living
 	// inside .pdt-infcache.
-	extractedDir, cleanup, err := EnsureArchiveExtracted(nestedInnerZip)
+	cache := NewExtractionCache()
+	defer cache.Close()
+	extractedDir, err := cache.Ensure(nestedInnerZip)
 	if err != nil {
-		t.Fatalf("EnsureArchiveExtracted: %v", err)
+		t.Fatalf("Ensure: %v", err)
 	}
-	defer cleanup()
 
 	if filepath.Dir(extractedDir) == cacheDir {
-		t.Fatalf("EnsureArchiveExtracted returned the pre-existing .inf-only cache folder (%s) instead of a real, freshly-extracted one - the exact bug found live", extractedDir)
+		t.Fatalf("ExtractionCache returned the pre-existing .inf-only cache folder (%s) instead of a real, freshly-extracted one - the exact bug found live", extractedDir)
 	}
 
 	infPath := filepath.Join(extractedDir, "driver.inf")
@@ -124,79 +126,104 @@ func TestEnsureArchiveExtracted_NestedArchiveInsideInfCache(t *testing.T) {
 	}
 }
 
-// TestEnsureArchiveExtracted_FallsBackWhenArchiveDirIsWriteProtected guards
-// GitHub issue #10's own "Portable-mode interaction" gap: extraction used
-// to always write as a sibling of the archive, on whatever drive that
-// archive happens to sit on, with no fallback at all. A write-protected
-// flash drive - Ken's own real field-deployment scenario, PDT run portably
-// from a drive plugged into a client endpoint - made that write fail
-// outright, breaking Deploy entirely. Simulates a write-protected drive by
-// removing write permission on the archive's own parent directory (0o555)
-// - the same failure shape a real read-only removable medium produces:
-// extractZip's own os.MkdirAll for the sibling destDir fails with a
-// permission error.
-func TestEnsureArchiveExtracted_FallsBackWhenArchiveDirIsWriteProtected(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("os.Chmod doesn't enforce POSIX-style write-protection on a directory on Windows (it only toggles the read-only file attribute, and only meaningfully for files) - MkdirAll/file creation inside \"protectedDir\" below succeeds regardless, so the primary attempt never actually fails and the fallback this test exists to verify never triggers. The underlying extractWithFallback logic itself is platform-agnostic (any error from the primary attempt triggers the fallback, regardless of cause) - this is a test-simulation gap, not a feature gap; a real write-protected removable medium on Windows does fail the primary write for real.")
-	}
-	if os.Getuid() == 0 {
-		t.Skip("running as root - permission bits don't block anything, can't simulate a write-protected directory this way")
-	}
-	root := t.TempDir()
-	protectedDir := filepath.Join(root, "readonly-drive")
-	if err := os.MkdirAll(protectedDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	zipPath := filepath.Join(protectedDir, "Driver.zip")
-	writeZipEntries(t, zipPath, map[string]string{
-		"driver.inf":    testZipInf,
-		"companion.cat": "companion file content",
-	})
+// The extraction goes to the temp folder - nothing is written next to the
+// archive in the Drivers repo - and Close removes it.
+func TestExtractionCache_ExtractsToTempNotNextToArchive(t *testing.T) {
+	repo := t.TempDir()
+	zipPath := filepath.Join(repo, "Driver.zip")
+	writeZipEntries(t, zipPath, map[string]string{"driver.inf": testZipInf, "companion.cat": "x"})
 
-	if err := os.Chmod(protectedDir, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chmod(protectedDir, 0o755) }) // let t.TempDir() clean up afterward
-
-	extractedDir, cleanup, err := EnsureArchiveExtracted(zipPath)
+	cache := NewExtractionCache()
+	dir, err := cache.Ensure(zipPath)
 	if err != nil {
-		t.Fatalf("EnsureArchiveExtracted did not fall back, want success via a local scratch directory: %v", err)
+		t.Fatal(err)
 	}
-	defer cleanup()
+	if strings.HasPrefix(dir, repo) {
+		t.Fatalf("extracted into the Drivers repo (%s), want the temp folder", dir)
+	}
+	if !strings.HasPrefix(dir, os.TempDir()) {
+		t.Errorf("extracted to %s, want somewhere under the temp dir %s", dir, os.TempDir())
+	}
+	for _, f := range []string{"driver.inf", "companion.cat"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("missing %s in the extraction: %v", f, err)
+		}
+	}
+	entries, _ := os.ReadDir(repo)
+	if len(entries) != 1 {
+		t.Errorf("the repo folder gained entries: %v", entries)
+	}
 
-	if filepath.Dir(extractedDir) == protectedDir {
-		t.Fatalf("extractedDir %s is still inside the write-protected directory - the fallback never actually triggered", extractedDir)
+	cache.Close()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("Close should remove the extraction, err=%v", err)
 	}
-	if _, err := os.Stat(filepath.Join(extractedDir, "driver.inf")); err != nil {
-		t.Errorf("expected the real .inf in the fallback scratch directory: %v", err)
-	}
+	cache.Close() // idempotent
+}
 
-	// Ken's own explicit call (2026-09-16): this cache is throwaway, not a
-	// persistent one keyed by archive identity - cleanup must actually
-	// remove it, not leave it behind for reuse.
-	cleanup()
-	if _, err := os.Stat(extractedDir); !os.IsNotExist(err) {
-		t.Errorf("expected cleanup() to remove the scratch directory, but it still exists (err=%v)", err)
+// Rows in the same run that need the same package share one extraction, kept
+// until Close.
+func TestExtractionCache_ReusesExtractionWithinARun(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "Driver.zip")
+	writeZipEntries(t, zipPath, map[string]string{"driver.inf": testZipInf})
+
+	cache := NewExtractionCache()
+	defer cache.Close()
+	first, err := cache.Ensure(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(first, "reuse-marker")
+	if err := os.WriteFile(marker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second, err := cache.Ensure(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Errorf("second Ensure returned %s, want the same extraction %s", second, first)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("the extraction was redone instead of reused: %v", err)
 	}
 }
 
-// TestEnsureArchiveExtracted_NoFallbackNeededReturnsNoopCleanup guards the
-// normal (non-fallback) case: cleanup must be a genuine no-op, since the
-// whole point of the sibling-extraction convention is that it persists and
-// is reused on a repeat deploy - calling it must never delete the real
-// extracted folder.
-func TestEnsureArchiveExtracted_NoFallbackNeededReturnsNoopCleanup(t *testing.T) {
-	root := t.TempDir()
-	zipPath := filepath.Join(root, "Driver.zip")
-	writeZipEntries(t, zipPath, map[string]string{"driver.inf": testZipInf})
-
-	extractedDir, cleanup, err := EnsureArchiveExtracted(zipPath)
-	if err != nil {
-		t.Fatalf("EnsureArchiveExtracted: %v", err)
+func TestExtractionCache_UnknownTypeFails(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "thing.rar")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	cleanup()
+	cache := NewExtractionCache()
+	defer cache.Close()
+	if _, err := cache.Ensure(p); err == nil {
+		t.Error("expected an error for an unsupported archive type")
+	}
+}
 
-	if _, err := os.Stat(filepath.Join(extractedDir, "driver.inf")); err != nil {
-		t.Errorf("cleanup() deleted the normal, persistent extracted sibling - it must be a no-op for this case: %v", err)
+// Leftovers from a run that never closed are swept once they're old enough;
+// fresh ones (another instance's live extraction) are left alone.
+func TestSweepStaleExtractions(t *testing.T) {
+	stale, err := os.MkdirTemp("", extractionRootPrefix+"test-stale-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := os.MkdirTemp("", extractionRootPrefix+"test-fresh-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(stale)
+	defer os.RemoveAll(fresh)
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	SweepStaleExtractions(24 * time.Hour)
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale extraction should be gone, err=%v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("fresh extraction must be left alone: %v", err)
 	}
 }

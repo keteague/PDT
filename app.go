@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -128,6 +129,10 @@ func (a *App) startup(ctx context.Context) {
 	// scanned (Windows: 7-Zip extraction, stale-update cleanup, the Drivers
 	// scaffold; macOS: nothing yet - see app_windows.go/app_darwin.go).
 	a.platformStartup()
+
+	// Clears temporary driver extractions a crashed/force-quit deploy left in
+	// the temp folder (a normal run deletes its own - see driver.ExtractionCache).
+	go driver.SweepStaleExtractions(12 * time.Hour)
 
 	if err := a.loadCatalog(driversRoot()); err != nil {
 		a.catalogMu.Lock()

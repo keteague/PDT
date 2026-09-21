@@ -4,6 +4,47 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-20 (v0.9.38) - Cloud/local flash-write overhaul, OpenPrinting PPD sync, temp-folder driver extraction
+
+v0.9.37 was tagged but its release build failed on a macOS-only test bug (fixed below), so it was
+never published; everything from it ships here too.
+
+### Added
+- **Write to Flash Drive: Include Drivers Repo** (on by default) with a **Local / Cloud** source
+  combo. Cloud downloads the shared repository straight onto the drive (only what the drive is
+  missing) using at least 12 parallel transfers. Local shows an "about an hour over USB" note; Cloud
+  warns it can also take about an hour depending on the connection.
+- **Sync dialog**: Drivers and Configs checkboxes (Configs on by default) and the same Local / Cloud
+  combo for Drivers; Sync from a drive can pull Configs too. Write and Sync stay disabled until at
+  least one drive is checked.
+- **Progress dialogs show what's happening**: the Write/Sync dialog now lists the file in transfer
+  and what remains (Cloud Sync's layout, fixed size, 80% width), with a live transfer rate and a
+  time-remaining estimate. The estimate is now bytes remaining divided by the average rate over the
+  last 30 seconds, and only bytes actually copied count (files already on the drive no longer inflate
+  the total or the speed). Progress reaches the UI a few times a second and the copy never waits on
+  it - a per-file update from inside the copy loop had made a full local write take about an hour.
+- **After a write, PDT tops up the drive's other-platform app** when there's Internet: PDT.app for
+  Mac endpoints (all platforms), and - when writing from a Mac - PDT.exe for Windows endpoints,
+  each downloaded from the latest GitHub release if missing or older.
+- **Settings > OpenPrinting: Sync PPDs Now** downloads the OpenPrinting PPD library for every
+  supported manufacturer into `Drivers/macOS/OpenPrinting/`, keeping each file's server timestamp,
+  skipping unchanged files, never deleting anything, and identifying as a normal browser. It has a
+  Cloud-Sync-style dialog (file in transfer, up next, rate, ETA, Cancel); a canceled or failed
+  transfer never leaves a partial file behind.
+- Cloud Sync tree: **Hide files already in sync** checkbox (on by default, remembered).
+- Cloud Sync and cloud-to-flash downloads keep a partially downloaded file when canceled and resume
+  it with a Range request next time; in-progress `.pdt-partial` files are never listed, uploaded or
+  copied to a flash drive.
+
+### Changed
+- **Driver packages are extracted to the temp folder, not the Drivers repo.** A deploy extracts each
+  package it needs into `%TEMP%` (the per-user temp dir on macOS), shares that extraction between
+  rows of the same run, and deletes it when the run ends. Leftovers from a crashed run older than 12
+  hours are swept at startup. Existing extracted folders from older versions are left alone.
+
+### Fixed
+- macOS CI: a catalog test used an x64 architecture key and failed on the arm64 runner.
+
 ## 2026-09-20 (v0.9.37) - Driver-list tooltips and cleanup, red Driver button, stale driver-cache fix, NUL-first for every deploy
 
 ### Fixed

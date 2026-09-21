@@ -4,18 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"PDT/internal/flashdrive"
+	"PDT/internal/update"
 )
 
 // flashCopyProgressEvent is emitted throughout WritePortablePDT/
-// SyncDriversToFlashDrives - the toolbar's copy-progress dialog listens for
+// SyncToFlashDrives - the toolbar's copy-progress dialog listens for
 // it, since a real Drivers folder can easily be tens of thousands of files
 // and take several minutes over a real USB port with otherwise zero
 // indication it hadn't just hung (confirmed live).
@@ -32,6 +34,9 @@ type FlashCopyProgress struct {
 	DoneBytes  int64  `json:"doneBytes"`
 	TotalBytes int64  `json:"totalBytes"`
 	EtaSeconds int    `json:"etaSeconds"`
+	// RateBytesPerSec is the step's current time-decayed transfer rate (see
+	// etaEstimator.rate) for the dialog's speed meter; 0 until known.
+	RateBytesPerSec float64 `json:"rateBytesPerSec"`
 }
 
 // etaMinElapsed is how long a step has to run before newFlashCopyProgressFunc
@@ -42,126 +47,236 @@ type FlashCopyProgress struct {
 // actually stable.
 const etaMinElapsed = 3 * time.Second
 
-// etaRateTimeConstant is the "memory span" of the exponentially time-decayed
-// bytes-per-second estimate newFlashCopyProgressFunc computes: roughly how
-// far back in wall-clock time recent activity still meaningfully influences
-// the current rate, with older activity fading out smoothly rather than
-// being cut off sharply. See newFlashCopyProgressFunc's own doc comment for
-// why a plain since-the-start average doesn't work.
-const etaRateTimeConstant = 6 * time.Second
+// etaWindow is the span of recent history the transfer rate is averaged over
+// (Ken, 2026-09-20): the time remaining is the bytes still to transfer divided
+// by the average rate of the last 30 seconds. Long enough to smooth the
+// bursts a real Drivers folder produces (runs of tiny files, then one huge
+// installer), short enough to follow a genuine change in throughput.
+const etaWindow = 30 * time.Second
 
-// etaEstimator tracks a time-decayed bytes-per-second rate for one copy
-// step and turns it into a time-remaining estimate - a plain "bytes done /
-// time elapsed since the step started" average swings wildly and is slow to
-// recover, confirmed live: a real Drivers folder's file sizes are bimodal
-// (long runs of tiny files, e.g. .cat/.inf, interrupted by a handful of huge
-// installers), and per-file open/write/close overhead dominates for the
-// tiny-file runs almost independent of their actual byte count - so a
-// since-the-start average gets dragged down hard by a slow, overhead-bound
-// run of small files, then stays wrong for a long time afterward even once
-// a big file's real throughput starts coming in, because that average has
-// to "unwind" every sample since the step began before it reflects current
-// conditions at all.
+// etaSampleSpacing coalesces samples arriving faster than this into one, so
+// the window holds a few hundred points at most however often a copy loop
+// reports progress.
+const etaSampleSpacing = 100 * time.Millisecond
+
+type etaSample struct {
+	at    time.Time
+	bytes int64
+}
+
+// etaEstimator turns a stream of (time, bytes transferred so far)
+// observations into a transfer rate and a time-remaining estimate:
 //
-// The fix is to weight recent samples far more than old ones: each call to
-// sample decays a running (bytes, seconds) pair by
-// e^(-realElapsed/etaRateTimeConstant) before adding this call's own delta -
-// decaying by actual wall-clock time elapsed, not by call count, is what
-// keeps this stable regardless of how bunched-up calls are (a burst of a
-// thousand tiny files arriving within a few milliseconds barely decays the
-// window at all, correctly treating them as one small contribution rather
-// than shrinking the window's memory of whatever larger file came before
-// it). Zero value is not ready to use - call reset first.
+//	rate      = bytes transferred over the last etaWindow / that window's span
+//	remaining = (totalBytes - doneBytes) / rate
+//
+// - the whole point being that it works from BYTES still to go and a recent
+// AVERAGE rate, not from per-file counts or an instantaneous reading. (An
+// earlier version used a since-the-start average, which a long run of tiny,
+// overhead-bound files dragged down for ages, and then an exponentially
+// decayed window, which was still too twitchy against a real Drivers
+// folder's bimodal file sizes.) Until a full window of history exists the
+// average simply covers everything since the step began. Zero value is not
+// ready to use - call reset first.
 type etaEstimator struct {
-	stepStart       time.Time
-	lastSampleTime  time.Time
-	lastSampleBytes int64
-	windowBytes     float64
-	windowSeconds   float64
+	stepStart time.Time
+	samples   []etaSample // oldest first; samples[0] anchors the window
 }
 
 // reset starts a new step's estimate from scratch at now, with doneBytes as
 // that step's own starting point (normally 0, but need not be).
 func (e *etaEstimator) reset(now time.Time, doneBytes int64) {
 	e.stepStart = now
-	e.lastSampleTime = now
-	e.lastSampleBytes = doneBytes
-	e.windowBytes = 0
-	e.windowSeconds = 0
+	e.samples = append(e.samples[:0], etaSample{at: now, bytes: doneBytes})
 }
 
-// sample feeds one new (now, doneBytes) observation into the decayed
-// window and returns the current estimated seconds remaining until
-// doneBytes reaches totalBytes - 0 ("not known yet") until at least
-// etaMinElapsed has passed since reset, or once totalBytes is reached.
-func (e *etaEstimator) sample(now time.Time, doneBytes, totalBytes int64) int {
-	if dt := now.Sub(e.lastSampleTime).Seconds(); dt > 0 {
-		decay := math.Exp(-dt / etaRateTimeConstant.Seconds())
-		e.windowBytes = e.windowBytes*decay + float64(doneBytes-e.lastSampleBytes)
-		e.windowSeconds = e.windowSeconds*decay + dt
-		e.lastSampleTime = now
-		e.lastSampleBytes = doneBytes
+// observe records one (now, doneBytes) observation and trims history older
+// than etaWindow, always keeping the newest sample at or before the window's
+// edge as its anchor.
+func (e *etaEstimator) observe(now time.Time, doneBytes int64) {
+	if n := len(e.samples); n > 1 && now.Sub(e.samples[n-1].at) < etaSampleSpacing {
+		e.samples[n-1] = etaSample{at: now, bytes: doneBytes}
+	} else {
+		e.samples = append(e.samples, etaSample{at: now, bytes: doneBytes})
 	}
-	if doneBytes >= totalBytes || now.Sub(e.stepStart) < etaMinElapsed || e.windowSeconds <= 0 {
+	cutoff := now.Add(-etaWindow)
+	drop := 0
+	for drop+1 < len(e.samples) && !e.samples[drop+1].at.After(cutoff) {
+		drop++
+	}
+	if drop > 0 {
+		e.samples = append(e.samples[:0], e.samples[drop:]...)
+	}
+}
+
+// sample feeds one new (now, doneBytes) observation into the window and
+// returns the current estimated seconds remaining until doneBytes reaches
+// totalBytes - 0 ("not known yet") until at least etaMinElapsed has passed
+// since reset, or once totalBytes is reached.
+func (e *etaEstimator) sample(now time.Time, doneBytes, totalBytes int64) int {
+	e.observe(now, doneBytes)
+	if doneBytes >= totalBytes || now.Sub(e.stepStart) < etaMinElapsed {
 		return 0
 	}
-	rate := e.windowBytes / e.windowSeconds
+	rate := e.rate()
 	if rate <= 0 {
 		return 0
 	}
 	return int(float64(totalBytes-doneBytes) / rate)
 }
 
-// rate returns e's own current decayed bytes-per-second estimate (0 before
-// sample has ever been called, or once its window has fully decayed away) -
-// the same number sample derives its own return value from, exposed
-// separately for a caller that wants to show a live transfer-rate meter
-// rather than (or alongside) a time-remaining estimate.
+// rate returns the average bytes-per-second over the last etaWindow (0 before
+// two observations exist) - the same number sample derives its own return
+// value from, exposed separately for the live transfer-rate meter.
 func (e *etaEstimator) rate() float64 {
-	if e.windowSeconds <= 0 {
+	n := len(e.samples)
+	if n < 2 {
 		return 0
 	}
-	return e.windowBytes / e.windowSeconds
+	first, last := e.samples[0], e.samples[n-1]
+	dt := last.at.Sub(first.at).Seconds()
+	if dt <= 0 || last.bytes <= first.bytes {
+		return 0
+	}
+	return float64(last.bytes-first.bytes) / dt
 }
 
-// newFlashCopyProgressFunc returns a stepProgressFunc that emits
-// flashCopyProgressEvent for letter, throttled to at most once every 150ms
-// per step - except the step's own final update (every file processed),
-// always sent so the dialog never sits on a stale percentage once a step
-// actually finishes. See etaEstimator for how the ETA itself is computed.
+// flashEmitInterval is how often a copy's accumulated progress reaches the UI.
+const flashEmitInterval = 200 * time.Millisecond
+
+// flashEmitter turns a copy's progress callbacks into a handful of UI events
+// per second, WITHOUT ever making the copy wait on the UI.
+//
+// That last part matters: runtime.EventsEmit hands its script to the webview
+// on the UI thread and waits for it, and the copy's progress callback runs
+// under copyTreeMerge's own lock with every worker queued behind it. Emitting
+// an event per file from there (thousands a second for a Drivers repo full of
+// tiny files) let a busy UI throttle the whole copy - a write that used to
+// take ~20 minutes took an hour. Now the callback only records the latest
+// state under a mutex; a timer sends it every flashEmitInterval, from its own
+// goroutine, as one aggregate event plus one batched per-file event.
+//
+// Safe to call from several goroutines (the cloud download does).
+type flashEmitter struct {
+	a      *App
+	letter string
+
+	mu      sync.Mutex // guards the fields below, the estimator included
+	est     etaEstimator
+	curStep string
+	files   map[string]FlashFileProgress // latest update per file since the last flush
+	agg     *FlashCopyProgress
+	timer   *time.Timer
+
+	emitMu sync.Mutex // serializes actual emission so events stay in order
+}
+
+// flashBatch is what one flush sends, in this order.
+type flashBatch struct {
+	plan  *FlashFilePlan
+	files []FlashFileProgress
+	agg   *FlashCopyProgress
+}
+
+// newFlashCopyProgressFunc returns a stepProgressFunc that reports progress
+// for letter to the dialog: the aggregate bar/speed/ETA (flashCopyProgressEvent,
+// see etaEstimator for how the ETA is computed), plus - when the copy supplies
+// them - the step's file plan and per-file progress for the file list. A
+// step's final update (every file processed) is sent immediately so the
+// dialog never sits on a stale percentage; everything else is coalesced.
 func (a *App) newFlashCopyProgressFunc(letter string) stepProgressFunc {
-	var lastEmit time.Time
-	var curStep string
-	var est etaEstimator
+	em := &flashEmitter{a: a, letter: letter, files: map[string]FlashFileProgress{}}
+	return em.update
+}
 
-	return func(step string, p CopyProgress) {
-		now := time.Now()
-		if step != curStep {
-			curStep = step
-			est.reset(now, p.DoneBytes)
+// takeLocked drains everything pending into a batch (caller holds e.mu).
+func (e *flashEmitter) takeLocked() flashBatch {
+	var b flashBatch
+	if len(e.files) > 0 {
+		b.files = make([]FlashFileProgress, 0, len(e.files))
+		for _, f := range e.files {
+			b.files = append(b.files, f)
 		}
-		// Every call feeds the estimator, regardless of the emit throttle
-		// below - otherwise, whatever bytes/time occur between two
-		// throttled emits would simply never be counted at all.
-		etaSeconds := est.sample(now, p.DoneBytes, p.TotalBytes)
+		e.files = map[string]FlashFileProgress{}
+	}
+	b.agg, e.agg = e.agg, nil
+	if e.timer != nil {
+		e.timer.Stop()
+		e.timer = nil
+	}
+	return b
+}
 
-		final := p.DoneFiles == p.TotalFiles
-		if !final && now.Sub(lastEmit) < 150*time.Millisecond {
-			return
-		}
-		lastEmit = now
-		if final {
-			etaSeconds = 0
-		}
-		runtime.EventsEmit(a.ctx, flashCopyProgressEvent, FlashCopyProgress{
-			Letter:     letter,
-			Step:       step,
-			Done:       p.DoneFiles,
-			Total:      p.TotalFiles,
-			DoneBytes:  p.DoneBytes,
-			TotalBytes: p.TotalBytes,
-			EtaSeconds: etaSeconds,
-		})
+func (e *flashEmitter) send(b flashBatch) {
+	e.emitMu.Lock()
+	defer e.emitMu.Unlock()
+	if b.plan != nil {
+		runtime.EventsEmit(e.a.ctx, flashFilePlanEvent, *b.plan)
+	}
+	if len(b.files) > 0 {
+		runtime.EventsEmit(e.a.ctx, flashFileEvent, b.files)
+	}
+	if b.agg != nil {
+		runtime.EventsEmit(e.a.ctx, flashCopyProgressEvent, *b.agg)
+	}
+}
+
+func (e *flashEmitter) timerFlush() {
+	e.mu.Lock()
+	e.timer = nil
+	b := e.takeLocked()
+	e.mu.Unlock()
+	e.send(b)
+}
+
+func (e *flashEmitter) update(step string, p CopyProgress) {
+	now := time.Now()
+	e.mu.Lock()
+
+	// A new step or a new plan starts a new list: what the previous one left
+	// pending goes out first, so events keep their order.
+	var prev flashBatch
+	if step != e.curStep || p.Plan != nil {
+		prev = e.takeLocked()
+	}
+	if step != e.curStep {
+		e.curStep = step
+		e.est.reset(now, p.DoneBytes)
+	}
+
+	// Every call feeds the estimator, however rarely the UI hears about it.
+	etaSeconds := e.est.sample(now, p.DoneBytes, p.TotalBytes)
+	rate := e.est.rate()
+	final := p.DoneFiles == p.TotalFiles
+	if final {
+		etaSeconds, rate = 0, 0
+	}
+	e.agg = &FlashCopyProgress{
+		Letter: e.letter, Step: step,
+		Done: p.DoneFiles, Total: p.TotalFiles, DoneBytes: p.DoneBytes, TotalBytes: p.TotalBytes,
+		EtaSeconds: etaSeconds, RateBytesPerSec: rate,
+	}
+	if p.File != "" {
+		e.files[p.File] = FlashFileProgress{Letter: e.letter, RelPath: p.File, Done: p.FileDone, Total: p.FileTotal}
+	}
+
+	var now2 flashBatch
+	switch {
+	case p.Plan != nil:
+		now2 = e.takeLocked()
+		now2.plan = &FlashFilePlan{Letter: e.letter, Step: step, Files: p.Plan}
+	case final:
+		now2 = e.takeLocked()
+	case e.timer == nil:
+		e.timer = time.AfterFunc(flashEmitInterval, e.timerFlush)
+	}
+	e.mu.Unlock()
+
+	if prev.agg != nil || len(prev.files) > 0 {
+		e.send(prev)
+	}
+	if now2.plan != nil || now2.agg != nil || len(now2.files) > 0 {
+		e.send(now2)
 	}
 }
 
@@ -216,6 +331,9 @@ func (a *App) ListRemovableDrives() ListDrivesResult {
 type BatchDriveResult struct {
 	Succeeded []string          `json:"succeeded"`
 	Failed    map[string]string `json:"failed"`
+	// Notes are extra lines worth logging that aren't a per-drive success or
+	// failure (today: the post-write PDT.app check - see macappflash.go).
+	Notes []FlashNote `json:"notes"`
 }
 
 // FormatDrives quick-formats every listed drive letter as exFAT. Destructive
@@ -227,7 +345,7 @@ func (a *App) FormatDrives(letters []string) BatchDriveResult {
 	// ManufacturersWithDrivers' own comment explains (a nil slice marshals
 	// to JSON `null`) - the frontend already guards every read of this
 	// specific field with `|| []`, but there's no reason to rely on that.
-	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}}
+	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}, Notes: []FlashNote{}}
 	for _, letter := range letters {
 		if err := flashdrive.FormatExFAT(letter); err != nil {
 			result.Failed[letter] = err.Error()
@@ -282,9 +400,37 @@ func (a *App) CancelFlashSync() {
 // turns "PDT installed on the technician's laptop" into "a portable copy on
 // a flash drive": the copied exe finds its own Drivers/Configs right beside
 // it exactly like it does today when run directly from a flash drive.
-func (a *App) WritePortablePDT(letters []string) BatchDriveResult {
+//
+// includeDrivers (the dialog's "Include Drivers Repo" checkbox, checked by
+// default with the Local source - Ken, 2026-09-20) controls whether the
+// Drivers repo is copied too: a full local repo can take about 20 minutes over
+// USB 3.0, so the tech may untick it or pick Cloud. Left out, the drive still gets an empty Drivers
+// folder scaffold - the exe decides it's running portably by finding a
+// Drivers folder right beside itself.
+//
+// driversSource ("local", the default and "" too, or "cloud") picks where an
+// included Drivers repo comes from, exactly like the Sync dialog's combo:
+// this laptop's own Drivers folder, or the shared cloud repository
+// downloaded straight onto the drive (cloudflash.go).
+func (a *App) WritePortablePDT(letters []string, includeDrivers bool, driversSource string) BatchDriveResult {
 	<-a.ready
-	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}}
+	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}, Notes: []FlashNote{}}
+
+	var cloudDrivers func(context.Context, string, func(CopyProgress)) error
+	if includeDrivers && driversSource == driversSourceCloud {
+		// Fail once, up front, before anything is written to any drive.
+		if _, err := a.cloudSyncConfig(); err != nil {
+			result.Failed["*"] = err.Error()
+			return result
+		}
+		cloudDrivers = func(ctx context.Context, letter string, progress func(CopyProgress)) error {
+			conflicts, err := a.syncCloudDriversToDrive(ctx, letter, progress)
+			if conflicts > 0 {
+				result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("%d file(s) on %s differ in size from the cloud copy and were left untouched - resolve them in Cloud Sync.", conflicts, letter)})
+			}
+			return err
+		}
+	}
 
 	exePath, err := os.Executable()
 	if err != nil {
@@ -306,26 +452,110 @@ func (a *App) WritePortablePDT(letters []string) BatchDriveResult {
 			result.Failed[letter] = ctx.Err().Error()
 			continue
 		}
-		if err := writePortablePDTTo(ctx, letter, exeName, exeData, a.newFlashCopyProgressFunc(letter)); err != nil {
+		if err := writePortablePDTTo(ctx, letter, exeName, exeData, includeDrivers, cloudDrivers, a.newFlashCopyProgressFunc(letter)); err != nil {
 			result.Failed[letter] = err.Error()
 			continue
 		}
 		result.Succeeded = append(result.Succeeded, letter)
 	}
+	a.ensureReleaseAppsOnDrives(ctx, &result)
 	return result
 }
 
-// SyncDriversToFlashDrives copies this laptop's own Drivers folder onto
-// every listed drive letter - the toolbar's Sync button, for topping up a
-// flash drive that already has a portable PDT copy on it with whatever new
-// driver packages have shown up locally since, without rewriting the exe or
-// touching Configs/tools at all. syncDriversTo already extracts anything
-// newly-copied on the destination itself (see its own doc comment), so the
-// flash drive is immediately ready to use without needing to be plugged
-// into another computer first just to trigger that.
-func (a *App) SyncDriversToFlashDrives(letters []string) BatchDriveResult {
+// ensureReleaseAppsOnDrives is WritePortablePDT's last step: once the drives
+// are written, and only if this computer has Internet, make sure each one
+// carries a current copy of the app for the OTHER platform it'll be carried to
+// (Ken, 2026-09-20) - the release is fetched once, then:
+//   - PDT.app for Mac endpoints (macappflash.go), always; and
+//   - PDT.exe for Windows endpoints (winexeflash.go), when running on a Mac -
+//     a Windows write already copies its own PDT.exe, but a Mac has none to copy.
+//
+// Entirely best-effort: the write itself already succeeded, so every outcome
+// here - offline, GitHub unreachable, a failed download - is just a note in
+// result.Notes, never a Failed entry.
+func (a *App) ensureReleaseAppsOnDrives(ctx context.Context, result *BatchDriveResult) {
+	if len(result.Succeeded) == 0 || ctx.Err() != nil {
+		return
+	}
+	onMac := goruntime.GOOS == "darwin"
+	rel, err := update.FetchLatest(repoSlug())
+	if err != nil {
+		what := "PDT.app for macOS"
+		if onMac {
+			what = "PDT.app for macOS and PDT.exe for Windows"
+		}
+		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Skipped the %s check - couldn't reach GitHub for the latest release (%v). Connect to the Internet and Write to Flash Drive again, or copy them on by hand.", what, err)})
+		return
+	}
+
+	if src, err := macAppSourceFrom(rel); err != nil {
+		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Skipped the PDT.app for macOS check: %v", err)})
+	} else {
+		defer src.cleanup()
+		for _, letter := range result.Succeeded {
+			if ctx.Err() != nil {
+				return
+			}
+			note, err := ensureMacAppOnDrive(ctx, letter, src, a.newFlashCopyProgressFunc(letter))
+			if err != nil {
+				result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not put a current PDT.app on %s: %v", letter, err)})
+				continue
+			}
+			result.Notes = append(result.Notes, note)
+		}
+	}
+
+	if !onMac {
+		return
+	}
+	src, err := newWinExeSource(rel)
+	if err != nil {
+		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Skipped the PDT.exe for Windows check: %v", err)})
+		return
+	}
+	defer src.cleanup()
+	for _, letter := range result.Succeeded {
+		if ctx.Err() != nil {
+			return
+		}
+		note, err := ensureWinExeOnDrive(ctx, letter, src, a.newFlashCopyProgressFunc(letter))
+		if err != nil {
+			result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not put a current PDT.exe on %s: %v", letter, err)})
+			continue
+		}
+		result.Notes = append(result.Notes, note)
+	}
+}
+
+// SyncToFlashDrives copies this laptop's own Drivers folder and/or Configs
+// folder onto every listed drive letter - the toolbar's Sync button, for
+// topping up a flash drive that already has a portable PDT copy on it with
+// whatever has shown up locally since, without rewriting the exe or the
+// 7-Zip tools. The dialog's Drivers/Configs checkboxes (Ken, 2026-09-20)
+// pick which; at least one must be true. syncDriversTo already extracts
+// anything newly-copied on the destination itself (see its own doc
+// comment), so the flash drive is immediately ready to use without needing
+// to be plugged into another computer first just to trigger that.
+//
+// driversSource ("local" - the default, also "" - or "cloud") picks where the
+// Drivers come from: this laptop's own Drivers folder, or the shared cloud
+// repository downloaded straight onto the drive (see cloudflash.go).
+func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs bool, driversSource string) BatchDriveResult {
 	<-a.ready
-	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}}
+	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}, Notes: []FlashNote{}}
+	if !includeDrivers && !includeConfigs {
+		result.Failed["*"] = "nothing selected to sync - check Drivers and/or Configs"
+		return result
+	}
+	fromCloud := includeDrivers && driversSource == driversSourceCloud
+	if fromCloud {
+		// Fail once, up front, with the same clear "set up Cloud Sync first"
+		// message the Cloud Sync dialog gives, rather than once per drive.
+		if _, err := a.cloudSyncConfig(); err != nil {
+			result.Failed["*"] = err.Error()
+			return result
+		}
+	}
 
 	ctx, done := a.beginFlashSync()
 	defer done()
@@ -336,7 +566,26 @@ func (a *App) SyncDriversToFlashDrives(letters []string) BatchDriveResult {
 			continue
 		}
 		progress := a.newFlashCopyProgressFunc(letter)
-		if err := syncDriversTo(ctx, letter, func(p CopyProgress) { progress("Drivers", p) }); err != nil {
+		var errs []error
+		if fromCloud {
+			conflicts, err := a.syncCloudDriversToDrive(ctx, letter, func(p CopyProgress) { progress("Drivers (cloud)", p) })
+			if err != nil {
+				errs = append(errs, err)
+			}
+			if conflicts > 0 {
+				result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("%d file(s) on %s differ in size from the cloud copy and were left untouched - resolve them in Cloud Sync.", conflicts, letter)})
+			}
+		} else if includeDrivers {
+			if err := syncDriversTo(ctx, letter, func(p CopyProgress) { progress("Drivers", p) }); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if includeConfigs {
+			if err := syncConfigsTo(ctx, letter, func(p CopyProgress) { progress("Configs", p) }); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if err := errors.Join(errs...); err != nil {
 			result.Failed[letter] = err.Error()
 			continue
 		}
@@ -345,11 +594,33 @@ func (a *App) SyncDriversToFlashDrives(letters []string) BatchDriveResult {
 	return result
 }
 
-// SyncDriversFromFlashDrive copies letter's own Drivers folder onto this
-// laptop's Drivers folder (driversRoot()) - the reverse direction of
-// SyncDriversToFlashDrives, for pulling in whatever new driver packages
-// another technician's own sync run left on a shared flash drive since this
-// laptop last saw it. Single-drive rather than batched like the
+// syncConfigsTo copies this laptop's Configs folder onto letter's own
+// Configs folder, merging - the Configs counterpart of syncDriversTo. Creates
+// the folder even when there's nothing local to copy, matching what
+// writePortablePDTTo guarantees for a freshly-written drive.
+func syncConfigsTo(ctx context.Context, letter string, onProgress func(CopyProgress)) error {
+	dest := filepath.Join(letter, "Configs")
+	src := configsRoot()
+	if samePath(dest, src) {
+		return nil // same self-truncation hazard syncDriversTo documents
+	}
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return fmt.Errorf("creating Configs: %w", err)
+	}
+	if !dirExists(src) {
+		return nil
+	}
+	if err := copyTreeMerge(ctx, dest, src, onProgress); err != nil {
+		return fmt.Errorf("copying Configs: %w", err)
+	}
+	return nil
+}
+
+// SyncFromFlashDrive copies letter's own Drivers and/or Configs folder onto
+// this laptop's (driversRoot()/configsRoot()) - the reverse direction of
+// SyncToFlashDrives, for pulling in whatever another technician's own sync
+// run left on a shared flash drive since this laptop last saw it (Configs
+// too now - Ken, 2026-09-20). Single-drive rather than batched like the
 // to-flash-drive direction: pulling from more than one flash drive into the
 // same destination in one call would make "which drive's copy of a
 // same-named file wins" an unanswerable question, so the frontend has the
@@ -357,23 +628,32 @@ func (a *App) SyncDriversToFlashDrives(letters []string) BatchDriveResult {
 // flashSyncCancel with the to-flash-drive direction and WritePortablePDT
 // (see beginFlashSync) - only one such transfer is ever expected to be
 // running at once, and Cancel should stop whichever one that is.
-func (a *App) SyncDriversFromFlashDrive(letter string) error {
+func (a *App) SyncFromFlashDrive(letter string, includeDrivers, includeConfigs bool) error {
 	<-a.ready
-
-	src := filepath.Join(letter, "Drivers")
-	dest := driversRoot()
-	if samePath(src, dest) {
-		return nil
-	}
-	if !dirExists(src) {
-		return nil
+	if !includeDrivers && !includeConfigs {
+		return errors.New("nothing selected to sync - check Drivers and/or Configs")
 	}
 
 	ctx, done := a.beginFlashSync()
 	defer done()
 
 	progress := a.newFlashCopyProgressFunc(letter)
-	return copyTreeMerge(ctx, dest, src, func(p CopyProgress) { progress("Drivers", p) })
+	var errs []error
+	pull := func(step, src, dest string) {
+		if samePath(src, dest) || !dirExists(src) {
+			return
+		}
+		if err := copyTreeMerge(ctx, dest, src, func(p CopyProgress) { progress(step, p) }); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if includeDrivers {
+		pull("Drivers", filepath.Join(letter, "Drivers"), driversRoot())
+	}
+	if includeConfigs {
+		pull("Configs", filepath.Join(letter, "Configs"), configsRoot())
+	}
+	return errors.Join(errs...)
 }
 
 // writePortablePDTTo copies exeData to letter, then this laptop's own
@@ -399,7 +679,10 @@ func (a *App) SyncDriversFromFlashDrive(letter string) error {
 // a progress dialog, pass nil throughout).
 type stepProgressFunc func(step string, progress CopyProgress)
 
-func writePortablePDTTo(ctx context.Context, letter, exeName string, exeData []byte, progress stepProgressFunc) error {
+// cloudDrivers, when non-nil, replaces the local Drivers copy with a download
+// from the cloud repository (see WritePortablePDT's driversSource); nil means
+// copy this laptop's own Drivers folder. Only consulted when includeDrivers.
+func writePortablePDTTo(ctx context.Context, letter, exeName string, exeData []byte, includeDrivers bool, cloudDrivers func(context.Context, string, func(CopyProgress)) error, progress stepProgressFunc) error {
 	flashdrive.DisableIndexing(letter)
 	if err := os.WriteFile(filepath.Join(letter, exeName), exeData, 0o755); err != nil {
 		return fmt.Errorf("writing %s: %w", exeName, err)
@@ -417,13 +700,38 @@ func writePortablePDTTo(ctx context.Context, letter, exeName string, exeData []b
 	// "did an earlier step get canceled" flag through, and copyTreeMerge
 	// already returns fast once ctx.Err() is set.
 	var errs []error
+	driversStep := "Drivers"
+	if cloudDrivers != nil {
+		driversStep = "Drivers (cloud)"
+	}
 	driversProgress := func(p CopyProgress) {
 		if progress != nil {
-			progress("Drivers", p)
+			progress(driversStep, p)
 		}
 	}
-	if err := syncDriversTo(ctx, letter, driversProgress); err != nil {
-		errs = append(errs, err)
+	if includeDrivers {
+		var err error
+		if cloudDrivers != nil {
+			err = cloudDrivers(ctx, letter, driversProgress)
+		} else {
+			err = syncDriversTo(ctx, letter, driversProgress)
+		}
+		if err != nil {
+			errs = append(errs, err)
+		}
+	} else {
+		// No Drivers copy requested - but still lay down the empty
+		// Drivers folder (and the platform's own manufacturer scaffold
+		// inside it, the same postSyncDriversHook a real sync ends with),
+		// since its mere presence beside the exe is what makes PDT treat
+		// itself as a portable copy, and it gives Cloud Sync / a later
+		// Sync somewhere to land.
+		driversDest := filepath.Join(letter, "Drivers")
+		if err := os.MkdirAll(driversDest, 0o755); err != nil {
+			errs = append(errs, fmt.Errorf("creating Drivers: %w", err))
+		} else if err := postSyncDriversHook(driversDest); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	configsDest := filepath.Join(letter, "Configs")

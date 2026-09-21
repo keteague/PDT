@@ -77,6 +77,19 @@ type CopyProgress struct {
 	TotalFiles int
 	DoneBytes  int64
 	TotalBytes int64
+
+	// Plan is non-nil (possibly empty) only on the very first update: the
+	// relative paths of every file that will actually be copied, in order,
+	// so a dialog can list what's coming. Files already on the destination
+	// at the same size aren't in it.
+	Plan []string
+	// File, when set, names the file (a Plan entry) this update is about,
+	// with FileDone of FileTotal bytes copied so far. The last update for a
+	// file has FileDone == FileTotal. Empty for updates that are only about
+	// the aggregate counters.
+	File      string
+	FileDone  int64
+	FileTotal int64
 }
 
 // copyTreeWorkers bounds how many files copyTreeMerge copies concurrently.
@@ -293,11 +306,48 @@ func copyTreeMerge(ctx context.Context, destDir, srcDir string, onProgress func(
 	collectCopyJobs(destDir, srcDir, "", ancestors, &jobs, &totalBytes, &errs)
 	totalFiles := len(jobs)
 
+	// Progress counts only the bytes that actually have to be transferred:
+	// files already on the destination at the same size are skipped
+	// instantly, and counting them would inflate both the total and the
+	// apparent speed, wrecking the time-remaining estimate on any repeat
+	// write/sync. Bytes are counted as they're copied, not when a file
+	// finishes.
+	needsCopy := func(j copyJob) bool {
+		sz, ok := existing[j.rel]
+		return !ok || sz != j.size
+	}
+	totalBytes = 0
+	for _, j := range jobs {
+		if needsCopy(j) {
+			totalBytes += j.size
+		}
+	}
+
 	var (
 		mu        sync.Mutex
 		doneFiles int
 		doneBytes int64
 	)
+	report := func(file string, fileDone, fileTotal int64) {
+		if onProgress == nil {
+			return
+		}
+		shown := doneBytes
+		if shown > totalBytes {
+			shown = totalBytes // a file that grew mid-copy must not overshoot
+		}
+		onProgress(CopyProgress{DoneFiles: doneFiles, TotalFiles: totalFiles, DoneBytes: shown, TotalBytes: totalBytes,
+			File: file, FileDone: fileDone, FileTotal: fileTotal})
+	}
+	if onProgress != nil {
+		plan := []string{}
+		for _, j := range jobs {
+			if needsCopy(j) {
+				plan = append(plan, j.rel)
+			}
+		}
+		onProgress(CopyProgress{TotalFiles: totalFiles, TotalBytes: totalBytes, Plan: plan})
+	}
 	jobCh := make(chan copyJob)
 	var wg sync.WaitGroup
 	for i := 0; i < copyTreeWorkers; i++ {
@@ -310,18 +360,29 @@ func copyTreeMerge(ctx context.Context, destDir, srcDir string, onProgress func(
 				var copyErr error
 				if ctx.Err() != nil {
 					copyErr = ctx.Err()
-				} else if sz, ok := existing[j.rel]; !ok || sz != j.size {
-					copyErr = copyFile(ctx, target, j.path, j.modTime, buf)
+				} else if needsCopy(j) {
+					var fileDone int64
+					copyErr = copyFileProgress(ctx, target, j.path, j.modTime, buf, func(n int64) {
+						mu.Lock()
+						doneBytes += n
+						fileDone += n
+						report(j.rel, fileDone, j.size)
+						mu.Unlock()
+					})
+					if ctx.Err() == nil {
+						// Tell the dialog this file is finished (even a
+						// failed one, so it leaves the "in transfer" list).
+						mu.Lock()
+						report(j.rel, j.size, j.size)
+						mu.Unlock()
+					}
 				}
 				mu.Lock()
 				if copyErr != nil {
 					errs = append(errs, fmt.Errorf("%s: %w", j.path, copyErr))
 				}
 				doneFiles++
-				doneBytes += j.size
-				if onProgress != nil {
-					onProgress(CopyProgress{DoneFiles: doneFiles, TotalFiles: totalFiles, DoneBytes: doneBytes, TotalBytes: totalBytes})
-				}
+				report("", 0, 0)
 				mu.Unlock()
 			}
 		}()
@@ -351,13 +412,19 @@ feed:
 type ctxReader struct {
 	ctx context.Context
 	r   io.Reader
+	// onRead, if non-nil, is told how many bytes each Read returned.
+	onRead func(n int)
 }
 
 func (c ctxReader) Read(p []byte) (int, error) {
 	if err := c.ctx.Err(); err != nil {
 		return 0, err
 	}
-	return c.r.Read(p)
+	n, err := c.r.Read(p)
+	if n > 0 && c.onRead != nil {
+		c.onRead(n)
+	}
+	return n, err
 }
 
 // copyFile copies srcPath to destPath using buf as the read/write buffer
@@ -373,6 +440,13 @@ func (c ctxReader) Read(p []byte) (int, error) {
 // was actually downloaded/built) survives a trip through Sync/Write to
 // Flash Drive instead of every copy looking like it was just created today.
 func copyFile(ctx context.Context, destPath, srcPath string, srcModTime time.Time, buf []byte) error {
+	return copyFileProgress(ctx, destPath, srcPath, srcModTime, buf, nil)
+}
+
+// copyFileProgress is copyFile that also reports each chunk's byte count to
+// onBytes (if non-nil) as it's copied, so progress and transfer-rate figures
+// move smoothly during a big file instead of jumping when it completes.
+func copyFileProgress(ctx context.Context, destPath, srcPath string, srcModTime time.Time, buf []byte, onBytes func(n int64)) error {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return err
@@ -382,7 +456,11 @@ func copyFile(ctx context.Context, destPath, srcPath string, srcModTime time.Tim
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.CopyBuffer(dst, ctxReader{ctx: ctx, r: src}, buf)
+	var onRead func(n int)
+	if onBytes != nil {
+		onRead = func(n int) { onBytes(int64(n)) }
+	}
+	_, copyErr := io.CopyBuffer(dst, ctxReader{ctx: ctx, r: src, onRead: onRead}, buf)
 	closeErr := dst.Close()
 	if copyErr != nil || closeErr != nil {
 		if ctx.Err() != nil {

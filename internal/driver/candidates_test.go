@@ -73,8 +73,8 @@ func TestCandidateDetails_CarriesSourcePackagePerVersion(t *testing.T) {
 	catalog := Catalog{
 		"Konica Minolta": {
 			"KONICA MINOLTA Universal PCL": {
-				"v1|2025-09-01": {"x64": {InfPath: "cache/a.inf", ArchivePath: "KM/Universal_v1.zip", Date: d1, Version: "3.9.1310.0"}},
-				"v2|2025-09-08": {"x64": {InfPath: "KM/extracted/b.inf", Date: d2, Version: "3.9.1203.500"}},
+				"v1|2025-09-01": {"any": {InfPath: "cache/a.inf", ArchivePath: "KM/Universal_v1.zip", Date: d1, Version: "3.9.1310.0"}},
+				"v2|2025-09-08": {"any": {InfPath: "KM/extracted/b.inf", Date: d2, Version: "3.9.1203.500"}},
 			},
 		},
 	}

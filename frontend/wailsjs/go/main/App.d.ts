@@ -15,6 +15,8 @@ export function CancelCloudSync():Promise<void>;
 
 export function CancelFlashSync():Promise<void>;
 
+export function CancelOpenPrintingSync():Promise<void>;
+
 export function CaptureDevModeForPrinter(arg1:string,arg2:string):Promise<main.DevModeResult>;
 
 export function CheckExportCollisions(arg1:string,arg2:string):Promise<main.ExportCollisionResult>;
@@ -89,6 +91,8 @@ export function OpenDriversBasePathInExplorer(arg1:string):Promise<main.OpenFold
 
 export function OpenManufacturerURL(arg1:string):Promise<void>;
 
+export function OpenOpenPrintingPPDPage():Promise<void>;
+
 export function OpenRepoURL():Promise<void>;
 
 export function OpenSevenZipHomepage():Promise<void>;
@@ -125,10 +129,12 @@ export function StopSpooler():Promise<main.SpoolerResult>;
 
 export function SyncCloud(arg1:Array<string>):Promise<main.CloudSyncResult>;
 
-export function SyncDriversFromFlashDrive(arg1:string):Promise<void>;
+export function SyncFromFlashDrive(arg1:string,arg2:boolean,arg3:boolean):Promise<void>;
 
-export function SyncDriversToFlashDrives(arg1:Array<string>):Promise<main.BatchDriveResult>;
+export function SyncOpenPrintingPPDs():Promise<main.OpenPrintingSyncResult>;
+
+export function SyncToFlashDrives(arg1:Array<string>,arg2:boolean,arg3:boolean,arg4:string):Promise<main.BatchDriveResult>;
 
 export function UpdateSevenZip(arg1:string):Promise<main.ApplyUpdateResult>;
 
-export function WritePortablePDT(arg1:Array<string>):Promise<main.BatchDriveResult>;
+export function WritePortablePDT(arg1:Array<string>,arg2:boolean,arg3:string):Promise<main.BatchDriveResult>;

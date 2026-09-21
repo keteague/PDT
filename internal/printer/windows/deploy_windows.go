@@ -23,10 +23,23 @@ import (
 type Deployer struct {
 	Catalog     driver.Catalog
 	ConfigsRoot string
+
+	// extractions holds the full extractions of driver packages this run
+	// needed, in the temp folder (never the Drivers repo), shared by every row
+	// that needs the same package and deleted by Close once the run is over.
+	extractions *driver.ExtractionCache
 }
 
 func NewDeployer(catalog driver.Catalog, configsRoot string) *Deployer {
-	return &Deployer{Catalog: catalog, ConfigsRoot: configsRoot}
+	return &Deployer{Catalog: catalog, ConfigsRoot: configsRoot, extractions: driver.NewExtractionCache()}
+}
+
+// Close deletes this run's temporary driver extractions (see
+// printer.DeployAllWithProgress, which calls it when the run finishes).
+func (d *Deployer) Close() {
+	if d.extractions != nil {
+		d.extractions.Close()
+	}
 }
 
 // Deploy ports Create-Printers.ps1's Deploy-PrinterRow, in the same overall
@@ -432,18 +445,16 @@ func (d *Deployer) ensureDriverCurrent(ctx context.Context, resolved *driver.Res
 		// own directory - a hard Win32 constraint). Fully extract the real
 		// archive now, on demand, the first time this specific driver is
 		// actually being installed - GitHub issue #10's own catalog rework;
-		// see EnsureArchiveExtracted's own doc comment. Cheap on a repeat
-		// deploy of the same driver - already-extracted is reused, not
-		// re-extracted.
-		extractedDir, cleanup, err := driver.EnsureArchiveExtracted(resolved.ArchivePath)
+		// see driver.ExtractionCache's own doc comment. The extraction goes to
+		// the temp folder, is reused by any later row in this run that needs
+		// the same package, and is deleted when the run finishes (Close).
+		if d.extractions == nil {
+			d.extractions = driver.NewExtractionCache()
+		}
+		extractedDir, err := d.extractions.Ensure(resolved.ArchivePath)
 		if err != nil {
 			return fmt.Errorf("extracting driver package for %q: %w", resolved.Name, err)
 		}
-		// A no-op for the normal case (the extracted sibling persists and is
-		// reused on a repeat deploy, unchanged); only actually removes
-		// anything for the write-protected-media fallback - see
-		// EnsureArchiveExtracted's own doc comment.
-		defer cleanup()
 		infPath = filepath.Join(extractedDir, resolved.InfRelPath)
 	}
 	if err := EnsureDriverInstalled(infPath, resolved.Name); err != nil {

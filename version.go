@@ -27,3 +27,10 @@ const (
 	appAuthor      = "Ken Teague"
 	appRepoURL     = "https://github.com/keteague/PDT"
 )
+
+// repoSlug is appRepoURL in GitHub API "owner/name" form - shared by the
+// Windows self-update check (update_windows.go) and the flash-drive PDT.app
+// check (macappflash.go), which runs on either platform.
+func repoSlug() string {
+	return strings.TrimPrefix(appRepoURL, "https://github.com/")
+}

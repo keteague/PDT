@@ -178,8 +178,24 @@ func TestCopyTreeMerge_ConcurrentCopyIsCorrectAndComplete(t *testing.T) {
 		}
 	}
 
-	if len(progress) != fileCount {
-		t.Fatalf("got %d progress callbacks, want exactly %d (one per file, no drops/duplicates)", len(progress), fileCount)
+	// Callbacks now also arrive as bytes are copied, so there can be more than
+	// one per file - but every file's completion (DoneFiles 1..N) must be
+	// reported exactly once, and the counters must never go backwards.
+	completions := map[int]int{}
+	prevFiles, prevBytes := 0, int64(0)
+	for _, p := range progress {
+		if p.DoneFiles < prevFiles || p.DoneBytes < prevBytes {
+			t.Fatalf("progress went backwards: %+v after files=%d bytes=%d", p, prevFiles, prevBytes)
+		}
+		if p.DoneFiles > prevFiles {
+			completions[p.DoneFiles]++
+		}
+		prevFiles, prevBytes = p.DoneFiles, p.DoneBytes
+	}
+	for i := 1; i <= fileCount; i++ {
+		if completions[i] != 1 {
+			t.Fatalf("DoneFiles=%d reported %d times, want exactly once (no drops/duplicates)", i, completions[i])
+		}
 	}
 	last := progress[len(progress)-1]
 	if last.DoneFiles != fileCount || last.TotalFiles != fileCount {
@@ -357,7 +373,7 @@ func TestCopyFile_CanceledContextDeletesPartialDestinationFile(t *testing.T) {
 // TestCopyTreeMerge_CancellationStopsEarlyAndReportsCanceled guards the
 // batch-level half of the same requirement: an already-canceled context must
 // stop copyTreeMerge from starting fresh files (not just abort one already
-// in flight), and the returned error must let a caller (SyncDriversToFlashDrives)
+// in flight), and the returned error must let a caller (SyncToFlashDrives)
 // tell "the user hit Cancel" apart from a genuine per-file failure via
 // errors.Is(err, context.Canceled).
 func TestCopyTreeMerge_CancellationStopsEarlyAndReportsCanceled(t *testing.T) {
@@ -514,5 +530,119 @@ func TestCopyTreeMerge_SkipsDSStore(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, driver.DSStoreFileName)); !os.IsNotExist(err) {
 		t.Errorf("expected %s to be skipped entirely, got err=%v", driver.DSStoreFileName, err)
+	}
+}
+
+// Files already on the destination at the same size are skipped instantly, so
+// they must not count toward the bytes to transfer - counting them inflated
+// both the total and the apparent speed, which wrecked the time-remaining
+// estimate on any repeat write. Only bytes actually copied are reported, and
+// they arrive as the copy proceeds rather than when each file finishes.
+func TestCopyTreeMerge_ProgressCountsOnlyBytesActuallyTransferred(t *testing.T) {
+	src := t.TempDir()
+	dest := t.TempDir()
+	same := make([]byte, 3000)
+	fresh := make([]byte, 5000)
+	if err := os.WriteFile(filepath.Join(src, "same.bin"), same, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "same.bin"), same, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "fresh.bin"), fresh, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var progress []CopyProgress
+	err := copyTreeMerge(context.Background(), dest, src, func(p CopyProgress) { progress = append(progress, p) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := progress[len(progress)-1]
+	if last.TotalBytes != 5000 || last.DoneBytes != 5000 {
+		t.Errorf("final Done/Total bytes = %d/%d, want 5000/5000 (the skipped 3000 bytes must not count)", last.DoneBytes, last.TotalBytes)
+	}
+	if last.DoneFiles != 2 || last.TotalFiles != 2 {
+		t.Errorf("final Done/Total files = %d/%d, want 2/2", last.DoneFiles, last.TotalFiles)
+	}
+	for _, p := range progress {
+		if p.TotalBytes != 5000 {
+			t.Errorf("TotalBytes = %d in %+v, want a constant 5000", p.TotalBytes, p)
+		}
+	}
+}
+
+// A file bigger than the copy buffer reports bytes part-way through, before
+// the file completes.
+func TestCopyTreeMerge_ReportsBytesDuringALargeFile(t *testing.T) {
+	src := t.TempDir()
+	big := make([]byte, 3*copyBufferSize+123)
+	if err := os.WriteFile(filepath.Join(src, "big.bin"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var sawPartial bool
+	err := copyTreeMerge(context.Background(), t.TempDir(), src, func(p CopyProgress) {
+		if p.DoneFiles == 0 && p.DoneBytes > 0 && p.DoneBytes < p.TotalBytes {
+			sawPartial = true
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawPartial {
+		t.Error("expected progress with bytes done before the file completed")
+	}
+}
+
+// The first update lists exactly the files that will be copied (not the ones
+// already on the destination), and every planned file gets a final
+// FileDone == FileTotal update, so a dialog can show what's in transfer and
+// what remains.
+func TestCopyTreeMerge_ReportsPlanAndPerFileProgress(t *testing.T) {
+	src := t.TempDir()
+	dest := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, size := range map[string]int{"a.bin": 100, "sub/b.bin": 200, "same.bin": 300, "empty.bin": 0} {
+		if err := os.WriteFile(filepath.Join(src, filepath.FromSlash(name)), make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dest, "same.bin"), make([]byte, 300), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		plan   []string
+		nPlans int
+		finals = map[string]bool{}
+	)
+	err := copyTreeMerge(context.Background(), dest, src, func(p CopyProgress) {
+		if p.Plan != nil {
+			nPlans++
+			plan = p.Plan
+		}
+		if p.File != "" && p.FileDone >= p.FileTotal {
+			finals[p.File] = true
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nPlans != 1 {
+		t.Fatalf("got %d plan updates, want exactly 1", nPlans)
+	}
+	want := map[string]bool{"a.bin": true, "sub/b.bin": true, "empty.bin": true}
+	if len(plan) != len(want) {
+		t.Fatalf("plan = %v, want the 3 files that need copying (not same.bin)", plan)
+	}
+	for _, rel := range plan {
+		if !want[rel] {
+			t.Errorf("unexpected plan entry %q", rel)
+		}
+		if !finals[rel] {
+			t.Errorf("%q never got a final per-file update", rel)
+		}
 	}
 }

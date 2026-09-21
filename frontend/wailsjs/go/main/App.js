@@ -22,6 +22,10 @@ export function CancelFlashSync() {
   return window['go']['main']['App']['CancelFlashSync']();
 }
 
+export function CancelOpenPrintingSync() {
+  return window['go']['main']['App']['CancelOpenPrintingSync']();
+}
+
 export function CaptureDevModeForPrinter(arg1, arg2) {
   return window['go']['main']['App']['CaptureDevModeForPrinter'](arg1, arg2);
 }
@@ -170,6 +174,10 @@ export function OpenManufacturerURL(arg1) {
   return window['go']['main']['App']['OpenManufacturerURL'](arg1);
 }
 
+export function OpenOpenPrintingPPDPage() {
+  return window['go']['main']['App']['OpenOpenPrintingPPDPage']();
+}
+
 export function OpenRepoURL() {
   return window['go']['main']['App']['OpenRepoURL']();
 }
@@ -242,18 +250,22 @@ export function SyncCloud(arg1) {
   return window['go']['main']['App']['SyncCloud'](arg1);
 }
 
-export function SyncDriversFromFlashDrive(arg1) {
-  return window['go']['main']['App']['SyncDriversFromFlashDrive'](arg1);
+export function SyncFromFlashDrive(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SyncFromFlashDrive'](arg1, arg2, arg3);
 }
 
-export function SyncDriversToFlashDrives(arg1) {
-  return window['go']['main']['App']['SyncDriversToFlashDrives'](arg1);
+export function SyncOpenPrintingPPDs() {
+  return window['go']['main']['App']['SyncOpenPrintingPPDs']();
+}
+
+export function SyncToFlashDrives(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SyncToFlashDrives'](arg1, arg2, arg3, arg4);
 }
 
 export function UpdateSevenZip(arg1) {
   return window['go']['main']['App']['UpdateSevenZip'](arg1);
 }
 
-export function WritePortablePDT(arg1) {
-  return window['go']['main']['App']['WritePortablePDT'](arg1);
+export function WritePortablePDT(arg1, arg2, arg3) {
+  return window['go']['main']['App']['WritePortablePDT'](arg1, arg2, arg3);
 }

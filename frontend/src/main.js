@@ -15,6 +15,11 @@ import './app.css';
 import * as App from '../wailsjs/go/main/App';
 import {EventsOn} from '../wailsjs/runtime/runtime';
 
+// Declared up here (not next to the flash-drive code that also uses it) because the static template below interpolates it at load time. Shown inline when "Include Drivers Repo" is checked, and again as a
+// confirmation before anything is written (Ken, 2026-09-20).
+const FLASH_DRIVERS_CLOUD_NOTE = 'Downloads the shared cloud repository\'s Drivers straight onto the drive - only what the drive is missing, and this computer\'s own Drivers folder isn\'t used. Warning: syncing a complete copy of the Drivers repo can take about an hour, depending on the speed of your Internet connection.';
+const FLASH_DRIVERS_WARNING = 'Writing the complete Drivers repo from this computer\'s local copy can take about an hour over USB.';
+
 // Tooltip text, shared between the static template below and the
 // dynamically-generated per-row HTML (rowHtml/mfgSelectHtml), so every
 // control - defaults, grid headers, and each row's own fields - carries the
@@ -277,6 +282,7 @@ document.querySelector('#app').innerHTML = `
         <button type="button" class="tab-btn" data-tab="sites">Download Centers</button>
         <button type="button" class="tab-btn" data-tab="directdownloads">Direct Downloads</button>
         <button type="button" class="tab-btn" data-tab="cloudsync">Cloud Sync</button>
+        <button type="button" class="tab-btn" data-tab="openprinting">OpenPrinting</button>
         <button type="button" class="tab-btn" data-tab="about">About</button>
       </div>
       <div class="tab-panel" data-tab-panel="general">
@@ -347,6 +353,17 @@ document.querySelector('#app').innerHTML = `
           Concurrent Transfers
           <input type="number" id="cloudSyncConcurrentTransfers" min="1" max="10" step="1">
         </label>
+      </div>
+      <div class="tab-panel" data-tab-panel="openprinting" hidden>
+        <p class="modal-hint">Downloads the macOS printer definition (PPD) files from the
+          <a href="#" id="openPrintingLink" class="inline-link" title="Open openprinting.org/download/PPD in your browser">OpenPrinting PPD library</a>
+          for every supported manufacturer into this computer's Drivers/macOS/OpenPrinting folders. They become
+          macOS driver and model choices. Each file keeps the date/time it has on the site, and files that haven't
+          changed since the last sync are skipped, so re-running it is quick. Nothing is ever deleted.</p>
+        <div class="about-update">
+          <button type="button" class="primary" id="btnOpenPrintingSync" title="Download new and updated PPDs from OpenPrinting now.">Sync PPDs Now</button>
+        </div>
+        <p class="modal-hint" id="openPrintingSyncStatus"></p>
       </div>
       <div class="tab-panel" data-tab-panel="about" hidden>
         <div class="about-panel">
@@ -452,6 +469,25 @@ document.querySelector('#app').innerHTML = `
       <label class="modal-field-inline" id="flashDriveFormatRow" title="Erases all data on every checked drive and lays down a fresh exFAT filesystem before writing PDT to it.">
         <input type="checkbox" id="flashDriveFormat"> Format as exFAT first (erases all data on the selected drive(s))
       </label>
+      <div class="modal-field-inline" id="flashDriveDriversRow">
+        <label title="Also put the Drivers repo onto the flash drive. On by default (Local) - see the note below.">
+          <input type="checkbox" id="flashDriveIncludeDrivers" checked> Include Drivers Repo
+        </label>
+        <select id="flashDriveDriversSource" title="Where the Drivers come from: Local copies this computer's own Drivers folder; Cloud downloads the shared cloud repository straight onto the drive.">
+          <option value="local">Local</option>
+          <option value="cloud">Cloud</option>
+        </select>
+      </div>
+      <p class="modal-hint" id="flashDriveDriversWarning" style="display: none">${FLASH_DRIVERS_WARNING}</p>
+      <div class="modal-field-inline" id="flashSyncItemsRow" style="display: none">
+        <span>Sync:</span>
+        <label title="Sync the Drivers folder."><input type="checkbox" id="flashSyncDrivers" checked> Drivers</label>
+        <select id="flashSyncDriversSource" title="Where the Drivers come from: Local copies this computer's own Drivers folder; Cloud downloads the shared cloud repository straight onto the drive (this computer's own Drivers folder isn't touched).">
+          <option value="local">Local</option>
+          <option value="cloud">Cloud</option>
+        </select>
+        <label title="Sync the Configs folder (saved configurations and captured Settings/Device Settings)."><input type="checkbox" id="flashSyncConfigs" checked> Configs</label>
+      </div>
       <div class="modal-actions">
         <button id="btnFlashDriveCancel">Cancel</button>
         <button class="primary" id="btnFlashDriveConfirm">Write</button>
@@ -460,8 +496,15 @@ document.querySelector('#app').innerHTML = `
   </div>
 
   <div class="modal-backdrop" id="flashCopyProgressBackdrop" hidden>
-    <div class="modal">
+    <div class="modal" id="flashCopyProgressModal">
       <h3 id="flashCopyProgressTitle">Copying...</h3>
+      <div id="flashFilesDetail" hidden>
+        <div class="cloud-sync-current-path" id="flashFilesCurrentPath"></div>
+        <progress class="cloud-sync-current-bar" id="flashFilesCurrentBar" value="0" max="1"></progress>
+        <div class="cloud-sync-current-label" id="flashFilesCurrentLabel"></div>
+        <div class="cloud-sync-queue-label" id="flashFilesQueueLabel"></div>
+        <div id="flashFilesQueueList" class="cloud-sync-queue-list"></div>
+      </div>
       <div id="flashCopyProgressList"></div>
       <div class="modal-actions">
         <button class="danger" id="btnFlashCopyCancel">Cancel</button>
@@ -496,6 +539,9 @@ document.querySelector('#app').innerHTML = `
     <div class="modal cloud-sync-modal">
       <h3>Cloud Sync</h3>
       <p class="modal-hint" id="cloudSyncHint">Comparing this computer's Drivers folder against the shared cloud repository&hellip;</p>
+      <label class="modal-field-inline" title="Leave out files that already match on both sides, so only what needs syncing (or reviewing) is listed.">
+        <input type="checkbox" id="cloudSyncHideSynced" checked> Hide files already in sync
+      </label>
       <div id="cloudSyncTree" class="cloud-sync-tree"></div>
       <div class="modal-actions">
         <button id="btnCloudSyncClose">Close</button>
@@ -518,6 +564,22 @@ document.querySelector('#app').innerHTML = `
       <div class="modal-actions">
         <button id="btnRescanClose">Close</button>
         <button class="primary" id="btnRescanConfirm" disabled>Rescan</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="openPrintingProgressBackdrop" hidden>
+    <div class="modal cloud-sync-progress-modal">
+      <h3>Syncing OpenPrinting PPDs...</h3>
+      <div class="cloud-sync-current-path" id="openPrintingCurrentPath"></div>
+      <progress class="cloud-sync-current-bar" id="openPrintingCurrentBar" value="0" max="1"></progress>
+      <div class="cloud-sync-current-label" id="openPrintingCurrentLabel"></div>
+      <div class="cloud-sync-queue-label" id="openPrintingQueueLabel"></div>
+      <div id="openPrintingQueueList" class="cloud-sync-queue-list"></div>
+      <progress class="cloud-sync-total-bar" id="openPrintingTotalBar" value="0" max="1"></progress>
+      <div class="cloud-sync-total-label" id="openPrintingTotalLabel"></div>
+      <div class="modal-actions">
+        <button class="danger" id="btnOpenPrintingCancel">Cancel</button>
       </div>
     </div>
   </div>
@@ -839,7 +901,7 @@ function applySalesChainGate() {
     document.body.classList.toggle('sales-chain-locked', locked);
     const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnSyncFlashDrive', 'btnCloudSync', 'btnOpenDriversFolder', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
-        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop') || c.closest('#rescanBackdrop')) continue;
+        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop') || c.closest('#openPrintingProgressBackdrop') || c.closest('#rescanBackdrop')) continue;
         c.disabled = locked;
     }
     updatePortPrefixTextEnabled();
@@ -1030,6 +1092,12 @@ async function init() {
 
     EventsOn('deploy-progress', (result) => onDeployProgress(result));
     EventsOn('flashcopy-progress', (progress) => updateFlashCopyProgress(progress));
+    EventsOn('openprinting-sync-listing', (p) => onOpenPrintingListing(p));
+    EventsOn('openprinting-sync-plan', (p) => onOpenPrintingPlan(p));
+    EventsOn('openprinting-sync-file', (p) => onOpenPrintingFile(p));
+    EventsOn('openprinting-sync-total', (p) => onOpenPrintingTotal(p));
+    EventsOn('flashcopy-plan', (plan) => onFlashFilePlan(plan));
+    EventsOn('flashcopy-files', (files) => onFlashFilesProgress(files));
     // Background catalog work (today: the OpenPrinting nickname cache -
     // GitHub issue #16 follow-up, 2026-09-19) has no synchronous bound-
     // method call to piggyback a log line on the way RefreshDriverCatalog's
@@ -2283,6 +2351,13 @@ function wireEvents() {
     el('btnSyncFlashDrive').addEventListener('click', () => openFlashDriveModal('sync'));
     el('btnFlashDriveCancel').addEventListener('click', closeFlashDriveModal);
     el('btnFlashDriveConfirm').addEventListener('click', confirmWriteToFlashDrive);
+    el('flashDriveList').addEventListener('change', updateFlashDriveModalLabels);
+    for (const control of [el('flashSyncDrivers'), el('flashSyncConfigs'), el('flashSyncDriversSource')]) {
+        control.addEventListener('change', updateFlashDriveModalLabels);
+    }
+    for (const control of [el('flashDriveIncludeDrivers'), el('flashDriveDriversSource')]) {
+        control.addEventListener('change', updateFlashDriversNote);
+    }
     for (const radio of [el('flashSyncDirectionTo'), el('flashSyncDirectionFrom')]) {
         radio.addEventListener('change', () => {
             flashSyncDirection = radio.value;
@@ -2339,8 +2414,28 @@ function wireEvents() {
     });
 
     el('btnCloudSync').addEventListener('click', () => openCloudSyncModal());
+    el('btnOpenPrintingSync').addEventListener('click', syncOpenPrintingPPDs);
+    el('btnOpenPrintingCancel').addEventListener('click', () => {
+        el('btnOpenPrintingCancel').disabled = true;
+        el('btnOpenPrintingCancel').textContent = 'Canceling...';
+        App.CancelOpenPrintingSync();
+    });
+    el('openPrintingLink').addEventListener('click', (e) => {
+        e.preventDefault();
+        App.OpenOpenPrintingPPDPage();
+    });
     el('btnCloudSyncClose').addEventListener('click', closeCloudSyncModal);
     el('btnCloudSyncConfirm').addEventListener('click', confirmCloudSync);
+    // Remembered per computer; on unless the tech turned it off.
+    try {
+        el('cloudSyncHideSynced').checked = localStorage.getItem('pdt.cloudSync.hideSynced') !== '0';
+    } catch (err) { /* storage unavailable - keep the default */ }
+    el('cloudSyncHideSynced').addEventListener('change', () => {
+        try {
+            localStorage.setItem('pdt.cloudSync.hideSynced', el('cloudSyncHideSynced').checked ? '1' : '0');
+        } catch (err) { /* not remembered - still applies this session */ }
+        renderCloudSyncTree();
+    });
     // Delegated rather than one listener per row - the tree re-renders its
     // entire innerHTML on every toggle/checkbox change (see
     // renderCloudSyncTree), which would otherwise mean re-wiring listeners
@@ -2881,7 +2976,7 @@ let flashSyncDirection = 'to';
 // renderFlashDriveList (re)builds #flashDriveList from flashDriveCandidates
 // for the current flashDriveMode/flashSyncDirection - a checkbox list for
 // every mode except sync+from, which needs single-select (radio) since
-// SyncDriversFromFlashDrive only ever pulls from one drive at a time. Called
+// SyncFromFlashDrive only ever pulls from one drive at a time. Called
 // both when the modal first opens and again whenever the direction toggle
 // changes, so switching direction doesn't require re-listing drives.
 function renderFlashDriveList() {
@@ -2896,22 +2991,66 @@ function renderFlashDriveList() {
               <span class="import-printer-detail">${attr(d.label || '(no label)')} - ${formatByteSize(d.freeBytes)} free of ${formatByteSize(d.totalBytes)}</span>
             </label>
         `).join('');
+    updateFlashDriveModalLabels();
+}
+
+// updateFlashDriversNote keeps the Write dialog's "Include Drivers Repo" note
+// and Local/Cloud combo in step with the checkbox: the 20-minute USB warning
+// for a local copy, or a plain what-this-does note for a cloud download (where
+// "Cloud Sync can be faster" would be moot). Hidden entirely while unchecked.
+function updateFlashDriversNote() {
+    const on = el('flashDriveIncludeDrivers').checked;
+    const cloud = el('flashDriveDriversSource').value === 'cloud';
+    el('flashDriveDriversSource').disabled = !on;
+    const note = el('flashDriveDriversWarning');
+    note.textContent = cloud ? FLASH_DRIVERS_CLOUD_NOTE : FLASH_DRIVERS_WARNING;
+    note.style.display = on ? '' : 'none';
 }
 
 // updateFlashDriveModalLabels sets the modal's title/hint/confirm-button text
 // for the current flashDriveMode/flashSyncDirection - split out from
 // openFlashDriveModal so the direction radio's own change handler can update
 // these live without re-listing drives.
+// syncItemsText names what the sync dialog's Drivers/Configs checkboxes
+// currently select ("Drivers", "Configs", "Drivers and Configs"), or '' when
+// neither is checked - which also disables the Sync button.
+function syncItemsText() {
+    const d = el('flashSyncDrivers').checked;
+    const c = el('flashSyncConfigs').checked;
+    // Cloud only applies going TO a drive, and only when Drivers is checked.
+    const drivers = d && syncDriversFromCloud() ? 'Drivers (from the cloud)' : 'Drivers';
+    return d && c ? `${drivers} and Configs` : d ? drivers : c ? 'Configs' : '';
+}
+
+// syncDriversFromCloud: is the sync dialog set to pull Drivers from the cloud
+// rather than this computer's own folder? Only meaningful for the
+// to-flash-drive direction (the other direction reads the drive itself).
+function syncDriversFromCloud() {
+    return flashDriveMode === 'sync' && flashSyncDirection === 'to'
+        && el('flashSyncDrivers').checked && el('flashSyncDriversSource').value === 'cloud';
+}
+
 function updateFlashDriveModalLabels() {
     const isSync = flashDriveMode === 'sync';
     const isFrom = isSync && flashSyncDirection === 'from';
-    el('flashDriveTitle').textContent = isFrom ? 'Sync Drivers from Flash Drive' : isSync ? 'Sync Drivers to Flash Drive' : 'Write to Flash Drive';
+    const items = syncItemsText();
+    const itemsLower = items || 'nothing (check Drivers and/or Configs)';
+    el('flashDriveTitle').textContent = isFrom ? 'Sync from Flash Drive' : isSync ? 'Sync to Flash Drive' : 'Write to Flash Drive';
     el('flashDriveHint').textContent = isFrom
-        ? 'Pulls the checked flash drive\'s own Drivers folder onto this computer (merging into whatever is already here) - pick one drive.'
+        ? `Pulls ${itemsLower} from the checked flash drive onto this computer (merging into whatever is already here) - pick one drive.`
         : isSync
-            ? 'Copies this computer\'s Drivers folder onto every checked drive (merging into whatever is already there), then extracts anything newly-copied.'
-            : 'Writes a portable copy of PDT (this executable, plus its Drivers, Configs, and 7-Zip tools folders) to every checked drive.';
+            ? (syncDriversFromCloud()
+                ? `Downloads ${itemsLower} onto every checked drive - Drivers straight from the shared cloud repository (only what the drive is missing; this computer's own Drivers folder isn't touched)${el('flashSyncConfigs').checked ? ', Configs from this computer' : ''}.`
+                : `Copies this computer's ${itemsLower} onto every checked drive (merging into whatever is already there)${el('flashSyncDrivers').checked ? ', then extracts anything newly-copied' : ''}.`)
+            : 'Writes a portable copy of PDT (this executable, plus its Configs and 7-Zip tools folders, and the Drivers repo if you check Include Drivers Repo) to every checked drive.';
     el('btnFlashDriveConfirm').textContent = isSync ? 'Sync' : 'Write';
+    // Write/Sync stay disabled until at least one drive is checked (and, for
+    // Sync, at least one of Drivers/Configs).
+    const anyDrive = !!el('flashDriveList').querySelector('.flash-drive-check:checked');
+    el('btnFlashDriveConfirm').disabled = !anyDrive || (isSync && !items);
+    // The source combo only matters going to a drive, and only with Drivers on.
+    el('flashSyncDriversSource').style.display = isSync && !isFrom ? '' : 'none';
+    el('flashSyncDriversSource').disabled = !el('flashSyncDrivers').checked;
 }
 
 async function openFlashDriveModal(mode = 'write') {
@@ -2932,6 +3071,10 @@ async function openFlashDriveModal(mode = 'write') {
     // modal that toggling `hidden` on a .modal-field-inline row doesn't
     // reliably take effect despite the CSS's own `:not([hidden])` guard.
     el('flashSyncDirectionRow').style.display = isSync ? '' : 'none';
+    el('flashSyncItemsRow').style.display = isSync ? '' : 'none';
+    el('flashSyncDrivers').checked = true;
+    el('flashSyncDriversSource').value = 'local';
+    el('flashSyncConfigs').checked = true;
     updateFlashDriveModalLabels();
     // Inline style, not the `hidden` attribute/`:not([hidden])` CSS pattern
     // used elsewhere in this file - confirmed live that this row still
@@ -2941,6 +3084,10 @@ async function openFlashDriveModal(mode = 'write') {
     // directly can't lose to any stylesheet rule regardless of cause.
     el('flashDriveFormatRow').style.display = isSync ? 'none' : '';
     el('flashDriveFormat').checked = false;
+    el('flashDriveDriversRow').style.display = isSync ? 'none' : '';
+    el('flashDriveIncludeDrivers').checked = true;
+    el('flashDriveDriversSource').value = 'local';
+    updateFlashDriversNote();
 
     el('flashDriveBackdrop').hidden = false;
 }
@@ -2966,14 +3113,14 @@ function isCanceledError(message) {
 // source for every flash drive stamped out from it.
 //
 // Sync mode skips formatting entirely (never offered - see
-// openFlashDriveModal) and calls SyncDriversToFlashDrives instead of
+// openFlashDriveModal) and calls SyncToFlashDrives instead of
 // WritePortablePDT - Drivers only, no exe/Configs/tools - then RefreshDriverCatalog
 // so this running instance's own catalog/no-drivers banner reflect whatever
 // just got copied too, not just the flash drive's own copy (which
-// SyncDriversToFlashDrives/syncDriversTo already extracted server-side).
+// SyncToFlashDrives/syncDriversTo already extracted server-side).
 //
 // Sync mode's own 'from' direction (flashSyncDirection) reverses the copy -
-// SyncDriversFromFlashDrive instead of SyncDriversToFlashDrives - pulling
+// SyncFromFlashDrive instead of SyncToFlashDrives - pulling
 // exactly one checked drive's Drivers folder back onto this computer, for
 // picking up whatever a different technician's own sync added to a shared
 // drive since this laptop last saw it.
@@ -2983,10 +3130,28 @@ async function confirmWriteToFlashDrive() {
     const checks = Array.from(el('flashDriveList').querySelectorAll('.flash-drive-check'));
     const chosen = checks.filter(c => c.checked).map(c => flashDriveCandidates[Number(c.dataset.index)]);
     const doFormat = mode === 'write' && el('flashDriveFormat').checked;
+    const includeDrivers = mode === 'write' && el('flashDriveIncludeDrivers').checked;
+    const writeDriversSource = el('flashDriveDriversSource').value === 'cloud' ? 'cloud' : 'local';
+    const syncDrivers = mode === 'sync' && el('flashSyncDrivers').checked;
+    const syncConfigs = mode === 'sync' && el('flashSyncConfigs').checked;
+    const syncItems = syncItemsText();
+    const driversSource = syncDriversFromCloud() ? 'cloud' : 'local';
     closeFlashDriveModal();
+    if (mode === 'sync' && !syncDrivers && !syncConfigs) return;
     if (chosen.length === 0) return;
 
     let letters = chosen.map(d => d.letter);
+
+    // Asked first, before a format's own erase confirmation, so declining
+    // the long copy never costs the tech an already-formatted drive.
+    if (includeDrivers) {
+        const ok = await showConfirm({
+            title: 'Include Drivers Repo',
+            message: writeDriversSource === 'cloud' ? FLASH_DRIVERS_CLOUD_NOTE : FLASH_DRIVERS_WARNING,
+            okLabel: 'Continue',
+        });
+        if (!ok) return;
+    }
 
     if (doFormat) {
         const ok = await showConfirm({
@@ -3002,60 +3167,66 @@ async function confirmWriteToFlashDrive() {
         if (letters.length === 0) return;
     } else {
         const ok = await showConfirm(direction === 'from' ? {
-            title: 'Sync Drivers from Flash Drive',
-            message: `Sync ${letters[0]}'s own Drivers folder onto this computer?`,
+            title: 'Sync from Flash Drive',
+            message: `Sync ${syncItems} from ${letters[0]} onto this computer?`,
             okLabel: 'Sync',
         } : mode === 'sync' ? {
-            title: 'Sync Drivers to Flash Drive',
-            message: `Sync this computer's Drivers folder to: ${letters.join(', ')}?`,
+            title: 'Sync to Flash Drive',
+            message: `Sync this computer's ${syncItems} to: ${letters.join(', ')}?`,
             okLabel: 'Sync',
         } : {
             title: 'Write to Flash Drive',
-            message: `Write a portable copy of PDT (this executable, Drivers, Configs, and 7-Zip tools) to: ${letters.join(', ')}?`,
+            message: `Write a portable copy of PDT (this executable, ${includeDrivers ? (writeDriversSource === 'cloud' ? 'Drivers from the cloud, ' : 'Drivers, ') : ''}Configs, and 7-Zip tools) to: ${letters.join(', ')}?`,
             okLabel: 'Write',
         });
         if (!ok) return;
     }
 
-    openFlashCopyProgressModal(mode, letters);
+    const cloudDrivers = direction !== 'from' && (mode === 'sync' ? (syncDrivers && driversSource === 'cloud') : (includeDrivers && writeDriversSource === 'cloud'));
+    const detailed = mode === 'sync' || includeDrivers;
+    openFlashCopyProgressModal(mode, letters, detailed, cloudDrivers);
     try {
         if (direction === 'from') {
             const letter = letters[0];
             try {
-                await App.SyncDriversFromFlashDrive(letter);
-                logStatus('OK', `Synced Drivers from ${letter}.`);
-                const status = await App.RefreshDriverCatalog();
-                el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
+                await App.SyncFromFlashDrive(letter, syncDrivers, syncConfigs);
+                logStatus('OK', `Synced ${syncItems} from ${letter}.`);
+                if (syncDrivers) {
+                    const status = await App.RefreshDriverCatalog();
+                    el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
+                }
             } catch (err) {
                 const msg = err && err.message ? err.message : String(err);
                 if (isCanceledError(msg)) {
                     logStatus('WARN', `Sync from ${letter} canceled.`);
                 } else {
-                    logStatus('ERR', `Could not sync Drivers from ${letter}: ${msg}`);
+                    logStatus('ERR', `Could not sync ${syncItems} from ${letter}: ${msg}`);
                 }
             }
             return;
         }
 
         if (mode === 'sync') {
-            const syncResult = await App.SyncDriversToFlashDrives(letters);
-            for (const l of syncResult.succeeded || []) logStatus('OK', `Synced Drivers to ${l}.`);
+            const syncResult = await App.SyncToFlashDrives(letters, syncDrivers, syncConfigs, driversSource);
+            for (const n of syncResult.notes || []) logStatus(n.level, n.text);
+            for (const l of syncResult.succeeded || []) logStatus('OK', `Synced ${syncItems} to ${l}.`);
             for (const l of Object.keys(syncResult.failed || {})) {
                 const msg = syncResult.failed[l];
-                logStatus(isCanceledError(msg) ? 'WARN' : 'ERR', isCanceledError(msg) ? `Sync to ${l} canceled.` : `Could not sync Drivers to ${l}: ${msg}`);
+                logStatus(isCanceledError(msg) ? 'WARN' : 'ERR', isCanceledError(msg) ? `Sync to ${l} canceled.` : `Could not sync ${syncItems}${l === '*' ? '' : ` to ${l}`}: ${msg}`);
             }
-            if ((syncResult.succeeded || []).length > 0) {
+            if (syncDrivers && driversSource === 'local' && (syncResult.succeeded || []).length > 0) {
                 const status = await App.RefreshDriverCatalog();
                 el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
             }
             return;
         }
 
-        const writeResult = await App.WritePortablePDT(letters);
+        const writeResult = await App.WritePortablePDT(letters, includeDrivers, writeDriversSource);
+        for (const n of writeResult.notes || []) logStatus(n.level, n.text);
         for (const l of writeResult.succeeded || []) logStatus('OK', `Wrote portable PDT to ${l}.`);
         for (const l of Object.keys(writeResult.failed || {})) {
             const msg = writeResult.failed[l];
-            logStatus(isCanceledError(msg) ? 'WARN' : 'ERR', isCanceledError(msg) ? `Write to ${l} canceled.` : `Could not write to ${l}: ${msg}`);
+            logStatus(isCanceledError(msg) ? 'WARN' : 'ERR', isCanceledError(msg) ? `Write to ${l} canceled.` : `Could not write${l === '*' ? '' : ` to ${l}`}: ${msg}`);
         }
     } finally {
         closeFlashCopyProgressModal();
@@ -3073,7 +3244,21 @@ async function confirmWriteToFlashDrive() {
 // concern across repeated Write/Sync calls; it simply no-ops if the row it
 // would update isn't present (the dialog isn't open, or that letter wasn't
 // part of the current operation).
-function openFlashCopyProgressModal(mode, letters) {
+function openFlashCopyProgressModal(mode, letters, detailed = false, cloudDrivers = false) {
+    // Anything that can copy a real amount of data (Drivers, a Sync) gets the
+    // Cloud Sync dialog's fixed-size, wide layout with the file list - the
+    // file in transfer and what remains (see onFlashFilePlan/
+    // onFlashFileProgress); a bare write of the exe/Configs keeps the compact
+    // one-bar-per-drive dialog.
+    el('flashCopyProgressModal').classList.toggle('cloud-sync-progress-modal', detailed);
+    el('flashCopyProgressModal').classList.toggle('flash-copy-detail-modal', detailed);
+    el('flashFilesDetail').hidden = !detailed;
+    flashFiles = { letter: '', order: [], byPath: new Map(), startedAt: new Map(), seq: 0, done: new Set(), verb: 'Copying', step: '' };
+    el('flashFilesCurrentPath').textContent = !detailed ? '' : cloudDrivers ? 'Comparing the cloud repository with the drive…' : 'Scanning files…';
+    el('flashFilesCurrentBar').value = 0;
+    el('flashFilesCurrentLabel').textContent = '';
+    el('flashFilesQueueLabel').textContent = '';
+    el('flashFilesQueueList').innerHTML = '';
     el('flashCopyProgressTitle').textContent = mode === 'sync' ? 'Syncing Drivers...' : 'Writing to Flash Drive...';
     el('flashCopyProgressList').innerHTML = letters.map(letter => `
         <div class="flash-copy-row" data-letter="${attr(letter)}">
@@ -3094,6 +3279,121 @@ function closeFlashCopyProgressModal() {
     el('flashCopyProgressBackdrop').hidden = true;
 }
 
+// The cloud-sourced file list: same spotlight-plus-queue presentation as the
+// Cloud Sync dialog (renderCloudSyncProgress), fed by the backend's
+// flashcopy-plan / flashcopy-file events. Drives are processed
+// one at a time, so a single state object (reset by each plan event) is
+// enough. A Drivers repo can be thousands of files, so only the first
+// FILE_QUEUE_MAX queue entries are rendered.
+const FILE_QUEUE_MAX = 60;
+let flashFiles = { letter: '', order: [], byPath: new Map(), startedAt: new Map(), seq: 0, done: new Set(), verb: 'Copying', step: '' };
+
+// Each copy step (Drivers, Configs, ...) announces its own plan, which
+// replaces the list.
+function onFlashFilePlan(plan) {
+    const cloud = plan.step === 'Drivers (cloud)';
+    flashFiles = { letter: plan.letter, order: plan.files || [], byPath: new Map(), startedAt: new Map(), seq: 0, done: new Set(),
+                   verb: cloud ? 'Downloading' : 'Copying', step: plan.step };
+    if (flashFiles.order.length === 0) {
+        el('flashFilesCurrentPath').textContent = cloud
+            ? 'Nothing to download - the drive already has everything in the cloud.'
+            : `Nothing to copy for ${plan.step} - it's already on the drive.`;
+        el('flashFilesCurrentBar').value = 0;
+        el('flashFilesCurrentLabel').textContent = '';
+    }
+    renderFlashFiles();
+}
+
+// The backend sends per-file updates in batches (see flashEmitter): the
+// latest state of every file that changed since the last batch.
+function onFlashFilesProgress(files) {
+    let changed = false;
+    for (const file of files || []) {
+        if (file.letter !== flashFiles.letter) continue;
+        flashFiles.byPath.set(file.relPath, { done: file.done, total: file.total, etaSeconds: 0 });
+        if (!flashFiles.startedAt.has(file.relPath)) flashFiles.startedAt.set(file.relPath, flashFiles.seq++);
+        if (file.done >= file.total) flashFiles.done.add(file.relPath);
+        changed = true;
+    }
+    if (changed) renderFlashFiles();
+}
+
+const FLASH_FILE_IDS = { path: 'flashFilesCurrentPath', bar: 'flashFilesCurrentBar', label: 'flashFilesCurrentLabel', queueLabel: 'flashFilesQueueLabel', queueList: 'flashFilesQueueList' };
+
+function renderFlashFiles() {
+    renderTransferList(flashFiles, FLASH_FILE_IDS, flashFiles.verb);
+}
+
+// renderTransferList draws the Cloud-Sync-style presentation of a batch of
+// file transfers: the longest-running in-flight file as a "spotlight" (path,
+// bar, size/percent/ETA), then a queue of every other in-flight file (with a
+// small bar) followed by those not started yet. s is
+// { order: [paths], byPath: Map(path -> {done, total, etaSeconds}),
+//   startedAt: Map(path -> sequence), done: Set(paths) }; ids names the
+// elements to draw into. Only the first FILE_QUEUE_MAX queue entries
+// are rendered - a big batch would otherwise rebuild thousands of rows on
+// every progress event.
+function renderTransferList(s, ids, verb) {
+    const queueLabel = el(ids.queueLabel);
+    const queueList = el(ids.queueList);
+    if (s.order.length === 0) {
+        queueLabel.textContent = '';
+        queueList.innerHTML = '';
+        return;
+    }
+    const active = [];
+    const waiting = [];
+    for (const p of s.order) {
+        if (s.done.has(p)) continue;
+        (s.startedAt.has(p) ? active : waiting).push(p);
+    }
+    active.sort((a, b) => s.startedAt.get(a) - s.startedAt.get(b));
+
+    const spotlight = active[0];
+    if (spotlight) {
+        const p = s.byPath.get(spotlight);
+        const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+        const eta = p.etaSeconds > 0 ? ` - ${formatEta(p.etaSeconds)}` : '';
+        el(ids.path).textContent = spotlight;
+        el(ids.path).title = spotlight;
+        el(ids.bar).max = Math.max(p.total, 1);
+        el(ids.bar).value = p.done;
+        const text = `${verb} ${spotlight.split('/').pop()} - ${formatByteSize(p.done)} / ${formatByteSize(p.total)} (${pct}%)${eta}`;
+        el(ids.label).textContent = text;
+        el(ids.label).title = text;
+    } else {
+        el(ids.path).textContent = waiting.length > 0 ? 'Preparing next file…' : 'Finishing up…';
+        el(ids.path).title = '';
+        el(ids.bar).value = 0;
+        el(ids.label).textContent = '';
+        el(ids.label).title = '';
+    }
+
+    const queue = [...active.slice(1), ...waiting];
+    queueLabel.textContent = queue.length > 0 ? `Up next (${queue.length})` : '';
+    const rows = queue.slice(0, FILE_QUEUE_MAX).map(relPath => {
+        const name = relPath.split('/').pop();
+        const p = s.byPath.get(relPath);
+        if (p) {
+            const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+            return `
+                <div class="cloud-sync-queue-row cloud-sync-queue-row-active" title="${attr(relPath)}">
+                    <span class="cloud-sync-queue-name">${attr(name)}</span>
+                    <progress class="cloud-sync-queue-bar" value="${p.done}" max="${Math.max(p.total, 1)}"></progress>
+                    <span class="cloud-sync-queue-pct">${pct}%</span>
+                </div>`;
+        }
+        return `
+            <div class="cloud-sync-queue-row" title="${attr(relPath)}">
+                <span class="cloud-sync-queue-name">${attr(name)}</span>
+            </div>`;
+    });
+    if (queue.length > FILE_QUEUE_MAX) {
+        rows.push(`<div class="cloud-sync-queue-row"><span class="cloud-sync-queue-name">…and ${queue.length - FILE_QUEUE_MAX} more</span></div>`);
+    }
+    queueList.innerHTML = rows.join('');
+}
+
 // formatEta renders a whole number of seconds as a short "~Xm Ys remaining"/
 // "~Xs remaining" string. Only called once the backend has actually decided
 // an estimate is stable enough to report (see newFlashCopyProgressFunc's own
@@ -3110,8 +3410,11 @@ function updateFlashCopyProgress(progress) {
     const row = el('flashCopyProgressBackdrop').querySelector(`.flash-copy-row[data-letter="${CSS.escape(progress.letter)}"]`);
     if (!row) return;
     const eta = progress.etaSeconds > 0 ? ` - ${formatEta(progress.etaSeconds)}` : '';
+    // Speed meter: the backend's time-decayed rate (see etaEstimator.rate).
+    const rateText = formatRate(progress.rateBytesPerSec);
+    const rate = rateText ? ` - ${rateText}` : '';
     row.querySelector('.flash-copy-row-label').textContent =
-        `${progress.letter} - ${progress.step} (${progress.done} / ${progress.total} files)${eta}`;
+        `${progress.letter} - ${progress.step} (${progress.done} / ${progress.total} files, ${formatByteSize(progress.doneBytes)} / ${formatByteSize(progress.totalBytes)})${rate}${eta}`;
     const bar = row.querySelector('.flash-copy-row-bar');
     // Bytes, not file count, drive the bar itself - a file-count percentage
     // is a poor proxy for actual progress once file sizes vary as wildly as
@@ -3119,7 +3422,103 @@ function updateFlashCopyProgress(progress) {
     // installer), the same reason the backend estimates the ETA from bytes
     // too (see CopyProgress's own doc comment).
     bar.max = Math.max(progress.totalBytes, 1);
-    bar.value = progress.doneBytes;
+    // Nothing to transfer (everything already on the drive) is a full bar.
+    bar.value = progress.totalBytes === 0 && progress.done >= progress.total ? bar.max : progress.doneBytes;
+}
+
+// ---- OpenPrinting PPD sync (Settings > OpenPrinting) ----
+
+const OPENPRINTING_IDS = { path: 'openPrintingCurrentPath', bar: 'openPrintingCurrentBar', label: 'openPrintingCurrentLabel', queueLabel: 'openPrintingQueueLabel', queueList: 'openPrintingQueueList' };
+let openPrintingState = { order: [], byPath: new Map(), startedAt: new Map(), seq: 0, done: new Set() };
+
+function resetOpenPrintingProgress() {
+    openPrintingState = { order: [], byPath: new Map(), startedAt: new Map(), seq: 0, done: new Set() };
+    el('openPrintingCurrentPath').textContent = 'Connecting to openprinting.org…';
+    el('openPrintingCurrentPath').title = '';
+    el('openPrintingCurrentBar').value = 0;
+    el('openPrintingCurrentLabel').textContent = '';
+    el('openPrintingCurrentLabel').title = '';
+    el('openPrintingQueueLabel').textContent = '';
+    el('openPrintingQueueList').innerHTML = '';
+    el('openPrintingTotalBar').value = 0;
+    el('openPrintingTotalLabel').textContent = '';
+    const cancelBtn = el('btnOpenPrintingCancel');
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = 'Cancel';
+}
+
+function onOpenPrintingListing(p) {
+    if (openPrintingState.order.length > 0) return;
+    el('openPrintingCurrentPath').textContent = `Checking ${p.manufacturer} on openprinting.org…`;
+}
+
+function onOpenPrintingPlan(p) {
+    openPrintingState = { order: (p.files || []).map(f => f.path), byPath: new Map(), startedAt: new Map(), seq: 0, done: new Set() };
+    el('openPrintingTotalBar').max = Math.max(p.totalBytes, 1);
+    el('openPrintingTotalBar').value = 0;
+    if (openPrintingState.order.length === 0) {
+        el('openPrintingCurrentPath').textContent = 'Everything is already up to date.';
+        el('openPrintingTotalLabel').textContent = 'Nothing to download.';
+    } else {
+        el('openPrintingCurrentPath').textContent = 'Starting…';
+        el('openPrintingTotalLabel').textContent = `${openPrintingState.order.length} files to download (about ${formatByteSize(p.totalBytes)})`;
+    }
+    renderTransferList(openPrintingState, OPENPRINTING_IDS, 'Downloading');
+}
+
+function onOpenPrintingFile(f) {
+    const s = openPrintingState;
+    if (!s.order.includes(f.path)) return;
+    s.byPath.set(f.path, { done: f.done, total: f.total, etaSeconds: 0 });
+    if (!s.startedAt.has(f.path)) s.startedAt.set(f.path, s.seq++);
+    if (f.total > 0 && f.done >= f.total) s.done.add(f.path);
+    renderTransferList(s, OPENPRINTING_IDS, 'Downloading');
+}
+
+function onOpenPrintingTotal(p) {
+    const bar = el('openPrintingTotalBar');
+    bar.max = Math.max(p.totalBytes, 1);
+    bar.value = p.doneBytes;
+    const pct = p.totalBytes > 0 ? Math.round((p.doneBytes / p.totalBytes) * 100) : 0;
+    const rateText = formatRate(p.rateBytesPerSec);
+    const eta = p.etaSeconds > 0 ? ` - ${formatEta(p.etaSeconds)}` : '';
+    el('openPrintingTotalLabel').textContent =
+        `Total: ${p.doneFiles} / ${p.totalFiles} files, ${formatByteSize(p.doneBytes)} / ${formatByteSize(p.totalBytes)} (${pct}%)` +
+        (rateText ? ` - ${rateText}` : '') + eta;
+}
+
+async function syncOpenPrintingPPDs() {
+    const syncBtn = el('btnOpenPrintingSync');
+    syncBtn.disabled = true;
+    resetOpenPrintingProgress();
+    el('openPrintingProgressBackdrop').hidden = false;
+    el('openPrintingSyncStatus').textContent = 'Syncing...';
+    try {
+        const r = await App.SyncOpenPrintingPPDs();
+        const summary = `${r.downloaded} downloaded, ${r.skipped} already current${r.failed ? `, ${r.failed} failed` : ''}`;
+        if (r.error) {
+            logStatus('ERR', `OpenPrinting PPD sync failed: ${r.error}`);
+            el('openPrintingSyncStatus').textContent = `Failed: ${r.error}`;
+        } else if (r.canceled) {
+            logStatus('WARN', `OpenPrinting PPD sync canceled (${summary}).`);
+            el('openPrintingSyncStatus').textContent = `Canceled - ${summary}.`;
+        } else {
+            logStatus(r.failed ? 'WARN' : 'OK', `OpenPrinting PPD sync finished: ${summary}.`);
+            el('openPrintingSyncStatus').textContent = `Done - ${summary}.`;
+        }
+        for (const msg of r.errors || []) logStatus('ERR', `OpenPrinting: ${msg}`);
+        if (r.downloaded > 0) {
+            const status = await App.RefreshDriverCatalog();
+            el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
+        }
+    } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        logStatus('ERR', `OpenPrinting PPD sync failed: ${msg}`);
+        el('openPrintingSyncStatus').textContent = `Failed: ${msg}`;
+    } finally {
+        syncBtn.disabled = false;
+        el('openPrintingProgressBackdrop').hidden = true;
+    }
 }
 
 // ---- Cloud Sync ----
@@ -3262,10 +3661,18 @@ function renderCloudSyncEntry(node) {
 }
 
 function renderCloudSyncTree() {
-    cloudSyncTreeRoot = buildCloudSyncTree(cloudSyncItems);
+    // With "Hide files already in sync" on, only files that need syncing (or
+    // a look, for conflicts) are drawn; folders with nothing left in them
+    // disappear with them. Selection state is untouched - synced files never
+    // had any.
+    const hideSynced = el('cloudSyncHideSynced').checked;
+    const visibleItems = hideSynced ? cloudSyncItems.filter(i => i.action !== 'synced') : cloudSyncItems;
+    cloudSyncTreeRoot = buildCloudSyncTree(visibleItems);
     const container = el('cloudSyncTree');
-    if (cloudSyncItems.length === 0) {
-        container.innerHTML = '<p class="modal-hint">Nothing to sync - this computer and the cloud repository already match.</p>';
+    if (visibleItems.length === 0) {
+        container.innerHTML = cloudSyncItems.length === 0
+            ? '<p class="modal-hint">Nothing to sync - this computer and the cloud repository already match.</p>'
+            : `<p class="modal-hint">Everything is in sync - ${cloudSyncItems.length} file${cloudSyncItems.length === 1 ? '' : 's'} already match. Uncheck "Hide files already in sync" to list them.</p>`;
     } else {
         const entries = Array.from(cloudSyncTreeRoot.children.values()).sort((a, b) => {
             const aFolder = !a.item, bFolder = !b.item;
@@ -3525,13 +3932,15 @@ function renderCloudSyncProgress() {
         const bar = el('cloudSyncCurrentBar');
         bar.max = Math.max(p.total, 1);
         bar.value = p.done;
-        el('cloudSyncCurrentLabel').textContent =
-            `${dirLabel} ${spotlightPath.split('/').pop()} - ${formatByteSize(p.done)} / ${formatByteSize(p.total)} (${pct}%)${eta}`;
+        const currentText = `${dirLabel} ${spotlightPath.split('/').pop()} - ${formatByteSize(p.done)} / ${formatByteSize(p.total)} (${pct}%)${eta}`;
+        el('cloudSyncCurrentLabel').textContent = currentText;
+        el('cloudSyncCurrentLabel').title = currentText;
     } else {
         el('cloudSyncCurrentPath').textContent = waiting.length > 0 ? 'Preparing next file…' : '';
         el('cloudSyncCurrentPath').title = '';
         el('cloudSyncCurrentBar').value = 0;
         el('cloudSyncCurrentLabel').textContent = '';
+        el('cloudSyncCurrentLabel').title = '';
     }
 
     const queueEntries = [...active.slice(1), ...waiting];

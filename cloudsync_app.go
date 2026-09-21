@@ -446,10 +446,10 @@ func (a *App) SetCloudSyncPaused(paused bool) {
 // CancelCloudSync cancels the currently-running SyncCloud call, if any (a
 // no-op otherwise) - immediately, not "let the current file finish" like
 // StopDeploy: the one file each worker is mid-transfer on when Cancel lands
-// is aborted, with a download's own partial content deleted and an upload's
-// own incomplete multipart upload aborted on the bucket (see
-// cloudsync.Upload/Download), rather than left as a resumable in-progress
-// transfer the way Pause or a genuine network failure would.
+// is aborted. An upload's incomplete multipart upload is aborted on the bucket,
+// but a download's partial file is KEPT (Ken, 2026-09-20), exactly like Pause or
+// a genuine network failure: the next Sync resumes it from that point with a
+// Range request instead of re-downloading (see cloudsync.Download).
 func (a *App) CancelCloudSync() {
 	a.cloudSyncMu.Lock()
 	cancel := a.cloudSyncCancel

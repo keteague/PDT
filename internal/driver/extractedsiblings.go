@@ -16,6 +16,11 @@ import (
 // browsing the folder directly, as "PDT's own, not a real driver".
 const PdtInfCacheDirName = ".pdt-infcache"
 
+// PartialDownloadSuffix marks a Cloud Sync download still in progress (see
+// cloudsync.Download): kept on disk, including after Cancel, so a later run can
+// resume it with a Range request instead of starting over.
+const PartialDownloadSuffix = ".pdt-partial"
+
 // DSStoreFileName is Finder's own per-folder metadata file (icon
 // positions/view settings) - macOS creates one in nearly every folder it
 // browses, including a Drivers folder mounted from a Windows share or synced
@@ -40,7 +45,13 @@ const DSStoreFileName = ".DS_Store"
 // cache GitHub issue #10's own catalog rework builds), not disposable
 // clutter, so it and everything under it should travel with the rest of the
 // folder rather than being silently dropped.
+//
+// An in-progress Cloud Sync download (PartialDownloadSuffix) is skipped too:
+// it is a resumable half-file, never something to upload or copy onward.
 func IsIgnoredDotEntry(name string) bool {
+	if strings.HasSuffix(name, PartialDownloadSuffix) {
+		return true
+	}
 	return name != PdtInfCacheDirName && strings.HasPrefix(name, ".")
 }
 

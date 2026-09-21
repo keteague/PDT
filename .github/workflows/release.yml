@@ -173,25 +173,17 @@ jobs:
       # on whatever machine opens this release build, exactly as build-mac.sh's
       # own doc comment describes, unless/until a real paid Developer ID
       # signs it instead.
-      # Two copies of the same zip. The version is part of one name
-      # (PDT-macOS-<version>.zip) so a downloaded copy says which release it
-      # is; PDT's own flash-drive PDT.app top-up (macappflash.go) finds it by
-      # pattern. The other, PDT.app.zip, has a fixed name - the macOS
-      # counterpart of PDT.exe's direct download - so there's a stable link
-      # to the newest PDT.app that needs no .dmg to open. (A .app is a folder,
-      # and a release asset must be a single file, so a zip is the direct
-      # download; unzipping it yields PDT.app.)
+      # The version is part of the zip's name (PDT-macOS-<version>.zip) so a
+      # downloaded copy says which release it is; PDT's own flash-drive
+      # PDT.app top-up (macappflash.go) finds it by pattern. (A .app is a
+      # folder and a release asset must be one file, so the zip is the direct
+      # download; unzipping it yields PDT.app. A .dmg may replace it later.)
       - name: Zip the app bundle
-        run: |
-          set -euo pipefail
-          ditto -c -k --sequesterRsrc --keepParent build/bin/PDT.app "build/bin/PDT-macOS-${{ needs.validate-version.outputs.version }}.zip"
-          cp "build/bin/PDT-macOS-${{ needs.validate-version.outputs.version }}.zip" build/bin/PDT.app.zip
+        run: ditto -c -k --sequesterRsrc --keepParent build/bin/PDT.app "build/bin/PDT-macOS-${{ needs.validate-version.outputs.version }}.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: macos-build
-          path: |
-            build/bin/PDT-macOS-*.zip
-            build/bin/PDT.app.zip
+          path: build/bin/PDT-macOS-*.zip
           if-no-files-found: error
 
   release:
@@ -210,7 +202,6 @@ jobs:
             dist/windows-build/PDT.exe \
             dist/windows-build/PDT-Setup-*.exe \
             dist/macos-build/PDT-macOS-*.zip \
-            dist/macos-build/PDT.app.zip \
             --repo "${{ github.repository }}" \
             --title "PDT ${{ needs.validate-version.outputs.version }}" \
             --generate-notes

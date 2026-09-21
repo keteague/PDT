@@ -100,9 +100,20 @@ type CopyProgress struct {
 // than scaling with CPU count: this is an I/O-bound workload against a
 // single external device, not a compute-bound one, and too much concurrency
 // risks thrashing a cheap USB controller's own command queue rather than
-// helping - 4 is a reasonable, safely-conservative starting point pending
-// real measurement against actual USB hardware.
-const copyTreeWorkers = 4
+// helping.
+//
+// Two tiers (Ken, 2026-09-20, after a real Write to Flash Drive fell to
+// ~250 KB/s on the thousands of small OpenPrinting PPDs while big files ran
+// at 2-3 MB/s): big files are bandwidth-bound, so only copyTreeLargeWorkers
+// of them ever run at once, but small files are latency-bound - each pays a
+// create + directory-entry + close round trip to the device - so up to
+// copyTreeWorkers workers overlap those, the way robocopy /MT does.
+const (
+	copyTreeWorkers      = 16
+	copyTreeLargeWorkers = 4
+	// copyLargeFileBytes is where a file counts as "big" for the tiers above.
+	copyLargeFileBytes = 4 << 20
+)
 
 // copyBufferSize is copyFile's read/write buffer, well above io.Copy's own
 // default (32KB) to cut the number of read/write syscalls per file - most
@@ -349,6 +360,7 @@ func copyTreeMerge(ctx context.Context, destDir, srcDir string, onProgress func(
 		onProgress(CopyProgress{TotalFiles: totalFiles, TotalBytes: totalBytes, Plan: plan})
 	}
 	jobCh := make(chan copyJob)
+	largeSlots := make(chan struct{}, copyTreeLargeWorkers)
 	var wg sync.WaitGroup
 	for i := 0; i < copyTreeWorkers; i++ {
 		wg.Add(1)
@@ -361,6 +373,16 @@ func copyTreeMerge(ctx context.Context, destDir, srcDir string, onProgress func(
 				if ctx.Err() != nil {
 					copyErr = ctx.Err()
 				} else if needsCopy(j) {
+					// Big files share a few slots; a worker waiting for one
+					// leaves the rest free for the small files.
+					gotSlot := false
+					if j.size >= copyLargeFileBytes {
+						select {
+						case largeSlots <- struct{}{}:
+							gotSlot = true
+						case <-ctx.Done():
+						}
+					}
 					var fileDone int64
 					copyErr = copyFileProgress(ctx, target, j.path, j.modTime, buf, func(n int64) {
 						mu.Lock()
@@ -369,6 +391,9 @@ func copyTreeMerge(ctx context.Context, destDir, srcDir string, onProgress func(
 						report(j.rel, fileDone, j.size)
 						mu.Unlock()
 					})
+					if gotSlot {
+						<-largeSlots
+					}
 					if ctx.Err() == nil {
 						// Tell the dialog this file is finished (even a
 						// failed one, so it leaves the "in transfer" list).
@@ -461,6 +486,13 @@ func copyFileProgress(ctx context.Context, destPath, srcPath string, srcModTime 
 		onRead = func(n int) { onBytes(int64(n)) }
 	}
 	_, copyErr := io.CopyBuffer(dst, ctxReader{ctx: ctx, r: src, onRead: onRead}, buf)
+	// Stamp the source's mtime through the handle that just wrote the file
+	// (where the OS allows), instead of re-opening the file by path after
+	// closing it: on a flash drive that second open/close is another
+	// directory-entry write per file, which adds up over thousands of them.
+	if copyErr == nil {
+		_ = setFileModTime(dst, srcModTime)
+	}
 	closeErr := dst.Close()
 	if copyErr != nil || closeErr != nil {
 		if ctx.Err() != nil {
@@ -471,7 +503,18 @@ func copyFileProgress(ctx context.Context, destPath, srcPath string, srcModTime 
 		}
 		return closeErr
 	}
-	// Chtimes after dst is fully closed - some filesystems only honor a
-	// mtime change once every open handle writing to the path is gone.
+	// Some filesystems only honor a mtime change once every open handle
+	// writing to the path is gone, so check what actually stuck and fall back
+	// to a Chtimes by path only if it didn't (or the handle route wasn't
+	// available). A stat is a cheap read; a redundant Chtimes is a write.
+	if info, err := os.Stat(destPath); err == nil {
+		d := info.ModTime().Sub(srcModTime)
+		if d < 0 {
+			d = -d
+		}
+		if d < 2*time.Second { // FAT/exFAT store 2s/10ms granularity
+			return nil
+		}
+	}
 	return os.Chtimes(destPath, srcModTime, srcModTime)
 }

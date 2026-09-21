@@ -4,6 +4,16 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-21 (v0.9.40) - Faster small-file copies to flash, PDT.app.zip dropped
+
+### Changed
+- Write to Flash Drive copies small files much faster: up to 16 small files are written at once
+  (big files stay at 4 at a time), and each file's date is set through the handle that wrote it
+  instead of re-opening the file afterward - one fewer directory-entry write per file. (A real
+  write had dropped to ~250 KB/s on the thousands of small OpenPrinting PPDs.)
+- Releases no longer attach the fixed-name `PDT.app.zip` added in v0.9.39 - it was the same file as
+  `PDT-macOS-<version>.zip`, which stays as the macOS download.
+
 ## 2026-09-21 (v0.9.39) - Versioned macOS zip, PDT.app.zip direct download, 7-Zip update check via 7-zip.org
 
 ### Changed

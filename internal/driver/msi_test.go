@@ -138,6 +138,54 @@ func TestCopyInfsFromExtractedTree_ErrorsWhenNoInfFound(t *testing.T) {
 	}
 }
 
+// A nested .msi that was pulled into .pdt-infcache only to reach its own
+// .inf files is deleted once those are cached - including one an older PDT
+// version left behind. An .msi in the real Drivers folder is the source
+// archive and is never touched.
+func TestEnsureMsiInfsExtracted_RemovesProcessedMsiFromCacheOnly(t *testing.T) {
+	dir := t.TempDir()
+	cacheRoot := filepath.Join(dir, PdtInfCacheDirName)
+
+	nested := filepath.Join(cacheRoot, "Pkg", "Drivers", "x64", "print64PCL.msi")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nested, []byte("not a real msi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nestedDest := filepath.Join(cacheRoot, "Pkg", "Drivers", "x64", "print64PCL")
+	if err := os.MkdirAll(nestedDest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inf := filepath.Join(nestedDest, "LMUD1o40.inf")
+	if err := os.WriteFile(inf, []byte("; inf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSourceMarker(nestedDest, nested)
+
+	real := filepath.Join(dir, "Real.msi")
+	if err := os.WriteFile(real, []byte("not a real msi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	realDest := filepath.Join(cacheRoot, "Real")
+	if err := os.MkdirAll(realDest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSourceMarker(realDest, real)
+
+	ensureMsiInfsExtracted(dir)
+
+	if _, err := os.Stat(nested); !os.IsNotExist(err) {
+		t.Error("expected the processed nested .msi inside the cache to be removed")
+	}
+	if _, err := os.Stat(inf); err != nil {
+		t.Error("expected the cached .inf to be kept")
+	}
+	if _, err := os.Stat(real); err != nil {
+		t.Error("expected an .msi outside the cache (the real source archive) to be left alone")
+	}
+}
+
 func TestEnsureMsiInfsExtracted_SkipsAlreadyCached(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Foo.msi"), []byte("not a real msi"), 0o644); err != nil {

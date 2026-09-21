@@ -185,9 +185,34 @@ func pruneOrphanedInfCache(root string) {
 	}
 }
 
+// inInfCache reports whether path already lives inside root/PdtInfCacheDirName
+// - i.e. it's a nested archive an earlier ensure*InfsExtracted pass revealed
+// there, rather than a real driver archive a technician put in the Drivers
+// folder.
+func inInfCache(root, path string) bool {
+	rel, err := filepath.Rel(filepath.Join(root, PdtInfCacheDirName), path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// removeProcessedCacheArchive deletes archivePath - a nested archive
+// (Lexmark's inner .msi files) that an earlier pass pulled into the cache
+// only so its own .inf files could then be extracted - once destDir, that
+// extraction's result, carries its finished-entry marker. The cache is meant
+// to hold .inf files only (and travels with Sync), so keeping the archive
+// itself just wastes disk: 152MB for Lexmark's Universal package alone. Safe
+// because nothing reads the file again: the marker's recorded path is only
+// ever used as a string, and lazyextract.ensureLocked re-resolves it to the
+// real file inside a fresh full extraction of the outer archive. Also what
+// clears the .msi files an older PDT version left behind. Best-effort.
+func removeProcessedCacheArchive(destDir, archivePath string) {
+	if _, err := os.Stat(filepath.Join(destDir, pdtSourceMarkerName)); err == nil {
+		_ = os.Remove(archivePath)
+	}
+}
+
 func infCacheDestDir(root, archivePath string) string {
 	cacheRoot := filepath.Join(root, PdtInfCacheDirName)
-	if rel, err := filepath.Rel(cacheRoot, archivePath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if inInfCache(root, archivePath) {
 		return strings.TrimSuffix(archivePath, filepath.Ext(archivePath))
 	}
 

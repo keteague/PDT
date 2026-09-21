@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -154,16 +155,31 @@ func ensureMsiInfsExtracted(root string) {
 		}
 
 		destDir := infCacheDestDir(root, path)
+		inCache := inInfCache(root, path)
 		if prepareInfCacheDest(destDir) {
+			if inCache {
+				removeProcessedCacheArchive(destDir, path) // left by an older PDT version
+			}
 			return nil // already cached (see prepareInfCacheDest)
 		}
 
 		if err := extractInfsFromMsi(path, destDir); err != nil {
 			os.RemoveAll(destDir)
+			if inCache && errors.Is(err, errNoInfInMsi) {
+				// Nothing here for the catalog, now or on any rescan - drop it
+				// from the cache instead of re-running msiexec on it every
+				// scan. Only for this definite "no .inf" outcome, never a
+				// msiexec failure, which might be transient.
+				_ = os.Remove(path)
+				return nil
+			}
 			warnExtraction("%s: could not extract .inf from %s: %v", filepath.Base(root), filepath.Base(path), err)
 			return nil
 		}
 		writeSourceMarker(destDir, path)
+		if inCache {
+			removeProcessedCacheArchive(destDir, path)
+		}
 		return nil
 	})
 }
@@ -240,10 +256,15 @@ func copyInfsFromExtractedTree(srcDir, destDir string) error {
 		return nil
 	})
 	if !foundAny {
-		return fmt.Errorf("no .inf found under %s", srcDir)
+		return fmt.Errorf("%w under %s", errNoInfInMsi, srcDir)
 	}
 	return nil
 }
+
+// errNoInfInMsi marks an .msi that unpacked fine but held no .inf at all (a
+// support link, a phonebook helper - not a driver), as distinct from msiexec
+// itself failing.
+var errNoInfInMsi = errors.New("no .inf found")
 
 // copyPlainFile copies srcPath to destPath, overwriting whatever's already
 // at destPath - no buffering optimization needed, every caller only ever

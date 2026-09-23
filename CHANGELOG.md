@@ -4,6 +4,20 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-22 (v0.9.47) - Cloud Sync upload attribution, macOS Rescan warning
+
+### Added
+- **Rescan dialog's "Remove INF" checkbox now warns on macOS** that not every INF can be extracted
+  there - some are packed inside an MSI (e.g. Lexmark) that PDT can't open outside Windows - and
+  that those need to come from a cloud sync instead, so removing a mac technician's cached INFs
+  doesn't silently strand them without a way to rebuild.
+- **Cloud Sync now records who uploaded each file**, tagging every upload with the technician's own
+  R2 Access Key ID as custom object metadata (each technician already has their own key - see
+  `cloudsync.Config`). A new on-demand "Who?" button on each row in the Cloud Sync tree looks this
+  up with a single targeted request - deliberately never fetched for the whole tree at once, since
+  R2/S3's own bulk object listing can't return per-object metadata at all, only a per-file lookup
+  can.
+
 ## 2026-09-22 (v0.9.46) - macOS/Windows catalog builds no longer conflict in Cloud Sync
 
 ### Fixed

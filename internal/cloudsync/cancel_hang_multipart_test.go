@@ -82,7 +82,7 @@ func TestUploadMultipart_CancelDuringPartUploadReturnsPromptly(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		gotErr = Upload(ctx, nil, core, "test-bucket", "Drivers/", "src.bin", srcPath, func(doneBytes, total int64) {
+		gotErr = Upload(ctx, nil, core, "test-bucket", "Drivers/", "src.bin", srcPath, "tech1", func(doneBytes, total int64) {
 			select {
 			case <-started:
 			default:

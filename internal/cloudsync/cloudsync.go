@@ -43,6 +43,14 @@ const maxParts = 10000
 // sensibly if ever inspected directly in the R2 dashboard.
 const mtimeMetaKey = "mtime"
 
+// uploaderMetaKey is the custom object metadata key Upload attaches to every
+// object it writes, recording the uploading technician's own R2 Access Key
+// ID (each technician has their own - see Config) - not a secret, just an
+// identifier, so a later "who uploaded this?" on-demand lookup (StatUploader)
+// can answer without PDT needing to invent or maintain its own separate
+// technician-identity system. Becomes "X-Amz-Meta-Uploaded-By" on the wire.
+const uploaderMetaKey = "uploaded-by"
+
 // PartSizeFor returns the part size Upload should use for a file of size
 // totalSize - PartSize, unless that many parts would exceed maxParts, in
 // which case the part size grows just enough to stay within it.

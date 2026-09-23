@@ -159,6 +159,40 @@ func (a *App) GetCloudSyncPlan() CloudSyncPlanResult {
 	return CloudSyncPlanResult{Items: items}
 }
 
+// CloudFileUploaderResult is GetCloudFileUploader's own outcome - Uploader
+// empty (Error also empty) means the object predates upload-attribution
+// tagging (see uploaderMetaKey/cloudsync.Upload) and genuinely has no
+// recorded uploader, not a failed lookup.
+type CloudFileUploaderResult struct {
+	Uploader string `json:"uploader"`
+	Error    string `json:"error"`
+}
+
+// GetCloudFileUploader looks up which technician's R2 Access Key ID
+// uploaded relPath's current object in the shared bucket - a single
+// on-demand HEAD request (cloudsync.StatUploader), deliberately never
+// called for every row in the Cloud Sync tree view at once (Ken's own
+// explicit "on demand only" - see StatUploader's own doc comment for why a
+// bulk equivalent isn't even possible against R2/S3's own ListObjectsV2).
+func (a *App) GetCloudFileUploader(relPath string) CloudFileUploaderResult {
+	<-a.ready
+	cfg, err := a.cloudSyncConfig()
+	if err != nil {
+		return CloudFileUploaderResult{Error: err.Error()}
+	}
+	core, err := cloudsync.NewCore(cfg)
+	if err != nil {
+		return CloudFileUploaderResult{Error: err.Error()}
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	uploader, err := cloudsync.StatUploader(ctx, core, cfg.Bucket, a.settings.CloudSync.Prefix, relPath)
+	if err != nil {
+		return CloudFileUploaderResult{Error: err.Error()}
+	}
+	return CloudFileUploaderResult{Uploader: uploader}
+}
+
 // SaveCloudSyncSelection persists exactly which relative paths are
 // currently unchecked in the tree view - called whenever the user toggles a
 // checkbox, so the selection survives closing and reopening the modal (and
@@ -395,7 +429,7 @@ feed:
 
 			var transferErr error
 			if item.Action == cloudsync.ActionUpload {
-				transferErr = cloudsync.Upload(ctx, gate, core, cfg.Bucket, a.settings.CloudSync.Prefix, item.RelPath, localPath, progress)
+				transferErr = cloudsync.Upload(ctx, gate, core, cfg.Bucket, a.settings.CloudSync.Prefix, item.RelPath, localPath, cfg.AccessKeyID, progress)
 			} else {
 				transferErr = cloudsync.Download(ctx, gate, core, cfg.Bucket, a.settings.CloudSync.Prefix, item.RelPath, localPath, item.RemoteSize, progress)
 			}

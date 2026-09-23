@@ -53,6 +53,8 @@ export function GetAppInfo():Promise<main.AppInfo>;
 
 export function GetCatalogStatus():Promise<main.CatalogStatus>;
 
+export function GetCloudFileUploader(arg1:string):Promise<main.CloudFileUploaderResult>;
+
 export function GetCloudSyncPlan():Promise<main.CloudSyncPlanResult>;
 
 export function GetSettings():Promise<main.Settings>;

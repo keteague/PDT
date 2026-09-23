@@ -86,6 +86,19 @@ body.platform-windows .platform-darwin-only {
     font-size: 13px;
 }
 
+/* Same shape as .no-drivers-banner, orange/warning palette instead of the
+   informational blue - matches .catalog-warning's own #ffb454 accent color
+   used for the top-bar's stale-catalog notice. */
+.modal-warning-banner {
+    margin: 8px 0 0;
+    padding: 8px 12px;
+    background: #3a2f1f;
+    border: 1px solid #8a6a2f;
+    border-radius: 4px;
+    color: #ffb454;
+    font-size: 13px;
+}
+
 .toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -1103,6 +1116,36 @@ table.grid td.checkbox-cell {
 .cst-action-synced {
     color: #9fb3c8;
     border-color: #3f5978;
+}
+
+.cst-who-btn {
+    flex: none;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid #3f5978;
+    background: transparent;
+    color: #9fb3c8;
+}
+
+.cst-who-btn:hover:not(:disabled) {
+    background: #1f2d40;
+    color: white;
+}
+
+.cst-who-spacer {
+    flex: none;
+    width: 34px;
+}
+
+.cst-who-result {
+    flex: none;
+    font-size: 11px;
+    color: #9fb3c8;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .cst-children {

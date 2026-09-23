@@ -98,6 +98,10 @@ export function GetCatalogStatus() {
   return window['go']['main']['App']['GetCatalogStatus']();
 }
 
+export function GetCloudFileUploader(arg1) {
+  return window['go']['main']['App']['GetCloudFileUploader'](arg1);
+}
+
 export function GetCloudSyncPlan() {
   return window['go']['main']['App']['GetCloudSyncPlan']();
 }

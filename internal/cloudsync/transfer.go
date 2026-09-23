@@ -101,12 +101,14 @@ func (p *pausingReader) Read(b []byte) (int, error) {
 }
 
 // Upload copies localPath to bucket's prefix+relPath object, attaching
-// localPath's own modification time as object metadata (see mtimeMetaKey)
-// so Download can restore it later. Files at or above MultipartThreshold go
-// through uploadMultipart, which can resume a prior interrupted attempt
+// localPath's own modification time (see mtimeMetaKey) and the uploading
+// technician's own R2 Access Key ID (see uploaderMetaKey) as object
+// metadata, so Download can restore the former and a later on-demand lookup
+// (StatUploader) can answer the latter. Files at or above MultipartThreshold
+// go through uploadMultipart, which can resume a prior interrupted attempt
 // (Cancel, a lost network connection, or PDT simply being closed
 // mid-upload) rather than re-uploading from the very first byte.
-func Upload(ctx context.Context, gate *PauseGate, core *minio.Core, bucket, prefix, relPath, localPath string, onProgress func(done, total int64)) error {
+func Upload(ctx context.Context, gate *PauseGate, core *minio.Core, bucket, prefix, relPath, localPath, uploaderID string, onProgress func(done, total int64)) error {
 	key := prefix + relPath
 	info, err := os.Stat(localPath)
 	if err != nil {
@@ -129,12 +131,30 @@ func Upload(ctx context.Context, gate *PauseGate, core *minio.Core, bucket, pref
 			}
 		}}
 		_, err = core.PutObject(ctx, bucket, key, reader, size, "", "", minio.PutObjectOptions{
-			UserMetadata: map[string]string{mtimeMetaKey: mtimeVal},
+			UserMetadata: map[string]string{mtimeMetaKey: mtimeVal, uploaderMetaKey: uploaderID},
 		})
 		return err
 	}
 
-	return uploadMultipart(ctx, gate, core, bucket, key, localPath, size, mtimeVal, onProgress)
+	return uploadMultipart(ctx, gate, core, bucket, key, localPath, size, mtimeVal, uploaderID, onProgress)
+}
+
+// StatUploader looks up which technician's R2 Access Key ID uploaded
+// bucket's prefix+relPath object (see uploaderMetaKey/Upload), returning ""
+// if the object predates this feature (no such metadata was ever recorded)
+// or otherwise carries no value. This is a single HEAD request
+// (core.StatObject) per call, deliberately never used during BuildPlan's own
+// bulk listing (ListObjectsV2 cannot return per-object UserMetadata at all -
+// only a targeted StatObject can) - callers should only invoke this
+// on-demand, for one file a technician explicitly asks about, not for every
+// row in a tree view.
+func StatUploader(ctx context.Context, core *minio.Core, bucket, prefix, relPath string) (string, error) {
+	key := prefix + relPath
+	info, err := core.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return "", err
+	}
+	return info.UserMetadata[uploaderMetaKey], nil
 }
 
 // partState is what listAndValidateParts already knows about one
@@ -144,11 +164,11 @@ type partState struct {
 	Size int64
 }
 
-func uploadMultipart(ctx context.Context, gate *PauseGate, core *minio.Core, bucket, key, localPath string, size int64, mtimeVal string, onProgress func(done, total int64)) error {
+func uploadMultipart(ctx context.Context, gate *PauseGate, core *minio.Core, bucket, key, localPath string, size int64, mtimeVal, uploaderID string, onProgress func(done, total int64)) error {
 	partSize := PartSizeFor(size)
 	totalParts := int((size + partSize - 1) / partSize)
 
-	uploadID, completed, err := resumeOrCreateUpload(ctx, core, bucket, key, mtimeVal, size, partSize, totalParts)
+	uploadID, completed, err := resumeOrCreateUpload(ctx, core, bucket, key, mtimeVal, uploaderID, size, partSize, totalParts)
 	if err != nil {
 		return err
 	}
@@ -218,7 +238,7 @@ func uploadMultipart(ctx context.Context, gate *PauseGate, core *minio.Core, buc
 // was actually uploaded - resuming it anyway would silently splice old and
 // new content together into one corrupted object, so a mismatch aborts the
 // stale upload and starts a fresh one instead of trusting it.
-func resumeOrCreateUpload(ctx context.Context, core *minio.Core, bucket, key, mtimeVal string, size, partSize int64, totalParts int) (string, map[int]partState, error) {
+func resumeOrCreateUpload(ctx context.Context, core *minio.Core, bucket, key, mtimeVal, uploaderID string, size, partSize int64, totalParts int) (string, map[int]partState, error) {
 	uploadID, err := findExistingUpload(ctx, core, bucket, key)
 	if err != nil {
 		return "", nil, err
@@ -234,7 +254,7 @@ func resumeOrCreateUpload(ctx context.Context, core *minio.Core, bucket, key, mt
 		_ = core.AbortMultipartUpload(ctx, bucket, key, uploadID)
 	}
 	newID, err := core.NewMultipartUpload(ctx, bucket, key, minio.PutObjectOptions{
-		UserMetadata: map[string]string{mtimeMetaKey: mtimeVal},
+		UserMetadata: map[string]string{mtimeMetaKey: mtimeVal, uploaderMetaKey: uploaderID},
 	})
 	if err != nil {
 		return "", nil, err

@@ -564,6 +564,9 @@ document.querySelector('#app').innerHTML = `
           <input type="checkbox" id="rescanRemoveCatalog"> Delete catalog files
         </label>
       </div>
+      <p class="modal-warning-banner" id="rescanRemoveInfMacWarning" hidden>WARNING: Not all INF files can be
+        extracted from within macOS, as some are contained inside of MSI files that can not be opened by PDT
+        (e.g. Lexmark), and you will need to sync these from the cloud.</p>
       <div class="modal-actions">
         <button id="btnRescanClose">Close</button>
         <button class="primary" id="btnRescanConfirm" disabled>Rescan</button>
@@ -2403,6 +2406,13 @@ function wireEvents() {
 
     el('btnRescanClose').addEventListener('click', closeRescanModal);
     el('btnRescanConfirm').addEventListener('click', confirmRescan);
+    // Remove INF genuinely can't recover every driver's own .inf on macOS -
+    // msiexec.exe (the only thing that can open an MSI-packaged driver like
+    // Lexmark's) doesn't exist there at all, unlike 7z-based archives, which
+    // extract identically on either platform. Warn only once the technician
+    // actually opts into deleting the cache, not unconditionally on every
+    // Mac - most manufacturers extract fine there.
+    el('rescanRemoveInf').addEventListener('change', updateRescanRemoveInfWarning);
     el('btnRescanSelectAll').addEventListener('click', () => {
         const paths = [];
         if (rescanTreeRoot) collectRescanLeafPaths(rescanTreeRoot, paths);
@@ -2478,15 +2488,21 @@ function wireEvents() {
         }
     });
     el('cloudSyncTree').addEventListener('click', (e) => {
-        const btn = e.target.closest('.cst-toggle[data-toggle-path]');
-        if (!btn) return;
-        const path = btn.dataset.togglePath;
-        if (cloudSyncCollapsed.has(path)) {
-            cloudSyncCollapsed.delete(path);
-        } else {
-            cloudSyncCollapsed.add(path);
+        const toggleBtn = e.target.closest('.cst-toggle[data-toggle-path]');
+        if (toggleBtn) {
+            const path = toggleBtn.dataset.togglePath;
+            if (cloudSyncCollapsed.has(path)) {
+                cloudSyncCollapsed.delete(path);
+            } else {
+                cloudSyncCollapsed.add(path);
+            }
+            renderCloudSyncTree();
+            return;
         }
-        renderCloudSyncTree();
+        const whoBtn = e.target.closest('.cst-who-btn');
+        if (whoBtn) {
+            lookupCloudFileUploader(whoBtn);
+        }
     });
     // Pause/Resume toggles the same button - unlike Cancel, Pause is
     // reversible mid-transfer (see cloudsync.PauseGate's own doc comment),
@@ -3644,6 +3660,15 @@ function renderCloudSyncLeaf(item) {
         ? `${formatByteSize(item.localSize)} / ${formatByteSize(item.remoteSize)}`
         : formatByteSize(item.action === 'upload' ? item.localSize : item.remoteSize);
     const name = item.relPath.split('/').pop();
+    // "Who uploaded this?" is on-demand only (Ken, 2026-09-22) - looking
+    // this up for every row at once isn't even possible cheaply (R2/S3's
+    // own ListObjectsV2 can't return per-object metadata in bulk - see
+    // cloudsync.StatUploader's own doc comment), so the button only fires
+    // one HEAD request when a technician actually clicks it. Hidden for a
+    // plain "upload" row - the remote side has no object yet to ask about.
+    const whoHtml = item.action !== 'upload'
+        ? `<button type="button" class="cst-who-btn" data-relpath="${attr(item.relPath)}" title="Look up which technician uploaded this file">Who?</button>`
+        : '<span class="cst-who-spacer"></span>';
     return `
         <div class="cst-row ${item.isNew ? 'cst-new' : ''}" title="${attr(item.relPath)}">
           <span class="cst-toggle"></span>
@@ -3652,8 +3677,35 @@ function renderCloudSyncLeaf(item) {
           <span class="cst-name">${attr(name)}</span>
           <span class="cst-size">${sizeText}</span>
           <span class="cst-action ${actionCls}">${actionText}</span>
+          ${whoHtml}
+          <span class="cst-who-result"></span>
         </div>
     `;
+}
+
+// lookupCloudFileUploader answers one row's "Who?" button - a single
+// on-demand StatObject HEAD request via GetCloudFileUploader, never done in
+// bulk for the whole tree (see renderCloudSyncLeaf's own doc comment).
+// Updates that one row's own result span directly rather than calling
+// renderCloudSyncTree, so a slow lookup can't be clobbered by an unrelated
+// checkbox toggle re-rendering the whole tree out from under it.
+async function lookupCloudFileUploader(btn) {
+    const relPath = btn.dataset.relpath;
+    const resultEl = btn.closest('.cst-row')?.querySelector('.cst-who-result');
+    btn.disabled = true;
+    if (resultEl) resultEl.textContent = 'Looking up…';
+    try {
+        const result = await App.GetCloudFileUploader(relPath);
+        if (result.error) {
+            if (resultEl) resultEl.textContent = `Error: ${result.error}`;
+        } else {
+            if (resultEl) resultEl.textContent = result.uploader ? `Uploaded by: ${result.uploader}` : 'Unknown (uploaded before this feature existed)';
+        }
+    } catch (err) {
+        if (resultEl) resultEl.textContent = `Error: ${err && err.message ? err.message : err}`;
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 function renderCloudSyncEntry(node) {
@@ -3871,11 +3923,20 @@ function renderRescanTree() {
     el('btnRescanConfirm').disabled = !Array.from(rescanSelection.values()).some(v => v);
 }
 
+// updateRescanRemoveInfWarning shows rescanRemoveInfMacWarning only once
+// Remove INF is actually checked AND PDT is running on macOS - see its own
+// change listener's doc comment for why the warning is real (msiexec.exe
+// doesn't exist on macOS at all).
+function updateRescanRemoveInfWarning() {
+    el('rescanRemoveInfMacWarning').hidden = !(isMac() && el('rescanRemoveInf').checked);
+}
+
 async function openRescanModal() {
     el('rescanBackdrop').hidden = false;
     el('rescanTree').innerHTML = '';
     el('rescanRemoveInf').checked = false;
     el('rescanRemoveCatalog').checked = false;
+    updateRescanRemoveInfWarning();
     el('btnRescanConfirm').disabled = true;
     rescanSelection = new Map();
 

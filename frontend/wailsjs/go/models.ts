@@ -234,6 +234,20 @@ export namespace main {
 	        this.modelChanges = source["modelChanges"];
 	    }
 	}
+	export class CloudFileUploaderResult {
+	    uploader: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudFileUploaderResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.uploader = source["uploader"];
+	        this.error = source["error"];
+	    }
+	}
 	export class CloudSyncPlanItem {
 	    relPath: string;
 	    action: string;

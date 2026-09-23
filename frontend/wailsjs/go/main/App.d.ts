@@ -105,7 +105,7 @@ export function Platform():Promise<string>;
 
 export function RefreshDriverCatalog():Promise<main.CatalogStatus>;
 
-export function RescanDrivers(arg1:Array<string>,arg2:boolean):Promise<main.CatalogStatus>;
+export function RescanDrivers(arg1:Array<string>,arg2:boolean,arg3:boolean):Promise<main.CatalogStatus>;
 
 export function ResetConfigPath():Promise<void>;
 

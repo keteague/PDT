@@ -183,7 +183,9 @@ func extractKyoceraExe(exePath, destDir string) error {
 	if err := os.MkdirAll(stage1, 0o755); err != nil {
 		return err
 	}
-	if out, err := exec.Command(SevenZipPath, "x", exePath, "-o"+stage1, "-y").CombinedOutput(); err != nil {
+	stage1Cmd := exec.Command(SevenZipPath, "x", exePath, "-o"+stage1, "-y")
+	hideConsoleWindow(stage1Cmd)
+	if out, err := stage1Cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("extracting %s (stage 1): %w: %s", exePath, err, out)
 	}
 
@@ -195,7 +197,9 @@ func extractKyoceraExe(exePath, destDir string) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return err
 	}
-	if out, err := exec.Command(SevenZipPath, "x", textPath, "-o"+destDir, "-y").CombinedOutput(); err != nil {
+	stage2Cmd := exec.Command(SevenZipPath, "x", textPath, "-o"+destDir, "-y")
+	hideConsoleWindow(stage2Cmd)
+	if out, err := stage2Cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("extracting %s (stage 2): %w: %s", exePath, err, out)
 	}
 	return nil
@@ -218,7 +222,9 @@ func extractInfsFromKyoceraExe(exePath, destDir string) error {
 	if err := os.MkdirAll(stage1, 0o755); err != nil {
 		return err
 	}
-	if out, err := exec.Command(SevenZipPath, "x", exePath, "-o"+stage1, "-y").CombinedOutput(); err != nil {
+	stage1Cmd := exec.Command(SevenZipPath, "x", exePath, "-o"+stage1, "-y")
+	hideConsoleWindow(stage1Cmd)
+	if out, err := stage1Cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("extracting %s (stage 1): %w: %s", exePath, err, out)
 	}
 
@@ -230,7 +236,9 @@ func extractInfsFromKyoceraExe(exePath, destDir string) error {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return err
 	}
-	if out, err := exec.Command(SevenZipPath, "x", textPath, "-o"+destDir, "*.inf", "-r", "-y").CombinedOutput(); err != nil {
+	stage2Cmd := exec.Command(SevenZipPath, "x", textPath, "-o"+destDir, "*.inf", "-r", "-y")
+	hideConsoleWindow(stage2Cmd)
+	if out, err := stage2Cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("7z .inf-only extraction of %s (stage 2) failed: %w: %s", exePath, err, out)
 	}
 	return nil

@@ -202,8 +202,8 @@ export function RefreshDriverCatalog() {
   return window['go']['main']['App']['RefreshDriverCatalog']();
 }
 
-export function RescanDrivers(arg1, arg2) {
-  return window['go']['main']['App']['RescanDrivers'](arg1, arg2);
+export function RescanDrivers(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RescanDrivers'](arg1, arg2, arg3);
 }
 
 export function ResetConfigPath() {

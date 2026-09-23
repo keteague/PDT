@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -91,14 +92,29 @@ func openDmgExtracted(dmgPath string) (root string, cleanup func() error, err er
 		return tmpDir, cleanup, nil
 	}
 
-	// First pass produced nothing directly usable - the multi-partition
-	// shape (Kyocera). Look for a real filesystem blob among what got
-	// extracted and dig one level deeper into it.
+	// First pass produced no .pkg/.dmg directly. Either the multi-partition
+	// shape (Kyocera - the extraction produced only raw partition blobs, no
+	// real files at all) needing a second pass into its own *.hfs/*.apfs
+	// blob, or a package shape with no installer whatsoever (confirmed live
+	// against Canon's own "PPD" bucket: a plain folder-per-model tree of
+	// *.PPD.gz files, no .pkg/.dmg/.hfs/.apfs anywhere - see
+	// LocateLoosePPDs's own doc comment) where the real content is already
+	// sitting in tmpDir and this function's job is already done. Without the
+	// hasAnyFile fallback below, every PPD-only package hit this branch,
+	// found no partition blob to dig into, and was wrongly reported as a
+	// hard failure even though 7z had already extracted the real files -
+	// confirmed live as the cause of 100% of Canon's PPD-bucket packages
+	// landing in catalog.<mfg>.json's own FailedPackages on every Windows
+	// build (darwin's hdiutil-based openDmg has no such gate at all, so the
+	// identical package always succeeded there).
 	hfsBlob := findFirstByExt(tmpDir, ".hfs")
 	if hfsBlob == "" {
 		hfsBlob = findFirstByExt(tmpDir, ".apfs")
 	}
 	if hfsBlob == "" {
+		if hasAnyFile(tmpDir) {
+			return tmpDir, cleanup, nil
+		}
 		cleanup()
 		return "", nil, fmt.Errorf("no .pkg/.dmg found in %s, and no .hfs/.apfs partition to look inside", dmgPath)
 	}
@@ -126,6 +142,26 @@ func openDmgExtracted(dmgPath string) (root string, cleanup func() error, err er
 	return innerDir, cleanup, nil
 }
 
+// hasAnyFile reports whether root contains at least one real file anywhere
+// in its tree - openDmgExtracted's own fallback check for a first-pass
+// extraction that found neither a .pkg/.dmg nor an .hfs/.apfs partition blob
+// to dig into, but still produced real content of some other shape (a
+// PPD-only image's own plain *.PPD.gz files - see LocateLoosePPDs) rather
+// than nothing at all.
+func hasAnyFile(root string) bool {
+	found := false
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if !d.IsDir() {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 // dmgOrPkgFoundUnder reports whether root already contains a real .pkg or
 // .dmg - openDmgExtracted's own check for whether a given 7z extraction pass
 // already reached real content, or needs the second, HFS-partition-specific
@@ -140,6 +176,7 @@ func dmgOrPkgFoundUnder(root string) bool {
 // package is justified for) against archivePath into destDir.
 func sevenZipExtract(archivePath, destDir string) error {
 	cmd := exec.Command(SevenZipPath, "x", archivePath, "-o"+destDir, "-y")
+	hideConsoleWindow(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("extracting %s: %w: %s", archivePath, err, strings.TrimSpace(string(out)))
 	}

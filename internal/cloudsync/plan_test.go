@@ -144,6 +144,35 @@ func TestListLocal_IncludesPdtInfCacheFolder(t *testing.T) {
 	}
 }
 
+// TestListLocal_SkipsCatalogFile guards catalog.<mfg>.json's own exclusion
+// from Cloud Sync (driver.IsCatalogFileName) - unlike PdtInfCacheDirName's
+// own contents, a catalog file bakes in a fresh per-build timestamp and the
+// building machine's own view of each source archive's modTime, so two
+// technicians independently rebuilding it for the identical driver repo
+// never produce byte-identical files. It must never be uploaded/compared at
+// all, rather than showing a spurious, never-resolvable Cloud Sync conflict.
+func TestListLocal_SkipsCatalogFile(t *testing.T) {
+	root := t.TempDir()
+	canon := filepath.Join(root, "Canon")
+	if err := os.MkdirAll(canon, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canon, "catalog.canon.json"), []byte(`{"models":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canon, "real.txt"), []byte("real file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sizes := listLocal(root)
+	if _, ok := sizes["Canon/real.txt"]; !ok {
+		t.Errorf("expected the unrelated real file to still be listed, got %v", sizes)
+	}
+	if _, ok := sizes["Canon/catalog.canon.json"]; ok {
+		t.Errorf("expected catalog.canon.json to be skipped entirely, got %v", sizes)
+	}
+}
+
 // TestListLocal_SkipsDotEntries guards the general dotfile/dotfolder skip
 // rule (driver.IsIgnoredDotEntry) - anything dot-prefixed other than
 // PdtInfCacheDirName itself (see TestListLocal_IncludesPdtInfCacheFolder) is
@@ -247,5 +276,36 @@ func TestListRemote_IncludesPdtInfCacheFolder(t *testing.T) {
 	wantRel := "Canon/" + driver.PdtInfCacheDirName + "/Driver/driver.inf"
 	if _, ok := remote[wantRel]; !ok {
 		t.Errorf("expected %s to be listed, got %v", wantRel, remote)
+	}
+}
+
+// TestListRemote_SkipsCatalogFile guards the remote side of catalog.<mfg>.json's
+// own exclusion (see TestListLocal_SkipsCatalogFile) - one already sitting in
+// the bucket from before this exclusion existed must disappear from the plan
+// entirely, not linger as a permanent conflict/upload/download candidate.
+func TestListRemote_SkipsCatalogFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>test-bucket</Name>
+  <Prefix>Drivers/</Prefix>
+  <IsTruncated>false</IsTruncated>
+  <Contents><Key>Drivers/Canon/real.txt</Key><Size>10</Size></Contents>
+  <Contents><Key>Drivers/Canon/catalog.canon.json</Key><Size>4096</Size></Contents>
+</ListBucketResult>`)
+	}))
+	defer srv.Close()
+	core := testCore(t, srv)
+
+	remote, err := listRemote(context.Background(), core, "test-bucket", "Drivers/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := remote["Canon/real.txt"]; !ok {
+		t.Errorf("expected the unrelated real file to still be listed, got %v", remote)
+	}
+	if _, ok := remote["Canon/catalog.canon.json"]; ok {
+		t.Errorf("expected Canon/catalog.canon.json to be skipped, got %v", remote)
 	}
 }

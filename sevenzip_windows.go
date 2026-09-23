@@ -6,12 +6,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"syscall"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"PDT/internal/driver"
 	"PDT/internal/update"
 )
+
+// hideConsoleWindow stops cmd's own console window from flashing up when PDT
+// launches 7z.exe - see internal/driver's own copy of this same helper for
+// the full reasoning (this file can't import an unexported driver func, so
+// it keeps its own copy rather than exporting one just for this).
+func hideConsoleWindow(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+}
 
 const sevenZipRepoSlug = "ip7z/7zip"
 
@@ -69,7 +78,9 @@ func currentSevenZipVersion() (string, error) {
 	if driver.SevenZipPath == "" {
 		return "", fmt.Errorf("7-Zip isn't available")
 	}
-	out, _ := exec.Command(driver.SevenZipPath, "i").CombinedOutput()
+	cmd := exec.Command(driver.SevenZipPath, "i")
+	hideConsoleWindow(cmd)
+	out, _ := cmd.CombinedOutput()
 	m := sevenZipVersionRe.FindSubmatch(out)
 	if m == nil {
 		return "", fmt.Errorf("could not determine the installed 7-Zip version")
@@ -171,13 +182,17 @@ func (a *App) UpdateSevenZip(assetURL string) ApplyUpdateResult {
 
 	names := []string{"7z.exe", "7z.dll", "License.txt"}
 	args := append([]string{"e", installerPath, "-o" + extractDir, "-y"}, names...)
-	if out, err := exec.Command(driver.SevenZipPath, args...).CombinedOutput(); err != nil {
+	extractCmd := exec.Command(driver.SevenZipPath, args...)
+	hideConsoleWindow(extractCmd)
+	if out, err := extractCmd.CombinedOutput(); err != nil {
 		return ApplyUpdateResult{Error: fmt.Sprintf("extracting the new 7-Zip failed: %v: %s", err, out)}
 	}
 
 	// Make sure the new 7z.exe actually runs before it replaces the working
 	// one - a bad download that still extracted must not brick extraction.
-	if out, err := exec.Command(filepath.Join(extractDir, "7z.exe"), "i").CombinedOutput(); err != nil || sevenZipVersionRe.Find(out) == nil {
+	verifyCmd := exec.Command(filepath.Join(extractDir, "7z.exe"), "i")
+	hideConsoleWindow(verifyCmd)
+	if out, err := verifyCmd.CombinedOutput(); err != nil || sevenZipVersionRe.Find(out) == nil {
 		return ApplyUpdateResult{Error: fmt.Sprintf("the downloaded 7-Zip didn't run correctly, so it was not installed (%v)", err)}
 	}
 

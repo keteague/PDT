@@ -86,7 +86,19 @@ type remoteObject struct {
 // the same "and its contents" exception IsIgnoredDotEntry applies to one
 // entry name, extended across the rest of a full path.
 func isIgnoredRemotePath(rel string) bool {
-	for _, seg := range strings.Split(rel, "/") {
+	segs := strings.Split(rel, "/")
+	// A per-manufacturer catalog.<mfg>.json is excluded outright, checked
+	// first and independent of the loop below - see IsCatalogFileName's own
+	// doc comment: unlike PdtInfCacheDirName's contents, it bakes in a fresh
+	// per-build timestamp and the building machine's own view of each source
+	// archive's modTime, so two technicians' independently-rebuilt catalogs
+	// for the identical driver repo are never byte-identical and would
+	// otherwise show a permanent, never-resolvable Cloud Sync conflict.
+	// Cheaply rebuilt locally instead; each machine just keeps its own copy.
+	if driver.IsCatalogFileName(segs[len(segs)-1]) {
+		return true
+	}
+	for _, seg := range segs {
 		if seg == driver.PdtInfCacheDirName {
 			return false
 		}
@@ -174,6 +186,12 @@ func walkLocal(absDir, relDir string, out map[string]int64) {
 			continue
 		}
 		if driver.IsIgnoredDotEntry(entry.Name()) {
+			continue
+		}
+		// catalog.<mfg>.json is excluded from Sync entirely - see
+		// isIgnoredRemotePath's own doc comment (same reasoning, applied to
+		// the local side of the same comparison).
+		if !entry.IsDir() && driver.IsCatalogFileName(entry.Name()) {
 			continue
 		}
 		childAbs := filepath.Join(absDir, entry.Name())

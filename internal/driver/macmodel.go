@@ -376,11 +376,24 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 		}
 		refs := []MacPackageRef{outerRef}
 		for _, p := range chain[1:] { // chain[0] duplicates pkg.Path/outerRef
-			// Interior chain entries are purely informational/display (see
-			// MacPackageRef's own doc comment - never compared against on a
-			// later run), but relativized anyway so a portable catalog.json
-			// never bakes in a local absolute path unnecessarily.
-			refs = append(refs, MacPackageRef{Path: relToDriversRoot(driversRoot, p)})
+			// Interior chain entries live inside a mount point - a real
+			// /Volumes/... path on macOS, or a throwaway pdt-mac-dmg-<random>
+			// extraction directory on Windows (see openDmg's own doc
+			// comment) - that has no stable identity across machines,
+			// platforms, or even two runs on the same Windows machine (a
+			// fresh random suffix every time). Interior entries are already
+			// purely informational/display (MacPackageRef's own doc comment
+			// - never compared against on a later run), so only the real,
+			// content-derived filename is kept here, exactly like the
+			// sub-package refs just below already do (s.Name, not a full
+			// path) for the identical reason. Persisting the full
+			// mount-relative path used to bake that non-portable,
+			// non-deterministic mount point straight into catalog.<mfg>.json,
+			// which made two otherwise-identical catalogs (built on
+			// different platforms, or the same Windows machine twice)
+			// byte-differ and show as a perpetual Cloud Sync conflict
+			// (internal/cloudsync/plan.go's own byte-size diff).
+			refs = append(refs, MacPackageRef{Path: filepath.Base(p)})
 		}
 		for _, s := range subs {
 			refs = append(refs, MacPackageRef{Path: s.Name, Version: s.Version})

@@ -4,6 +4,40 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-22 (v0.9.46) - macOS/Windows catalog builds no longer conflict in Cloud Sync
+
+### Fixed
+- **Every Canon "PPD" bucket package failed 100% of the time when the macOS-shaped catalog was
+  built on Windows** - `openDmgExtracted`'s own mount-emulation gate (a 7z.exe extraction standing
+  in for a live `/Volumes/...` mount) required a `.pkg` or `.dmg` to be found at the top level
+  before declaring success, falling back to hunting for a `.hfs`/`.apfs` partition blob otherwise.
+  A PPD-only package (a plain folder-per-model tree of `*.PPD.gz` files, no installer at all) has
+  neither, so every one of these packages was wrongly reported as a hard failure even though 7z
+  had already extracted the real files. macOS's own `hdiutil attach` has no such gate, so the
+  identical package always succeeded there. `openDmgExtracted` now falls back to accepting the
+  extraction as-is whenever it produced real file content but no partition blob to dig into.
+- **`catalog.<mfg>.json`'s provenance chain baked in a mount-point path that could never match
+  across machines** - a real `/Volumes/...` path on macOS, or a `pdt-mac-dmg-<random>` throwaway
+  extraction directory on Windows (a fresh random suffix every single run). Interior chain entries
+  are purely informational and never read back by anything (`IsCurrent`, Deploy), so they now
+  persist just the real filename instead - matching how a sub-package's own ref already worked.
+- **A rebuilt `catalog.<mfg>.json` could conflict in Cloud Sync even between two technicians on the
+  identical local Drivers folder** - every family's provenance carries a fresh `indexedAt` build
+  timestamp (no `omitempty`), and the outer package's own `modTime` reflects each machine's local
+  filesystem view of the same vendor archive - neither is guaranteed to match between two
+  independent rebuilds even when the actual driver content is identical, and Cloud Sync's conflict
+  check is a plain byte-size comparison. `catalog.<mfg>.json` is now excluded from Cloud Sync
+  entirely (both the upload and the bucket-listing side) - it's a cheap, fully local rebuildable
+  cache, not something that needs to travel between technicians, and excluding it removes the
+  false-conflict risk outright rather than chasing every field that could vary between builds.
+- **7z.exe/msiexec.exe flashed a visible console window on Windows** every time a driver archive
+  was extracted during a Refresh/Rescan or an on-demand Deploy-time extraction - confirmed live as
+  the cause of a "Driver catalog rescanned" log line appearing to fire before the console windows
+  for the still-running background mac-catalog rebuild had even closed. `CREATE_NO_WINDOW` is now
+  set on every `exec.Command` that launches either tool (`hideConsoleWindow`, a small
+  Windows-only/no-op-elsewhere helper pair) - suppresses only the spawned process's own window,
+  with no effect on `CombinedOutput`'s captured output.
+
 ## 2026-09-21 (v0.9.45) - .pdt-infcache no longer keeps nested .msi files
 
 ### Fixed

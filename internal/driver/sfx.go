@@ -154,6 +154,7 @@ func extractSfxArchive(archivePath, destDir string) error {
 		return err
 	}
 	cmd := exec.Command(SevenZipPath, "x", archivePath, "-o"+destDir, "-y")
+	hideConsoleWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("7z extraction of %s failed: %w: %s", archivePath, err, out)
@@ -223,6 +224,7 @@ func extractInfsFromSfxArchive(archivePath, destDir string) error {
 		return err
 	}
 	cmd := exec.Command(SevenZipPath, "x", archivePath, "-o"+destDir, "*.inf", "*.msi", "-r", "-y")
+	hideConsoleWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("7z .inf-only extraction of %s failed: %w: %s", archivePath, err, out)

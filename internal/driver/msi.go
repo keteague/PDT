@@ -87,6 +87,7 @@ func ensureMsiExtracted(root string) {
 // their real names/paths under destDir without installing anything.
 func extractMsi(msiPath, destDir string) error {
 	cmd := exec.Command("msiexec.exe", "/a", msiPath, "/qn", "TARGETDIR="+destDir)
+	hideConsoleWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("msiexec /a on %s failed: %w: %s", msiPath, err, out)

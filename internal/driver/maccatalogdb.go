@@ -50,7 +50,7 @@ type MacManufacturerCatalog struct {
 	// written before this field existed - LoadMacManufacturerCatalog treats
 	// that the same as "no extra versions cached yet," never a parse error.
 	ExtraProvenance map[string]map[string]MacFamilyProvenance `json:"extraProvenance,omitempty"`
-	Models          map[string][]MacCatalogVariant             `json:"models"`
+	Models          map[string][]MacCatalogVariant            `json:"models"`
 	// FailedPackages: family -> packagePath -> the outer package's own
 	// path/modTime/size at the moment indexFamilyPackage tried and failed to
 	// find any real PPD content in it - confirmed live as a real, live gap
@@ -151,6 +151,27 @@ type MacCatalogVariant struct {
 func CatalogFileName(manufacturer string) string {
 	folder := strings.ToLower(strings.ReplaceAll(manufacturer, " ", ""))
 	return "catalog." + folder + ".json"
+}
+
+// IsCatalogFileName reports whether name (a bare file name, not a full path)
+// is a per-manufacturer catalog file in the shape CatalogFileName produces -
+// "catalog.<anything>.json". Used by Cloud Sync (internal/cloudsync/plan.go)
+// to exclude catalog.<mfg>.json from being synced at all: unlike
+// PdtInfCacheDirName's own contents (deterministic .inf bytes, genuinely
+// worth sharing - see IsIgnoredDotEntry's own doc comment), a catalog file
+// bakes in a fresh IndexedAt build timestamp on every rebuild plus the
+// building machine's own view of each source archive's modTime, so two
+// technicians independently rebuilding a catalog for the identical
+// underlying driver repo never produce byte-identical files - Cloud Sync's
+// own byte-size conflict check (plan.go) then flags a permanent,
+// never-resolvable conflict for a file that isn't actually wrong. Cheaply
+// rebuildable locally on demand (see MacManufacturerCatalog's own doc
+// comment - a cache, not user data), so excluding it from Sync entirely
+// costs nothing but a few seconds of local re-indexing, once per machine per
+// real change.
+func IsCatalogFileName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasPrefix(lower, "catalog.") && strings.HasSuffix(lower, ".json")
 }
 
 // LoadMacManufacturerCatalog reads path's own catalog file - an empty,

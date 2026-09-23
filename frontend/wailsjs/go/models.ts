@@ -102,6 +102,7 @@ export namespace driver {
 	export class RescanManufacturer {
 	    name: string;
 	    packages: RescanPackage[];
+	    hasMacCatalogFile: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new RescanManufacturer(source);
@@ -111,6 +112,7 @@ export namespace driver {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.packages = this.convertValues(source["packages"], RescanPackage);
+	        this.hasMacCatalogFile = source["hasMacCatalogFile"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -41,7 +41,7 @@ func TestLive_ListingParses(t *testing.T) {
 			t.Errorf("no remote folder for %s", m)
 			continue
 		}
-		jobs, err := walk(context.Background(), client, base.JoinPath(remote+"/"), remote, t.TempDir())
+		jobs, err := walk(context.Background(), client, base.JoinPath(remote+"/"), remote, t.TempDir(), nil)
 		if err != nil {
 			t.Errorf("%s: %v", m, err)
 			continue

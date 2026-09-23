@@ -60,6 +60,15 @@ func modelCandidatesWithSource(macCatalog driver.MacCatalog, macIndex driver.Mac
 		if name == "" {
 			return
 		}
+		// canonicalizeManufacturerPrefix applies here, for every source, not
+		// just OpenPrinting's - a real local Ricoh mac package's own PPDs
+		// carry the identical "RICOH ..." vs "Ricoh ..." *NickName casing
+		// inconsistency OpenPrinting has (confirmed live, Ken, 2026-09-23:
+		// a real "zTest Ricoh" Model dropdown showed "RICOH IM C3510" and
+		// "Ricoh IM C3510" as two separate entries) - indexFamilyPackage
+		// persists *NickName verbatim, with no casing normalization of its
+		// own, so without this the dedup key below still splits on case.
+		name = canonicalizeManufacturerPrefix(name, manufacturer)
 		if _, ok := sources[name]; !ok {
 			sources[name] = nil
 			order = append(order, name)
@@ -95,10 +104,9 @@ func modelCandidatesWithSource(macCatalog driver.MacCatalog, macIndex driver.Mac
 		if name == "" {
 			name = strings.ReplaceAll(strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".gz"), ".ppd"), "_", " ")
 		}
-		if driver.IsExcludedModelVariant(name) {
+		if driver.IsExcludedModelVariant(name, path) {
 			continue
 		}
-		name = canonicalizeManufacturerPrefix(name, manufacturer)
 		add(driver.NormalizeModelName(name), rel(path))
 	}
 

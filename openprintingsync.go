@@ -114,6 +114,7 @@ func (a *App) SyncOpenPrintingPPDs() OpenPrintingSyncResult {
 	res, err := openprinting.Sync(ctx, openprinting.Options{
 		Manufacturers: driver.Manufacturers,
 		DestRoot:      filepath.Join(driversRoot(), "macOS", "OpenPrinting"),
+		SkipFile:      driver.IsExcludedOpenPrintingFilename,
 		Progress: func(p openprinting.Progress) {
 			progMu.Lock()
 			defer progMu.Unlock()

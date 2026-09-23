@@ -132,6 +132,50 @@ func TestSync_MirrorsFlattensKeepsTimestampsAndSkipsUnchanged(t *testing.T) {
 	}
 }
 
+// TestSync_SkipFileExcludesMatches guards Options.SkipFile (Ken, 2026-09-23):
+// a real Japan-market OpenPrinting PPD (Sharp's own confirmed "-jp" filename
+// convention, decidable from the name alone, unlike its *NickName content)
+// should never even be downloaded, not just hidden from the dropdowns
+// afterward - openprintingsync.go (package main) wires this to
+// driver.IsExcludedOpenPrintingFilename, but this package stays agnostic of
+// that rule, so the test supplies an equivalent plain filename check itself.
+func TestSync_SkipFileExcludesMatches(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/PPD/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/PPD/":
+			fmt.Fprint(w, indexPage(dirRow("Sharp", "2021-09-02 18:59")))
+		case "/PPD/Sharp/":
+			fmt.Fprint(w, indexPage(
+				fileRow("Sharp-MX-2300FG-ps.ppd", "2021-09-02 18:59", "10K"),
+				fileRow("Sharp-MX-2300FG-ps-jp.ppd", "2021-09-02 18:59", "10K"),
+			))
+		case "/PPD/Sharp/Sharp-MX-2300FG-ps.ppd":
+			fmt.Fprint(w, "*PPD-Adobe: 4.3\n")
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dest := t.TempDir()
+	skip := func(name string) bool { return strings.Contains(strings.ToLower(name), "-jp.") }
+	res, err := Sync(context.Background(), Options{BaseURL: srv.URL + "/PPD/", Manufacturers: []string{"Sharp"}, DestRoot: dest, SkipFile: skip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Downloaded != 1 || res.Failed != 0 {
+		t.Fatalf("got %+v, want exactly the non-jp file downloaded", res)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "Sharp", "Sharp-MX-2300FG-ps.ppd")); err != nil {
+		t.Errorf("the non-jp file should exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "Sharp", "Sharp-MX-2300FG-ps-jp.ppd")); err == nil {
+		t.Error("the -jp file should never have been downloaded")
+	}
+}
+
 func TestSync_CancelStops(t *testing.T) {
 	var ua atomic.Value
 	var hits atomic.Int32

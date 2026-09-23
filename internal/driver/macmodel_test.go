@@ -71,28 +71,37 @@ func TestIsJapanMarketOnly(t *testing.T) {
 	}
 }
 
-// TestIsExcludedModelVariant guards the OpenPrinting-PPD Model dropdown
-// path (modelCandidatesWithSource, package main) getting the same
-// exclusions indexFamilyPackage's own local-package path already applies
+// TestIsExcludedModelVariant guards the OpenPrinting-PPD Model/Driver
+// dropdown paths (modelCandidatesWithSource, package main;
+// scoredOpenPrintingCandidates, macresolve.go) getting the same exclusions
+// indexFamilyPackage's own local-package path already applies
 // (isJapanMarketOnly) plus Xerox's own real FFPS print-server variant,
-// confirmed against real OpenPrinting data (2026-09-21).
+// confirmed against real OpenPrinting data (2026-09-21) - and, since Ken,
+// 2026-09-23, Sharp/Ricoh's own filename-only Japan-market convention
+// (IsExcludedOpenPrintingFilename), which no *NickName text ever carries.
 func TestIsExcludedModelVariant(t *testing.T) {
 	tests := []struct {
-		name string
-		want bool
+		nickName string
+		path     string
+		want     bool
 	}{
-		{"Xerox D125 Copier-Printer", false},
-		{"Xerox D125 Copier-Printer FFPS", true},
-		{"Xerox D110 Printer FFPS", true},
+		{nickName: "Xerox D125 Copier-Printer", want: false},
+		{nickName: "Xerox D125 Copier-Printer FFPS", want: true},
+		{nickName: "Xerox D110 Printer FFPS", want: true},
 		// Case-insensitive, and a real trailing token only, not a substring.
-		{"Xerox D125 Printer ffps", true},
-		{"Xerox FFPSomethingElse", false},
-		{"RICOH IM C3510 JPN", true},
-		{"RICOH IM C3510", false},
+		{nickName: "Xerox D125 Printer ffps", want: true},
+		{nickName: "Xerox FFPSomethingElse", want: false},
+		{nickName: "RICOH IM C3510 JPN", want: true},
+		{nickName: "RICOH IM C3510", want: false},
+		// Sharp's own real PPDs never say "Japan" in the NickName at all -
+		// only the filename carries it.
+		{nickName: "Sharp MX-2300FG PS, 1.1", path: "/d/Sharp/Sharp-MX-2300FG-ps-jp.ppd", want: true},
+		{nickName: "Sharp MX-2300FG PS, 1.1", path: "/d/Sharp/Sharp-MX-2300FG-ps.ppd", want: false},
+		{nickName: "", path: "/d/Ricoh/Ricoh-IM_2500_JPN.ppd", want: true},
 	}
 	for _, tt := range tests {
-		if got := IsExcludedModelVariant(tt.name); got != tt.want {
-			t.Errorf("IsExcludedModelVariant(%q) = %v, want %v", tt.name, got, tt.want)
+		if got := IsExcludedModelVariant(tt.nickName, tt.path); got != tt.want {
+			t.Errorf("IsExcludedModelVariant(%q, %q) = %v, want %v", tt.nickName, tt.path, got, tt.want)
 		}
 	}
 }
@@ -854,8 +863,8 @@ func TestNormalizeModelName(t *testing.T) {
 // on macOS, which is what surfaced the raw package name as a "driver".
 func TestLookupMacModel_FindsWindowsStyleKyoceraNameByModelNumber(t *testing.T) {
 	idx := MacModelIndex{"Kyocera": {
-		"CS 2554ci": {{Label: "CS 2554ci (Driver)"}},
-		"CS 2553ci": {{Label: "CS 2553ci (Driver)"}},
+		"CS 2554ci": {{Label: "CS 2554ci (KPDL)"}},
+		"CS 2553ci": {{Label: "CS 2553ci (KPDL)"}},
 	}}
 	key, _, ok := lookupMacModel(idx, "Kyocera", "TASKalfa 2554ci")
 	if !ok || key != "CS 2554ci" {

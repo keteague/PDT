@@ -84,9 +84,9 @@ func TestModelCandidatesWithSource_DedupsManufacturerPrefixCase(t *testing.T) {
 }
 
 func TestMacDriverProblem(t *testing.T) {
-	idx := driver.MacModelIndex{"Kyocera": {"CS 2554ci": {{Label: "CS 2554ci (Driver)", SourcePackagePath: "/d/k.dmg"}}}}
+	idx := driver.MacModelIndex{"Kyocera": {"CS 2554ci": {{Label: "CS 2554ci (KPDL)", SourcePackagePath: "/d/k.dmg"}}}}
 	cat := driver.MacCatalog{}
-	if p := macDriverProblem(cat, idx, "Kyocera", "CS 2554ci", "CS 2554ci (Driver)"); p != "" {
+	if p := macDriverProblem(cat, idx, "Kyocera", "CS 2554ci", "CS 2554ci (KPDL)"); p != "" {
 		t.Errorf("valid pick reported a problem: %s", p)
 	}
 	if p := macDriverProblem(cat, idx, "Kyocera", "CS 2554ci", driver.GenericPostScriptLabel); p != "" {

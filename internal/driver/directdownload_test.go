@@ -52,10 +52,12 @@ func TestMatchDirectDownloadFamily_Mac(t *testing.T) {
 		{"Canon", "Canon iR-ADV C5840/5850 (UFR II)", "UFR II", true},
 		{"Canon", "Canon iR-ADV C5840/5850 (PostScript)", "PS", true},
 		{"Canon", "Canon iR-ADV C5840/5850 (Generic PPD)", "PPD", true},
-		// Sole-family manufacturers match unconditionally, even against the
-		// fully generic "(Driver)" label these real mac variants actually
-		// carry - there's nothing more specific to check.
-		{"Kyocera", "Kyocera CS 255c (Driver)", "KPDL", true},
+		// Sole-family manufacturers match unconditionally, regardless of the
+		// label's own text - there's nothing more specific to check. Kyocera's
+		// real label actually does carry its language ("(KPDL)" - Ken,
+		// 2026-09-23), but Sharp/Xerox below carry a fully generic "(Driver)"
+		// - either way, matching doesn't depend on it.
+		{"Kyocera", "Kyocera CS 255c (KPDL)", "KPDL", true},
 		{"Ricoh", "RICOH IM C3000 (PostScript)", "PPD", true},
 		{"Sharp", "SHARP MX-C55 (Driver)", "PPD", true},
 		// Xerox's own sole mac family - added 2026-09-20 - matches

@@ -4,6 +4,30 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-23 (v0.9.48) - macOS Driver/Model dropdown cleanup
+
+### Fixed
+- **Kyocera's macOS Driver field showed a generic "(Driver)" suffix** instead of its real printer
+  language - a real macOS install actually shows "(KPDL)". Kyocera's language token now maps to
+  "KPDL" like every other manufacturer's real language name, instead of the earlier "sole real
+  family, nothing to disambiguate" placeholder.
+- **Ricoh (and any manufacturer) could show the same model twice in the Model dropdown** purely
+  from casing - real Ricoh PPDs spell the manufacturer name both "RICOH ..." and "Ricoh ..." across
+  different files. The existing case-canonicalization fix only applied to OpenPrinting-sourced
+  models; it's now applied to every source (local macOS package, OpenPrinting, Windows) before
+  models are deduplicated.
+- **A Japan-market OpenPrinting variant could still appear in the macOS Driver dropdown** even
+  though the identical exclusion already kept it out of the Model dropdown - the two dropdowns used
+  different candidate-gathering code, and only one applied the exclusion.
+- **OpenPrinting-sourced Driver entries lost their "(OP)" marker** distinguishing a community PPD
+  from a real vendor driver, once a cached `*NickName` became the preferred label - the marker now
+  applies to both label forms again; anything already saved under the un-tagged form still resolves.
+- **Sharp and Ricoh both ship real Japan-market-only OpenPrinting PPDs whose own `*NickName` never
+  says so** ("Sharp MX-2300FG PS, 1.1" - no mention of Japan at all) - only their filenames carry the
+  marker (Sharp: trailing "-jp"; Ricoh: trailing "_JPN"). These are now excluded from the Model/Driver
+  dropdowns by filename, and skipped during OpenPrinting sync itself so they're never downloaded
+  going forward (nothing already on disk is deleted).
+
 ## 2026-09-22 (v0.9.47) - Cloud Sync upload attribution, macOS Rescan warning
 
 ### Added

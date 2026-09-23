@@ -21,7 +21,15 @@ var macLanguageDisplayNames = map[string]string{
 	"UFRII":   "UFR II",
 	"PS":      "PostScript",
 	"PPD":     "Generic PPD",
-	"Kyocera": "Driver",
+	// Kyocera's real mac PPD is genuinely KPDL-language (confirmed live,
+	// Ken, 2026-09-23: a real macOS install's own Driver-field text reads
+	// "TASKalfa 4054ci (KPDL)") - not a fully generic "Driver" bucket the
+	// way MacPS/Xerox/Toshiba/Lexmark below are. It only ever had "Driver"
+	// here because Kyocera ships just one real mac family, with nothing to
+	// disambiguate it from - but "one real choice" isn't the same as "no
+	// real language name to show", and Ken explicitly wants the Driver
+	// field (unlike Model) to keep showing it even so.
+	"Kyocera": "KPDL",
 	"MacPS":   "Driver",
 	"Xerox":   "Driver",
 	"Toshiba": "Driver",
@@ -41,8 +49,7 @@ var macLanguageDisplayNames = map[string]string{
 func init() {
 	// Every real Ricoh download's own PPDs declare a *NickName ending in
 	// " PS" (confirmed live across all 9 modern downloads plus the legacy
-	// RicohPrinterDrivers bundle) - all genuinely PostScript, unlike
-	// Kyocera's single non-language-specific "Driver" bucket. Registered
+	// RicohPrinterDrivers bundle) - all genuinely PostScript. Registered
 	// here rather than inline in the literal map above so ricohFamilyTokens
 	// (macricoh.go) stays the one place that list needs maintaining.
 	for _, tok := range ricohFamilyTokens {
@@ -286,17 +293,45 @@ func isJapanMarketOnly(nickName string) bool {
 // it isn't a driver PDT's own macOS Deployer can actually install.
 var ffpsVariantSuffixRe = regexp.MustCompile(`(?i)\bFFPS$`)
 
-// IsExcludedModelVariant reports whether nickName names a real PPD/model
-// variant that should never be offered as a selectable Model at all -
-// Japan-market-only SKUs (isJapanMarketOnly) or Xerox's own FFPS print-
-// server variant (ffpsVariantSuffixRe). Exported for
-// modelCandidatesWithSource's own OpenPrinting-PPD path (modelcandidate.go,
-// package main) - the one Model-dropdown source that never goes through
-// indexFamilyPackage's own inline isJapanMarketOnly check above, since it
-// lists PPDs OpenPrinting itself ships rather than ones extracted from a
-// local vendor package.
-func IsExcludedModelVariant(nickName string) bool {
-	return isJapanMarketOnly(nickName) || ffpsVariantSuffixRe.MatchString(nickName)
+// openPrintingJapanFilenameRe matches a Japan-market-only OpenPrinting PPD
+// purely by its own filename - confirmed real conventions from two
+// different manufacturers (Ken, 2026-09-23): Sharp's own lowercase,
+// hyphen-glued "-jp" (54 real files, e.g. "Sharp-MX-2300FG-ps-jp.ppd") and
+// Ricoh's own uppercase, underscore-glued "_JPN" (160 real files, e.g.
+// "Ricoh-IM_2500_JPN.ppd"). Unlike isJapanMarketOnly, this can't be a
+// NickName check - Sharp's own real PPDs never mention Japan in their
+// *NickName at all ("Sharp MX-2300FG PS, 1.1"), only the filename carries
+// the marker - and it's exactly what lets ppdsync.go's own sync step
+// (internal/openprinting, which only ever sees a remote directory listing,
+// never PPD content) skip these before they're downloaded at all, not just
+// hide them from the dropdowns afterward.
+var openPrintingJapanFilenameRe = regexp.MustCompile(`(?i)[-_]jpn?\.ppd(\.gz)?$`)
+
+// IsExcludedOpenPrintingFilename reports whether path (or a bare filename)
+// names a real OpenPrinting PPD that should never be downloaded or offered
+// at all, decidable from its own name alone - see
+// openPrintingJapanFilenameRe. Exported for internal/openprinting's own
+// Sync (via Options.SkipFile, wired in openprintingsync.go) - the one
+// exclusion check that package can run without importing this one wholesale
+// or reading any PPD content, since a remote directory listing is all Sync
+// ever sees before deciding what to fetch.
+func IsExcludedOpenPrintingFilename(path string) bool {
+	return openPrintingJapanFilenameRe.MatchString(path)
+}
+
+// IsExcludedModelVariant reports whether a real PPD/model variant should
+// never be offered as a selectable Model/Driver at all - Japan-market-only
+// SKUs, whether the marker lives in the *NickName (isJapanMarketOnly) or
+// only in the filename (IsExcludedOpenPrintingFilename - Sharp's own real
+// PPDs never say so in their NickName), or Xerox's own FFPS print-server
+// variant (ffpsVariantSuffixRe). Exported for modelCandidatesWithSource's
+// own OpenPrinting-PPD path (modelcandidate.go, package main) and
+// scoredOpenPrintingCandidates (macresolve.go) - the two Model/Driver
+// dropdown sources that never go through indexFamilyPackage's own inline
+// isJapanMarketOnly check above, since they list PPDs OpenPrinting itself
+// ships rather than ones extracted from a local vendor package.
+func IsExcludedModelVariant(nickName, path string) bool {
+	return isJapanMarketOnly(nickName) || ffpsVariantSuffixRe.MatchString(nickName) || IsExcludedOpenPrintingFilename(path)
 }
 
 // indexFamilyPackage inspects family's own newest package (pkg) once,

@@ -84,7 +84,16 @@ func macDriverCandidateSource(absPath string) string {
 func openPrintingCandidateWithSource(catalog driver.MacCatalog, manufacturer string, d driver.OpenPrintingCandidateDetail) MacDriverCandidate {
 	path := macDriverCandidateSource(d.Path)
 	if nick := catalog.OpenPrintingNickNames[manufacturer][d.Path]; nick != "" {
-		return MacDriverCandidate{Label: nick, Source: d.Label + "\n" + path}
+		// " (OP)" marks this as an OpenPrinting community PPD, not a real
+		// vendor-branded driver package - ppdMatchLabel's own doc comment
+		// (Ken, 2026-09-16) already established this convention for the
+		// filename-derived label (d.Label, below); it just never got
+		// carried over when a cached *NickName became the preferred label
+		// (GitHub issue #16 follow-up), leaving a real vendor driver's
+		// "(PostScript)" and an OpenPrinting driver for the identical
+		// language sitting side by side with no visible difference
+		// (confirmed live, Ken, 2026-09-23, against a real Ricoh model).
+		return MacDriverCandidate{Label: nick + " (OP)", Source: d.Label + "\n" + path}
 	}
 	return MacDriverCandidate{Label: d.Label, Source: path}
 }

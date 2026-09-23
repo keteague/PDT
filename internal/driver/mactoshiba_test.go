@@ -60,10 +60,12 @@ func TestMacVariantLabel_ToshibaShowsTheRealDriverNameAlone(t *testing.T) {
 	if got := macVariantLabel("TOSHIBA e-STUDIO2525AC", "Toshiba", "TOSHIBA_ColorMFP_S2.gz", "2026-01-15"); got != "TOSHIBA ColorMFP-S2 (2026-01-15)" {
 		t.Errorf(`macVariantLabel(..., "2026-01-15") = %q, want "TOSHIBA ColorMFP-S2 (2026-01-15)"`, got)
 	}
-	// Every other manufacturer (single-token family, e.g. Kyocera/Xerox) is
-	// unaffected - still "<model> (<generic filler>)".
-	if got := macVariantLabel("Kyocera ECOSYS M3655idn", "Kyocera", "some_kyocera_ppd.PPD.gz", ""); got != "Kyocera ECOSYS M3655idn (Driver)" {
-		t.Errorf(`macVariantLabel(..., "Kyocera", ...) = %q, want "Kyocera ECOSYS M3655idn (Driver)" (unaffected by the Toshiba-only fix)`, got)
+	// Every other manufacturer (single-token family, e.g. Xerox) is
+	// unaffected - still "<model> (<generic filler>)". Kyocera is the one
+	// exception (Ken, 2026-09-23): its sole real family shows its actual
+	// "KPDL" language, not a generic filler - see macLanguageDisplayNames.
+	if got := macVariantLabel("Kyocera ECOSYS M3655idn", "Kyocera", "some_kyocera_ppd.PPD.gz", ""); got != "Kyocera ECOSYS M3655idn (KPDL)" {
+		t.Errorf(`macVariantLabel(..., "Kyocera", ...) = %q, want "Kyocera ECOSYS M3655idn (KPDL)" (unaffected by the Toshiba-only fix)`, got)
 	}
 	// Canon's own real, genuinely distinct families keep their real names.
 	if got := macVariantLabel("Canon iR-ADV C5840/5850", "UFRII", "CNPZUIRAC5840ZU.ppd.gz", ""); got != "Canon iR-ADV C5840/5850 (UFR II)" {

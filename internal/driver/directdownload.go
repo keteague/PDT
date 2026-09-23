@@ -65,15 +65,16 @@ type directDownloadFamily struct {
 //     manufacturer's own *sole* real family for Direct Downloads' purposes
 //     (Kyocera and Sharp each genuinely ship only one real mac package;
 //     Ricoh ships several, but Ken's own example gives one representative
-//     URL, not per-model coverage) - and critically, for every one of
-//     these three, the real Driver-field label a technician would actually
-//     see is either fully generic ("<model> (Driver)" - Kyocera, Sharp, via
-//     macLanguageDisplayNames' own "MacPS"/"Kyocera" -> "Driver" mapping)
-//     or not usefully distinguishing for this narrower purpose (Ricoh's
-//     real labels all read "(PostScript)" regardless of which of its many
-//     real downloads produced them) - there is no more specific real text
-//     to match against, confirmed by reading macLanguageDisplayNames
-//     itself, not assumed.
+//     URL, not per-model coverage) - and, having only one real family, none
+//     of these three needs a Tokens check at all (matches unconditionally -
+//     see the entries themselves below) regardless of what the Driver-field
+//     label actually reads: Kyocera's genuinely does show its real language
+//     ("<model> (KPDL)", confirmed live, Ken, 2026-09-23), Sharp's is fully
+//     generic ("<model> (Driver)", via macLanguageDisplayNames' own
+//     "MacPS" -> "Driver" mapping), and Ricoh's real labels all read
+//     "(PostScript)" regardless of which of its many real downloads
+//     produced them - not usefully distinguishing for this narrower
+//     purpose either way.
 var directDownloadFamilies = map[string]map[string][]directDownloadFamily{
 	"Canon": {
 		DirectDownloadPlatformWindows: {

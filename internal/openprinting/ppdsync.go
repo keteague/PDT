@@ -105,6 +105,17 @@ type Options struct {
 	DestRoot      string   // Drivers/macOS/OpenPrinting
 	Concurrency   int
 	Progress      func(Progress)
+	// SkipFile, when set, is called with each real PPD's own filename
+	// (never a directory) as it's discovered on the site - returning true
+	// skips it, before it's ever downloaded. This package stays deliberately
+	// PDT-agnostic (a plain HTTP mirror), so it never hardcodes a
+	// manufacturer-specific rule itself - openprintingsync.go (package main)
+	// wires this to driver.IsExcludedOpenPrintingFilename, the same
+	// filename-only check the Model/Driver dropdowns already apply to
+	// whatever's already on disk (see that function's own doc comment for
+	// why this can only be filename-based, not *NickName-based, at sync
+	// time - a directory listing carries no PPD content to read yet).
+	SkipFile func(name string) bool
 }
 
 // PlanFile is one file Sync is about to download. Size is estimated from the
@@ -245,7 +256,7 @@ func Sync(ctx context.Context, opt Options) (Result, error) {
 		emit(Progress{Phase: "listing", Manufacturer: m})
 		destDir := localFolder(opt.DestRoot, m)
 		sweepPartials(destDir)
-		found, err := walk(ctx, client, baseURL.JoinPath(remote+"/"), remote, destDir)
+		found, err := walk(ctx, client, baseURL.JoinPath(remote+"/"), remote, destDir, opt.SkipFile)
 		if err != nil {
 			if ctx.Err() != nil {
 				return res, ctx.Err()
@@ -423,8 +434,10 @@ func list(ctx context.Context, client *http.Client, u *url.URL) ([]Entry, error)
 
 // walk collects every PPD under dir (recursing into subfolders except the
 // non-English language ones), flattened into destDir. A name seen twice keeps
-// the first occurrence, so top-level files win over a subfolder's copy.
-func walk(ctx context.Context, client *http.Client, dir *url.URL, remote, destDir string) ([]job, error) {
+// the first occurrence, so top-level files win over a subfolder's copy. skip,
+// when non-nil, is consulted for every real PPD filename found - see
+// Options.SkipFile's own doc comment for why this lives outside the package.
+func walk(ctx context.Context, client *http.Client, dir *url.URL, remote, destDir string, skip func(name string) bool) ([]job, error) {
 	var out []job
 	seen := map[string]bool{}
 	queue := []*url.URL{dir}
@@ -444,6 +457,9 @@ func walk(ctx context.Context, client *http.Client, dir *url.URL, remote, destDi
 				continue
 			}
 			if !isPPD(e.Name) || strings.HasPrefix(e.Name, "._") || seen[e.Name] {
+				continue
+			}
+			if skip != nil && skip(e.Name) {
 				continue
 			}
 			seen[e.Name] = true

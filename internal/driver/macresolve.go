@@ -192,8 +192,17 @@ func scoredOpenPrintingCandidates(catalog MacCatalog, manufacturer, model, filte
 	nickNames := catalog.OpenPrintingNickNames[manufacturer]
 	var candidates []scored
 	for _, path := range catalog.OpenPrintingPPDs[manufacturer] {
-		label := ppdMatchLabel(path)
 		nickName := nickNames[path]
+		// Same exclusion modelCandidatesWithSource (package main) already
+		// applies to the Model dropdown's own OpenPrinting path - a
+		// Japan-market-only SKU or Xerox FFPS variant has no business
+		// showing up here either (confirmed live, Ken, 2026-09-23: a real
+		// "RICOH IM C3510 JPN" OpenPrinting entry leaked into the Driver
+		// dropdown for a Model that had already correctly excluded it).
+		if IsExcludedModelVariant(nickName, path) {
+			continue
+		}
+		label := ppdMatchLabel(path)
 		total := 0
 		if model != "" {
 			s := bestMatchScore(model, label, nickName)
@@ -233,9 +242,16 @@ func scoredOpenPrintingCandidates(catalog MacCatalog, manufacturer, model, filte
 // (Ken's own ask, 2026-09-19): the macOS Driver modal's own dropdown now
 // shows that NickName as the primary label whenever one is cached
 // (macDriverCandidatesWithSource, package main), so a saved MacDriver
-// commitment can be either form depending on when it was picked - an older
-// saved config, or a manufacturer/PPD BuildOpenPrintingNickNames hasn't
-// cataloged yet, still round-trips via the original filename-derived form.
+// commitment can be any of three forms depending on when it was picked: the
+// original filename-derived form (ppdMatchLabel, always "(OP)"-suffixed -
+// an older saved config, or a manufacturer/PPD BuildOpenPrintingNickNames
+// hasn't cataloged yet), a bare cached NickName with no suffix at all (a
+// config saved between the #16 follow-up and the "(OP)" tag being restored
+// onto it, Ken, 2026-09-23), or a NickName with "(OP)" now appended (every
+// config saved after that fix) - the nickName+" (OP)" check below matches
+// exactly what openPrintingCandidateWithSource (package main) hands the
+// dropdown today, but nickName alone is kept so nothing saved during that
+// window ever silently stops resolving.
 func OpenPrintingPPDByLabel(catalog MacCatalog, manufacturer, label string) (string, bool) {
 	for _, path := range catalog.OpenPrintingPPDs[manufacturer] {
 		if ppdMatchLabel(path) == label {
@@ -243,7 +259,7 @@ func OpenPrintingPPDByLabel(catalog MacCatalog, manufacturer, label string) (str
 		}
 	}
 	for _, path := range catalog.OpenPrintingPPDs[manufacturer] {
-		if nick, ok := catalog.OpenPrintingNickNames[manufacturer][path]; ok && nick != "" && nick == label {
+		if nick, ok := catalog.OpenPrintingNickNames[manufacturer][path]; ok && nick != "" && (nick == label || nick+" (OP)" == label) {
 			return path, true
 		}
 	}

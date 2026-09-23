@@ -91,12 +91,12 @@ func TestMacDriverCandidatesWithSource_OpenPrintingShowsNickNameTooltipShowsDriv
 
 	var found *MacDriverCandidate
 	for i := range got {
-		if got[i].Label == "Canon iR-ADV C5045/5051" {
+		if got[i].Label == "Canon iR-ADV C5045/5051 (OP)" {
 			found = &got[i]
 		}
 	}
 	if found == nil {
-		t.Fatalf("expected the NickName as the primary label, got %+v", got)
+		t.Fatalf("expected the NickName as the primary label, tagged \"(OP)\" (Ken, 2026-09-23), got %+v", got)
 	}
 	if !strings.Contains(found.Source, "cnadvc5045x1g (OP)") {
 		t.Errorf("expected the tooltip to still carry the old filename-derived driver name, got %q", found.Source)

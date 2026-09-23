@@ -166,6 +166,38 @@ func TestBuildOpenPrintingNickNames_ReportsRemovedPath(t *testing.T) {
 	}
 }
 
+// TestBuildOpenPrintingNickNames_UsesRealFolderNotConcatenatedName is the
+// direct regression test for the real bug Ken hit live (2026-09-23): a real
+// "Konica Minolta" install's PPDs (ppdsync.go's own localFolder) sat in a
+// folder literally spelled "Konica Minolta" (spaces intact, matching
+// driver.Manufacturers' own display name), but this catalog kept computing
+// "KonicaMinolta" (spaces stripped, the vendor-package tree's own unrelated
+// convention - driversfolder.go) and persisting an orphaned
+// catalog.konicaminolta.json into a folder that held none of the real PPDs
+// it claimed to cache. The catalog must land next to the real PPDs, however
+// that folder happens to be spelled.
+func TestBuildOpenPrintingNickNames_UsesRealFolderNotConcatenatedName(t *testing.T) {
+	dir := t.TempDir()
+	ppdPath := filepath.Join(dir, "macOS", "OpenPrinting", "Konica Minolta", "KOC451UX.ppd")
+	writeTestPPD(t, ppdPath, "*NickName: \"Konica Minolta bizhub C451\"\n")
+	cat := MacCatalog{OpenPrintingPPDs: map[string][]string{"Konica Minolta": {ppdPath}}}
+	macRoot := filepath.Join(dir, "macOS")
+
+	got, _ := BuildOpenPrintingNickNames(cat, macRoot, true)
+	if got["Konica Minolta"][ppdPath] != "Konica Minolta bizhub C451" {
+		t.Fatalf("expected a real NickName parsed, got %q", got["Konica Minolta"][ppdPath])
+	}
+
+	wantPath := filepath.Join(dir, "macOS", "OpenPrinting", "Konica Minolta", CatalogFileName("Konica Minolta"))
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("expected the catalog to be persisted next to the real PPDs at %s, got: %v", wantPath, err)
+	}
+	badPath := filepath.Join(dir, "macOS", "OpenPrinting", "KonicaMinolta", CatalogFileName("Konica Minolta"))
+	if _, err := os.Stat(badPath); err == nil {
+		t.Errorf("did not expect a catalog file at the concatenated (wrong, PPD-less) folder %s", badPath)
+	}
+}
+
 // TestBuildOpenPrintingNickNames_NoPersistStillReturnsCorrectResult proves
 // persist=false (a write-protected flash drive - the same contract
 // BuildMacModelIndex's own persist parameter already has) still returns a

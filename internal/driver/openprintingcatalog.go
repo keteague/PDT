@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -14,11 +13,19 @@ import (
 // MacManufacturerCatalog's own provenance-based staleness pattern (see its
 // doc comment) for the flat Drivers/macOS/OpenPrinting/<Manufacturer>/*.ppd
 // bucket, rather than a versioned installer package tree. Persisted as
-// CatalogFileName(manufacturer) inside that manufacturer's own
+// CatalogFileName(manufacturer) inside that manufacturer's own real
 // Drivers/macOS/OpenPrinting/<Manufacturer> folder - the exact same
 // filename convention the vendor package catalog uses one folder over
 // (Drivers/macOS/<Manufacturer>/), just with no naming collision since it's
-// a different directory.
+// a different directory. "That manufacturer's own real folder" is not
+// necessarily <Manufacturer> with spaces stripped the way the vendor
+// package tree's own folder always is (driversfolder.go) - ppdsync.go's own
+// localFolder can end up naming it either way depending on what already
+// existed on a given machine (confirmed live, Ken, 2026-09-23: a real
+// "Konica Minolta" install's synced PPDs sat in a folder literally spelled
+// "Konica Minolta", spaces intact) - so BuildOpenPrintingNickNames derives
+// this path from a real PPD's own already-known location, never by
+// re-deriving the folder name from the manufacturer string itself.
 //
 // Exists because a real OpenPrinting PPD's own filename is routinely
 // cryptic (ppdNickNameRe's own doc comment: a confirmed-live hard zero for
@@ -139,7 +146,6 @@ type OpenPrintingCatalogReport struct {
 // order) so the reports returned - and any log lines a caller builds from
 // them - come out in a stable, readable order every run.
 func BuildOpenPrintingNickNames(catalog MacCatalog, macRoot string, persist bool) (map[string]map[string]string, []OpenPrintingCatalogReport) {
-	openPrintingRoot := filepath.Join(macRoot, "OpenPrinting")
 	driversRoot := filepath.Dir(macRoot)
 	out := map[string]map[string]string{}
 	var reports []OpenPrintingCatalogReport
@@ -155,8 +161,21 @@ func BuildOpenPrintingNickNames(catalog MacCatalog, macRoot string, persist bool
 		if len(paths) == 0 {
 			continue
 		}
-		mfgFolder := strings.ReplaceAll(mfg, " ", "")
-		catalogPath := filepath.Join(openPrintingRoot, mfgFolder, CatalogFileName(mfg))
+		// The real per-manufacturer folder under Drivers/macOS/OpenPrinting
+		// isn't reliably mfg with spaces stripped - ppdsync.go's own
+		// localFolder reuses whatever folder already exists on a given
+		// machine (fold-matching, ignoring spacing entirely) and otherwise
+		// creates one using mfg's own literal display name, spaces and all.
+		// Confirmed live (Ken, 2026-09-23): a real "Konica Minolta" install
+		// synced its PPDs into a folder literally named "Konica Minolta"
+		// (spaced, matching driver.Manufacturers), while this catalog cache
+		// kept computing "KonicaMinolta" (concatenated) and writing an
+		// orphaned catalog.konicaminolta.json there instead - a folder
+		// scanOpenPrintingPPDs never even populated with any real PPDs.
+		// paths are always scanOpenPrintingPPDs' own real absolute paths, so
+		// deriving the folder from one directly can never drift from
+		// wherever the PPDs it's actually caching really live.
+		catalogPath := filepath.Join(filepath.Dir(paths[0]), CatalogFileName(mfg))
 		cached := LoadOpenPrintingCatalog(catalogPath)
 
 		fresh := map[string]OpenPrintingCacheEntry{}

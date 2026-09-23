@@ -4,6 +4,17 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-23 (v0.9.49) - Konica Minolta OpenPrinting catalog folder fix
+
+### Fixed
+- **Konica Minolta's OpenPrinting nickname cache was being written to the wrong, empty folder** -
+  `BuildOpenPrintingNickNames` derived the catalog's folder by stripping spaces from the manufacturer
+  name ("KonicaMinolta"), but a real install's synced PPDs live in whatever folder ppdsync's own
+  sync actually created - "Konica Minolta", spaces intact, for this manufacturer. The mismatch meant
+  the cache never actually cached anything and left an orphaned `catalog.konicaminolta.json` in a
+  folder with none of the real PPDs it claimed to describe. The catalog path is now derived directly
+  from a real PPD's own location, so it can never drift from wherever the PPDs actually live.
+
 ## 2026-09-23 (v0.9.48) - macOS Driver/Model dropdown cleanup
 
 ### Fixed

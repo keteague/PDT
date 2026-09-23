@@ -840,9 +840,12 @@ func TestBuildMacModelIndex_RemembersPackageThatFailsToIndex(t *testing.T) {
 // version its PPD happens to advertise.
 func TestNormalizeModelName(t *testing.T) {
 	tests := map[string]string{
-		"RICOH MP C3003 PS":                "RICOH MP C3003",
-		"CS 2553ci KPDL":                   "CS 2553ci",
-		"SHARP MX-3071S PPD":               "SHARP MX-3071S",
+		"RICOH MP C3003 PS":  "RICOH MP C3003",
+		"CS 2553ci KPDL":     "CS 2553ci",
+		"SHARP MX-3071S PPD": "SHARP MX-3071S",
+		// Real Kyocera "Web build" data (2026-09-23) mixes the bare form
+		// above with this parenthesized one, within the very same package.
+		"Kyocera TASKalfa 7550ci (KPDL)":   "Kyocera TASKalfa 7550ci",
 		"Xerox AltaLink B8045, 5.10.1":     "Xerox AltaLink B8045",
 		"Xerox C7120 Color MFP, 5.19.3 PS": "Xerox C7120 Color MFP",
 		"Generic PS Printer":               "Generic PS Printer",
@@ -854,6 +857,51 @@ func TestNormalizeModelName(t *testing.T) {
 		if got := NormalizeModelName(in); got != want {
 			t.Errorf("NormalizeModelName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestStripKnownNickNamePrefix guards the real Kyocera prefix bug (Ken,
+// 2026-09-23): a real "Kyocera Web build" distribution's newer PPD batch
+// prefixes its own *NickName with the manufacturer name
+// ("Kyocera TASKalfa 7550ci (KPDL)"), which its own established Model
+// convention never wants (unlike Canon/Ricoh/Sharp/Xerox/Toshiba/Lexmark,
+// whose own real data keeps their manufacturer name deliberately).
+func TestStripKnownNickNamePrefix(t *testing.T) {
+	if got := StripKnownNickNamePrefix("Kyocera", "Kyocera TASKalfa 7550ci (KPDL)"); got != "TASKalfa 7550ci (KPDL)" {
+		t.Errorf(`StripKnownNickNamePrefix("Kyocera", ...) = %q, want the prefix removed`, got)
+	}
+	// The older, bare-form batch never had the prefix to begin with - no-op.
+	if got := StripKnownNickNamePrefix("Kyocera", "CS 2553ci KPDL"); got != "CS 2553ci KPDL" {
+		t.Errorf(`StripKnownNickNamePrefix("Kyocera", "CS 2553ci KPDL") = %q, want unchanged`, got)
+	}
+	// Every other manufacturer's own real data deliberately keeps its own
+	// name - never touched here.
+	if got := StripKnownNickNamePrefix("Xerox", "Xerox AltaLink B8045"); got != "Xerox AltaLink B8045" {
+		t.Errorf(`StripKnownNickNamePrefix("Xerox", ...) = %q, want unchanged`, got)
+	}
+}
+
+// TestLookupMacModel_ResolvesKyoceraPrefixedModelWithoutAmbiguity is the
+// direct end-to-end regression test for the real bug Ken hit live
+// (2026-09-23): Kyocera genuinely ships two distinct real PPDs sharing the
+// identical model number ("Kyocera CS 7550ci" and "Kyocera TASKalfa
+// 7550ci") - before StripKnownNickNamePrefix, BOTH keys carried the
+// "Kyocera " prefix (and, before normalizeModelName's own parenthesized-
+// suffix fix, "(KPDL)" too), so a technician typing the bare "TASKalfa
+// 7550ci" Model text matched neither key exactly, fell through to
+// modelNumberToken's number-based fallback, found both real PPDs sharing
+// "7550ci", and correctly refused to guess between them - surfacing as a
+// macOS Driver field that fell all the way back to the raw package name.
+// With the prefix stripped, "TASKalfa 7550ci" now matches its own key
+// exactly, resolving with no ambiguity at all.
+func TestLookupMacModel_ResolvesKyoceraPrefixedModelWithoutAmbiguity(t *testing.T) {
+	idx := MacModelIndex{"Kyocera": {
+		"CS 7550ci":       {{Label: "CS 7550ci (KPDL)"}},
+		"TASKalfa 7550ci": {{Label: "TASKalfa 7550ci (KPDL)"}},
+	}}
+	key, _, ok := lookupMacModel(idx, "Kyocera", "TASKalfa 7550ci")
+	if !ok || key != "TASKalfa 7550ci" {
+		t.Errorf("lookupMacModel(TASKalfa 7550ci) = (%q, %v), want an exact, unambiguous match on TASKalfa 7550ci", key, ok)
 	}
 }
 

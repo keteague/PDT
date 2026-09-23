@@ -84,6 +84,14 @@ func macDriverCandidateSource(absPath string) string {
 func openPrintingCandidateWithSource(catalog driver.MacCatalog, manufacturer string, d driver.OpenPrintingCandidateDetail) MacDriverCandidate {
 	path := macDriverCandidateSource(d.Path)
 	if nick := catalog.OpenPrintingNickNames[manufacturer][d.Path]; nick != "" {
+		// StripKnownNickNamePrefix: some of Kyocera's own real OpenPrinting
+		// PPDs prefix their own *NickName with the manufacturer name too
+		// ("Kyocera CS-C2525E (KPDL)") - see its own doc comment. Applied
+		// here (and mirrored in OpenPrintingPPDByLabel below, so a
+		// technician's own committed pick still resolves) rather than left
+		// in, matching the Model dropdown's identical cleanup
+		// (modelCandidatesWithSource, modelcandidate.go).
+		nick = driver.StripKnownNickNamePrefix(manufacturer, nick)
 		// " (OP)" marks this as an OpenPrinting community PPD, not a real
 		// vendor-branded driver package - ppdMatchLabel's own doc comment
 		// (Ken, 2026-09-16) already established this convention for the

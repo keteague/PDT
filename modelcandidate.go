@@ -107,7 +107,7 @@ func modelCandidatesWithSource(macCatalog driver.MacCatalog, macIndex driver.Mac
 		if driver.IsExcludedModelVariant(name, path) {
 			continue
 		}
-		add(driver.NormalizeModelName(name), rel(path))
+		add(driver.NormalizeModelName(driver.StripKnownNickNamePrefix(manufacturer, name)), rel(path))
 	}
 
 	type scored struct {

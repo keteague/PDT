@@ -18,9 +18,9 @@ import (
 // a technician would actually read them rather than as a bare filename
 // fragment.
 var macLanguageDisplayNames = map[string]string{
-	"UFRII":   "UFR II",
-	"PS":      "PostScript",
-	"PPD":     "Generic PPD",
+	"UFRII": "UFR II",
+	"PS":    "PostScript",
+	"PPD":   "Generic PPD",
 	// Kyocera's real mac PPD is genuinely KPDL-language (confirmed live,
 	// Ken, 2026-09-23: a real macOS install's own Driver-field text reads
 	// "TASKalfa 4054ci (KPDL)") - not a fully generic "Driver" bucket the
@@ -184,6 +184,45 @@ type MacPPDVariant struct {
 // pick" always resolve to the latest version, never an arbitrary older one.
 type MacModelIndex map[string]map[string][]MacPPDVariant
 
+// kyoceraNickNamePrefix is a leading token a real "Kyocera Web build"
+// distribution's own newer PPD batch prefixes its own *NickName with
+// ("Kyocera TASKalfa 7550ci (KPDL)", 271 real PPDs, confirmed live 2026-09-23)
+// - its older batch never does ("CS 2553ci KPDL", 189 real PPDs, no prefix
+// at all), and it's present identically in both the local package's own
+// PPDs and OpenPrinting's separately-mirrored copies of the same models.
+// Unlike Canon/Ricoh/Sharp/Xerox/Toshiba/Lexmark - whose own Model
+// convention deliberately keeps their own manufacturer name ("Canon iR-ADV
+// C5840/5850", "Xerox AltaLink B8045") - Kyocera's own Model convention has
+// always been the bare model text alone: lookupMacModel's own
+// Windows-cross-reference case bridges Windows' bare "TASKalfa 2554ci"
+// against macOS' bare "CS 2554ci", neither of which a "Kyocera "-prefixed
+// macOS key could ever fold-match. A model resolving through this prefixed
+// half of the data therefore couldn't be looked up by its own plain model
+// text at all - the exact-match and fold-match checks in lookupMacModel
+// both failed outright, and modelNumberToken's own number-based fallback
+// then found the *other* (bare, unprefixed) real PPD sharing the same model
+// number too, so its own "never guess between several" safety net correctly
+// refused to pick either, surfacing as a macOS Driver field that fell all
+// the way back to the raw package name.
+const kyoceraNickNamePrefix = "Kyocera "
+
+// StripKnownNickNamePrefix removes manufacturer's own known leading
+// *NickName noise from name, when one is known to exist in real data - see
+// kyoceraNickNamePrefix's own doc comment for the only case confirmed so
+// far. Exported for modelCandidatesWithSource/scoredOpenPrintingCandidates
+// (package main; macresolve.go) and openPrintingCandidateWithSource
+// (macdrivercandidate.go) - the OpenPrinting-sourced Model/Driver paths that
+// reach this exact same real Kyocera nickname shape via a completely
+// separate scan (BuildOpenPrintingNickNames) from indexFamilyPackage's own
+// local-package one, which calls this directly (same package, no need to
+// export for that use alone).
+func StripKnownNickNamePrefix(manufacturer, name string) string {
+	if manufacturer == "Kyocera" {
+		return strings.TrimPrefix(name, kyoceraNickNamePrefix)
+	}
+	return name
+}
+
 // stripLanguageSuffix strips a trailing " <token>" (checked against every
 // token in tokens) from nickName, returning the bare model name plus which
 // token matched ("" when none matched - the case a family's own canonical/
@@ -222,15 +261,30 @@ var trailingVersionRe = regexp.MustCompile(`,\s*\d+(\.\d+)+$`)
 // normalizeModelName strips trailing driver-version and printer-language
 // noise (see genericLanguageSuffixes/trailingVersionRe) from a model name,
 // repeatedly, so "Xerox C300 Color Printer, 5.19.3" and "RICOH MP C3003 PS"
-// both come out as the bare model.
+// both come out as the bare model. A real Kyocera "Web build" distribution
+// confirmed (2026-09-23) to genuinely mix both a bare trailing form ("CS
+// 2553ci KPDL", 189 real PPDs) and a parenthesized one ("Kyocera TASKalfa
+// 7550ci (KPDL)", 271 real PPDs) within the very same package - only the
+// bare form was ever stripped, leaving the parenthesized half's manufacturer
+// prefix AND language suffix both baked into the Model key/dropdown
+// (harmless duplication for the prefix - every other manufacturer's real
+// NickName already keeps its own the same way - but the un-stripped "
+// (KPDL)" suffix also broke driver-candidate matching outright: a
+// technician-typed "TASKalfa 7550ci" could never equal the stored "Kyocera
+// TASKalfa 7550ci (KPDL)" key, so MacModelCandidateDetails found nothing and
+// silently fell back to offering the raw package name as if it were a
+// driver).
 func normalizeModelName(name string) string {
 	out := strings.TrimSpace(name)
 	for i := 0; i < 3; i++ {
 		before := out
 		out = strings.TrimSpace(trailingVersionRe.ReplaceAllString(out, ""))
 		for _, tok := range genericLanguageSuffixes {
-			suffix := " " + tok
-			if len(out) > len(suffix) && strings.HasSuffix(out, suffix) {
+			if parenSuffix := " (" + tok + ")"; len(out) > len(parenSuffix) && strings.HasSuffix(out, parenSuffix) {
+				out = strings.TrimSpace(strings.TrimSuffix(out, parenSuffix))
+				break
+			}
+			if suffix := " " + tok; len(out) > len(suffix) && strings.HasSuffix(out, suffix) {
 				out = strings.TrimSpace(strings.TrimSuffix(out, suffix))
 				break
 			}
@@ -393,7 +447,7 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 			if isJapanMarketOnly(e.NickName) {
 				continue
 			}
-			model, _ := stripLanguageSuffix(e.NickName, tokens)
+			model, _ := stripLanguageSuffix(StripKnownNickNamePrefix(family, e.NickName), tokens)
 			filename := filepath.Base(e.Path)
 			out[model] = append(out[model], MacPPDVariant{
 				Language:          family,
@@ -450,7 +504,7 @@ func indexFamilyPackage(pkg MacPackage, family string, tokens []string, cacheDir
 		if !ok || isJapanMarketOnly(nick) {
 			continue
 		}
-		model, _ := stripLanguageSuffix(nick, tokens)
+		model, _ := stripLanguageSuffix(StripKnownNickNamePrefix(family, nick), tokens)
 		filename := filepath.Base(p)
 		cached, err := CachePPDFile(p, cacheDir, filename)
 		if err != nil {

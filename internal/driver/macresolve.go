@@ -259,7 +259,19 @@ func OpenPrintingPPDByLabel(catalog MacCatalog, manufacturer, label string) (str
 		}
 	}
 	for _, path := range catalog.OpenPrintingPPDs[manufacturer] {
-		if nick, ok := catalog.OpenPrintingNickNames[manufacturer][path]; ok && nick != "" && (nick == label || nick+" (OP)" == label) {
+		nick, ok := catalog.OpenPrintingNickNames[manufacturer][path]
+		if !ok || nick == "" {
+			continue
+		}
+		if nick == label || nick+" (OP)" == label {
+			return path, true
+		}
+		// StripKnownNickNamePrefix: mirrors openPrintingCandidateWithSource's
+		// own cleanup (macdrivercandidate.go) - some of Kyocera's own real
+		// NickNames carry the manufacturer name as a prefix the dropdown
+		// label never shows, so a technician's committed pick is the
+		// cleaned form, not the raw cached NickName.
+		if cleaned := StripKnownNickNamePrefix(manufacturer, nick); cleaned != nick && (cleaned == label || cleaned+" (OP)" == label) {
 			return path, true
 		}
 	}

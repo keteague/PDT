@@ -4,6 +4,20 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-23 (v0.9.50) - Kyocera Model/Driver dropdown prefix fix
+
+### Fixed
+- **A real Kyocera "Web build" distribution mixes two *NickName conventions in the same
+  package** - an older bare form ("CS 2553ci KPDL") and a newer one that prefixes the
+  manufacturer's own name ("Kyocera TASKalfa 7550ci (KPDL)"). The prefix was never stripped
+  anywhere, which showed noisy, un-cleaned text in the Model dropdown and, since Kyocera
+  genuinely ships two distinct real PPDs sharing the same bare model number ("CS 7550ci" and
+  "TASKalfa 7550ci"), left both keys unresolvable by their own plain model text - falling
+  through to a number-based fallback that correctly refused to guess between them, surfacing
+  as a macOS Driver field stuck on the raw package name. The manufacturer prefix is now
+  stripped everywhere this shape reaches (the local package catalog, both OpenPrinting-sourced
+  Model and Driver paths), so the bare model text now matches its own key exactly.
+
 ## 2026-09-23 (v0.9.49) - Konica Minolta OpenPrinting catalog folder fix
 
 ### Fixed

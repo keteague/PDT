@@ -4,6 +4,19 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-26 (v0.9.51) - Konica Minolta driver install fix
+
+### Fixed
+- **Deploying a Konica Minolta printer failed with "SetupCopyOEMInf(...): The system cannot find
+  the file specified"** - Konica Minolta's Universal PCL package (`KM_UPD_pcl6_win64_..._inst.exe`)
+  nests everything inside a folder named after the package itself. That redundant folder is
+  normally collapsed during extraction, but only when its name matches the extraction folder's -
+  and since v0.9.38 moved deploy-time extraction to the temp folder, that folder's name carried a
+  numeric prefix ("8-KM_UPD_..."), so the collapse silently never happened and the driver's `.inf`
+  ended up one folder deeper than the catalog expected. Each extraction now gets its own numbered
+  parent folder instead, named after the package exactly as before v0.9.38. Any other `.zip`,
+  `.msi`, or `.exe` driver package wrapped the same way is fixed by the same change.
+
 ## 2026-09-23 (v0.9.50) - Kyocera Model/Driver dropdown prefix fix
 
 ### Fixed

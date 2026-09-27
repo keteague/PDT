@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,12 @@ func (c *ExtractionCache) Close() {
 	c.done = map[string]string{}
 }
 
+// newDest returns a fresh, empty <root>/<n>/<name-without-extension> folder.
+// The number is its own parent folder, never part of the extraction folder's
+// own name: flattenRedundantWrapperDir only collapses a wrapper folder whose
+// name matches the extraction folder's, so a "8-KM_UPD_..." name silently
+// left a Konica Minolta package's self-named wrapper in place (see
+// TestExtractionCache_FlattensWrapperNamedAfterArchive).
 func (c *ExtractionCache) newDest(name string) (string, error) {
 	if c.root == "" {
 		root, err := os.MkdirTemp("", extractionRootPrefix+"*")
@@ -84,7 +91,7 @@ func (c *ExtractionCache) newDest(name string) (string, error) {
 		c.root = root
 	}
 	c.n++
-	dest := filepath.Join(c.root, fmt.Sprintf("%d-%s", c.n, strings.TrimSuffix(name, filepath.Ext(name))))
+	dest := filepath.Join(c.root, strconv.Itoa(c.n), strings.TrimSuffix(name, filepath.Ext(name)))
 	return dest, os.MkdirAll(dest, 0o755)
 }
 

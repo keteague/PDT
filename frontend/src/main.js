@@ -2970,7 +2970,14 @@ async function controlSpooler(action) {
         logStatus('ERR', `Could not ${action} the Print Spooler service: ${result.error}`);
         return;
     }
-    logStatus('OK', `Print Spooler service ${pastTense[action]}.`);
+    // Services that depend on the spooler (Fax, printer vendors' helper
+    // services) are stopped/started along with it - see internal/spooler.
+    const deps = result.dependents || [];
+    const alsoText = deps.length ? ` Also ${pastTense[action]}: ${deps.join(', ')}.` : '';
+    logStatus('OK', `Print Spooler service ${pastTense[action]}.${alsoText}`);
+    for (const w of result.warnings || []) {
+        logStatus('WARN', w);
+    }
 }
 
 // --- Write to Flash Drive ---

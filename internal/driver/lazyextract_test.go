@@ -161,6 +161,70 @@ func TestExtractionCache_ExtractsToTempNotNextToArchive(t *testing.T) {
 	cache.Close() // idempotent
 }
 
+// A package whose own content is wrapped in a single folder named after the
+// package itself must come out flattened, so a .inf's InfRelPath (recorded
+// from the flattened .pdt-infcache copy) resolves against the extraction
+// directly. Regression test for a real Konica Minolta deploy failure
+// (KM_UPD_pcl6_win64_..._inst.exe, whose archive nests everything under
+// KM_UPD_pcl6_win64_..._inst\): numbering the extraction folder itself
+// ("8-KM_UPD_...") defeated flattenRedundantWrapperDir's name match, leaving
+// Driver\Win_x64\KOUWNJ1_.inf one level too deep and SetupCopyOEMInf failing
+// with "The system cannot find the file specified".
+func TestExtractionCache_FlattensWrapperNamedAfterArchive(t *testing.T) {
+	zipPath := filepath.Join(t.TempDir(), "KM_Package.zip")
+	writeZipEntries(t, zipPath, map[string]string{
+		"KM_Package/Driver/Win_x64/driver.inf":    testZipInf,
+		"KM_Package/Driver/Win_x64/companion.cat": "x",
+	})
+
+	cache := NewExtractionCache()
+	defer cache.Close()
+	dir, err := cache.Ensure(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{`Driver/Win_x64/driver.inf`, `Driver/Win_x64/companion.cat`} {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("missing %s at the extraction's top level (wrapper folder not flattened?): %v", rel, err)
+		}
+	}
+}
+
+// Two different archives sharing a base name (e.g. the same package filed
+// under two manufacturers) still get separate extractions.
+func TestExtractionCache_SameNameArchivesDoNotCollide(t *testing.T) {
+	root := t.TempDir()
+	var zips []string
+	for _, sub := range []string{"A", "B"} {
+		if err := os.MkdirAll(filepath.Join(root, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(root, sub, "Driver.zip")
+		writeZipEntries(t, p, map[string]string{"driver.inf": testZipInf, "which.txt": sub})
+		zips = append(zips, p)
+	}
+
+	cache := NewExtractionCache()
+	defer cache.Close()
+	var dirs []string
+	for _, p := range zips {
+		dir, err := cache.Ensure(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, dir)
+	}
+	if dirs[0] == dirs[1] {
+		t.Fatalf("both archives extracted to the same folder %s", dirs[0])
+	}
+	for i, sub := range []string{"A", "B"} {
+		got, err := os.ReadFile(filepath.Join(dirs[i], "which.txt"))
+		if err != nil || string(got) != sub {
+			t.Errorf("extraction %d: which.txt = %q, %v; want %q", i, got, err, sub)
+		}
+	}
+}
+
 // Rows in the same run that need the same package share one extraction, kept
 // until Close.
 func TestExtractionCache_ReusesExtractionWithinARun(t *testing.T) {

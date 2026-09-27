@@ -63,6 +63,19 @@ type Settings struct {
 	// or a not-yet-recognized one) is treated as "Normal", never as
 	// invalid - see loadSettings/SaveSettings' own normalization.
 	LogLevel string `json:"logLevel"`
+
+	// Automatic update checks (Settings > About, Windows only - see
+	// autoupdate_windows.go): one checkbox + frequency each for PDT itself and
+	// the bundled 7-Zip. Both default to enabled, hence the negative polarity
+	// on the checkbox fields (same reasoning as VerboseLoggingDisabled: a
+	// settings.json that predates them must come up enabled, not disabled).
+	// The frequency is one of the updateFreq* values, normalized by
+	// normalizeUpdateFrequency. When each check last ran lives in
+	// update-check-state.json, not here - see updateCheckState.
+	PDTUpdateCheckDisabled      bool   `json:"pdtUpdateCheckDisabled"`
+	PDTUpdateFrequency          string `json:"pdtUpdateFrequency"`
+	SevenZipUpdateCheckDisabled bool   `json:"sevenZipUpdateCheckDisabled"`
+	SevenZipUpdateFrequency     string `json:"sevenZipUpdateFrequency"`
 }
 
 // CloudSyncSettings is the non-secret half of the Cloud Sync (R2) config -
@@ -339,6 +352,9 @@ func loadSettings() Settings {
 		DirectDownloadURLs: defaultDirectDownloadURLs(),
 		CloudSync:          defaultCloudSyncSettings(),
 		LogLevel:           "Normal",
+
+		PDTUpdateFrequency:      defaultUpdateFrequency,
+		SevenZipUpdateFrequency: defaultUpdateFrequency,
 	}
 	path, err := settingsFilePath()
 	if err != nil {
@@ -360,6 +376,10 @@ func loadSettings() Settings {
 	// own JSON-key-presence trick elsewhere in this codebase.
 	s.VerboseLoggingDisabled = loaded.VerboseLoggingDisabled
 	s.LogLevel = normalizeLogLevel(loaded.LogLevel)
+	s.PDTUpdateCheckDisabled = loaded.PDTUpdateCheckDisabled
+	s.PDTUpdateFrequency = normalizeUpdateFrequency(loaded.PDTUpdateFrequency)
+	s.SevenZipUpdateCheckDisabled = loaded.SevenZipUpdateCheckDisabled
+	s.SevenZipUpdateFrequency = normalizeUpdateFrequency(loaded.SevenZipUpdateFrequency)
 	if loaded.SaveFileBasePath != "" {
 		s.SaveFileBasePath = loaded.SaveFileBasePath
 	}

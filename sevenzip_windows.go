@@ -8,8 +8,6 @@ import (
 	"regexp"
 	"syscall"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"PDT/internal/driver"
 	"PDT/internal/update"
 )
@@ -104,7 +102,7 @@ const sevenZipHomepageURL = "https://www.7-zip.org/"
 // OpenSevenZipHomepage opens 7-Zip's own website in the system default
 // browser - the About tab's credit link.
 func (a *App) OpenSevenZipHomepage() {
-	runtime.BrowserOpenURL(a.ctx, sevenZipHomepageURL)
+	a.ui.OpenURL(sevenZipHomepageURL)
 }
 
 // CheckSevenZipUpdate looks for a 7-Zip version newer than the one currently

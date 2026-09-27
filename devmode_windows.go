@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"PDT/internal/driver"
 	"PDT/internal/printer"
 	pdtwin "PDT/internal/printer/windows"
@@ -110,9 +108,9 @@ func (a *App) BrowseDevModeFile(salesChainID, printerName string) DevModeResult 
 	if strings.TrimSpace(salesChainID) == "" {
 		return DevModeResult{Error: "Set a SalesChain ID before assigning Settings - the saved filename depends on it."}
 	}
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+	path, err := a.ui.OpenFile(fileDialogOptions{
 		Title:   "Select a captured Settings file",
-		Filters: []runtime.FileFilter{{DisplayName: "Settings Files (*.bin)", Pattern: "*.bin"}},
+		Filters: []fileFilter{{DisplayName: "Settings Files (*.bin)", Pattern: "*.bin"}},
 	})
 	if err != nil || path == "" {
 		return DevModeResult{Canceled: path == ""}

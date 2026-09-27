@@ -1,19 +1,10 @@
 import './style.css';
 import './app.css';
 
-// Namespace import, not named imports - deliberate. Wails regenerates
-// wailsjs/go/main/App.js from whatever the *App struct's method set actually
-// is FOR THE PLATFORM IT WAS LAST BUILT FOR, and a fair number of App's own
-// methods only exist on Windows (Spooler/Flash Drive/DEVMODE capture/Driver-
-// combobox methods/app self-update/7-Zip - see app.go's own "explicitly out
-// of scope" notes). A named import of a function that doesn't exist in the
-// generated module is a hard build-time failure under Vite/Rollup (confirmed
-// live building this exact file against a darwin-generated App.js); a
-// namespace import sidesteps that entirely - App.SomeWindowsOnlyMethod is
-// simply undefined at runtime on a macOS build, and every call site below
-// that can reach one is already guarded by isMac().
-import * as App from '../wailsjs/go/main/App';
-import {EventsOn} from '../wailsjs/runtime/runtime';
+// All Go-backend access goes through backend.js - see its own header comment
+// (including why App stays a namespace, never destructured into named
+// imports: several of its methods only exist on Windows builds).
+import {App, onEvent} from './backend.js';
 
 // Declared up here (not next to the flash-drive code that also uses it) because the static template below interpolates it at load time. Shown inline when "Include Drivers Repo" is checked, and again as a
 // confirmation before anything is written (Ken, 2026-09-20).
@@ -1096,19 +1087,19 @@ async function init() {
         btn.title = 'Write to Flash Drive is unavailable when running PDT from a flash drive itself - use an installed copy instead.';
     }
 
-    EventsOn('deploy-progress', (result) => onDeployProgress(result));
-    EventsOn('flashcopy-progress', (progress) => updateFlashCopyProgress(progress));
-    EventsOn('openprinting-sync-listing', (p) => onOpenPrintingListing(p));
-    EventsOn('openprinting-sync-plan', (p) => onOpenPrintingPlan(p));
-    EventsOn('openprinting-sync-file', (p) => onOpenPrintingFile(p));
-    EventsOn('openprinting-sync-total', (p) => onOpenPrintingTotal(p));
-    EventsOn('flashcopy-plan', (plan) => onFlashFilePlan(plan));
-    EventsOn('flashcopy-files', (files) => onFlashFilesProgress(files));
+    onEvent('deploy-progress', (result) => onDeployProgress(result));
+    onEvent('flashcopy-progress', (progress) => updateFlashCopyProgress(progress));
+    onEvent('openprinting-sync-listing', (p) => onOpenPrintingListing(p));
+    onEvent('openprinting-sync-plan', (p) => onOpenPrintingPlan(p));
+    onEvent('openprinting-sync-file', (p) => onOpenPrintingFile(p));
+    onEvent('openprinting-sync-total', (p) => onOpenPrintingTotal(p));
+    onEvent('flashcopy-plan', (plan) => onFlashFilePlan(plan));
+    onEvent('flashcopy-files', (files) => onFlashFilesProgress(files));
     // Background catalog work (today: the OpenPrinting nickname cache -
     // GitHub issue #16 follow-up, 2026-09-19) has no synchronous bound-
     // method call to piggyback a log line on the way RefreshDriverCatalog's
     // own CatalogStatus does - this is its own channel instead.
-    EventsOn('catalog-log', (entry) => logStatus(entry.level, entry.text));
+    onEvent('catalog-log', (entry) => logStatus(entry.level, entry.text));
 
     // Startup overlay: everything above this point runs before wireEvents()
     // attaches a single event listener, so clicking anything during that
@@ -2520,8 +2511,8 @@ function wireEvents() {
         btn.disabled = true;
         btn.textContent = 'Canceling...';
     });
-    EventsOn('cloudsync-progress', (progress) => updateCloudSyncProgress(progress));
-    EventsOn('cloudsync-total-progress', (progress) => updateCloudSyncTotalProgress(progress));
+    onEvent('cloudsync-progress', (progress) => updateCloudSyncProgress(progress));
+    onEvent('cloudsync-total-progress', (progress) => updateCloudSyncTotalProgress(progress));
 
     el('btnClearLog').addEventListener('click', clearLog);
     wireLogVerbosity();

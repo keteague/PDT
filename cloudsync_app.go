@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"PDT/internal/cloudsync"
 )
 
@@ -235,7 +233,7 @@ func (a *App) newCloudSyncProgressFunc(relPath, direction string) func(done, tot
 		if final {
 			etaSeconds = 0
 		}
-		runtime.EventsEmit(a.ctx, cloudSyncProgressEvent, CloudSyncProgress{
+		a.emit(cloudSyncProgressEvent, CloudSyncProgress{
 			RelPath: relPath, Direction: direction, Done: done, Total: total, EtaSeconds: etaSeconds,
 		})
 	}
@@ -383,7 +381,7 @@ func (a *App) SyncCloud(relPaths []string) CloudSyncResult {
 			etaSeconds = 0
 			rate = 0
 		}
-		runtime.EventsEmit(a.ctx, cloudSyncTotalProgressEvent, CloudSyncTotalProgress{
+		a.emit(cloudSyncTotalProgressEvent, CloudSyncTotalProgress{
 			DoneBytes: doneBytes, TotalBytes: totalBytes, RateBytesPerSec: rate, EtaSeconds: etaSeconds,
 		})
 	}

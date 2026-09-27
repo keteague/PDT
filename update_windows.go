@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 	"golang.org/x/sys/windows/registry"
 
 	"PDT/internal/driver"
@@ -94,7 +93,7 @@ func (a *App) ApplyUpdate(assetURL, newVersion string) ApplyUpdateResult {
 	if err := exec.Command(exePath).Start(); err != nil {
 		return ApplyUpdateResult{Error: "update installed, but failed to relaunch: " + err.Error()}
 	}
-	runtime.Quit(a.ctx)
+	a.ui.Quit()
 	return ApplyUpdateResult{}
 }
 

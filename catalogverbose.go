@@ -5,8 +5,6 @@ import (
 	"sort"
 
 	"PDT/internal/driver"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // catalogLogEvent is the Wails event name the frontend's own Log panel
@@ -33,10 +31,7 @@ type CatalogLogEntry struct {
 // gated by) the *extra* per-manufacturer/per-file detail verboseNormal/
 // verboseDebug control below.
 func (a *App) logCatalog(level, text string) {
-	if a.ctx == nil {
-		return // no live frontend to emit to (e.g. a unit test constructing *App directly)
-	}
-	runtime.EventsEmit(a.ctx, catalogLogEvent, CatalogLogEntry{Level: level, Text: text})
+	a.emit(catalogLogEvent, CatalogLogEntry{Level: level, Text: text})
 }
 
 // verboseNormal/verboseDebug gate the toolbar's own Verbose checkbox +

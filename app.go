@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"PDT/internal/cloudsync"
 	"PDT/internal/config"
 	"PDT/internal/driver"
@@ -30,6 +28,10 @@ const deployProgressEvent = "deploy-progress"
 // its result in a plain DTO instead of returning a second/third raw value.
 type App struct {
 	ctx context.Context
+
+	// ui is every GUI-runtime call (events, dialogs, open URL, quit) - set
+	// once in startup, nil before it (see uiruntime.go).
+	ui uiRuntime
 
 	// ready is closed once startup has finished populating catalog/
 	// modelIndex/settings below. Every method that reads them blocks on it
@@ -120,6 +122,7 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.ui = newWailsRuntime(ctx)
 	a.settings = loadSettings()
 	currentDriversBasePath = a.settings.DriversBasePath
 	currentConfigsBasePath = a.settings.SaveFileBasePath
@@ -281,7 +284,7 @@ func (a *App) OpenManufacturerURL(manufacturer string) {
 	if url == "" {
 		return
 	}
-	runtime.BrowserOpenURL(a.ctx, url)
+	a.ui.OpenURL(url)
 }
 
 // AppInfo is Settings' About tab content.
@@ -308,7 +311,7 @@ func (a *App) Platform() string {
 // OpenRepoURL opens this project's GitHub page in the system default
 // browser - the About tab's repo link.
 func (a *App) OpenRepoURL() {
-	runtime.BrowserOpenURL(a.ctx, appRepoURL)
+	a.ui.OpenURL(appRepoURL)
 }
 
 // currentDriversBasePath/currentConfigsBasePath cache the live Settings
@@ -565,16 +568,16 @@ type PathResult struct {
 	Path     string `json:"path"`
 }
 
-var csvFilter = runtime.FileFilter{DisplayName: "CSV Files (*.csv)", Pattern: "*.csv"}
-var jsonFilter = runtime.FileFilter{DisplayName: "JSON Files (*.json)", Pattern: "*.json"}
+var csvFilter = fileFilter{DisplayName: "CSV Files (*.csv)", Pattern: "*.csv"}
+var jsonFilter = fileFilter{DisplayName: "JSON Files (*.json)", Pattern: "*.json"}
 
 // NewCsvTemplate prompts for a save path and writes a blank CSV (header row
 // only) there - the entire backend of the original tool's "New CSV" button.
 func (a *App) NewCsvTemplate() (PathResult, error) {
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	path, err := a.ui.SaveFile(fileDialogOptions{
 		Title:           "New CSV",
 		DefaultFilename: "printers.csv",
-		Filters:         []runtime.FileFilter{csvFilter},
+		Filters:         []fileFilter{csvFilter},
 	})
 	if err != nil || path == "" {
 		return PathResult{Canceled: path == ""}, err
@@ -593,9 +596,9 @@ type ImportResult struct {
 
 // ImportCsv prompts for a CSV file and parses it into rows.
 func (a *App) ImportCsv() (ImportResult, error) {
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+	path, err := a.ui.OpenFile(fileDialogOptions{
 		Title:   "Import CSV",
-		Filters: []runtime.FileFilter{csvFilter},
+		Filters: []fileFilter{csvFilter},
 	})
 	if err != nil || path == "" {
 		return ImportResult{Canceled: path == ""}, err
@@ -616,10 +619,10 @@ type OpenConfigResult struct {
 // OpenConfiguration prompts for a saved JSON configuration and loads it.
 func (a *App) OpenConfiguration() (OpenConfigResult, error) {
 	<-a.ready
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+	path, err := a.ui.OpenFile(fileDialogOptions{
 		Title:            "Open Configuration",
 		DefaultDirectory: configsRoot(),
-		Filters:          []runtime.FileFilter{jsonFilter},
+		Filters:          []fileFilter{jsonFilter},
 	})
 	if err != nil || path == "" {
 		return OpenConfigResult{Canceled: path == ""}, err
@@ -654,11 +657,11 @@ func (a *App) SaveConfiguration(cfg config.SavedConfig) (PathResult, error) {
 		defaultDir = filepath.Dir(a.lastConfigPath)
 		defaultFilename = filepath.Base(a.lastConfigPath)
 	}
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	path, err := a.ui.SaveFile(fileDialogOptions{
 		Title:            "Save Configuration",
 		DefaultDirectory: defaultDir,
 		DefaultFilename:  defaultFilename,
-		Filters:          []runtime.FileFilter{jsonFilter},
+		Filters:          []fileFilter{jsonFilter},
 	})
 	if err != nil || path == "" {
 		return PathResult{Canceled: path == ""}, err
@@ -732,7 +735,7 @@ func (a *App) Deploy(rows []printer.PrinterRow, salesChainID, portNamePrefix str
 
 	deployer := a.newPlatformDeployer()
 	results := printer.DeployAllWithProgress(ctx, deployer, reqs, a.confirm, func(r printer.DeployResult) {
-		runtime.EventsEmit(a.ctx, deployProgressEvent, toDeployRowResult(r))
+		a.emit(deployProgressEvent, toDeployRowResult(r))
 	})
 
 	out := make([]DeployRowResult, len(results))
@@ -777,16 +780,5 @@ func (a *App) ForceQuit() {
 // the same kind of blocking modal confirmation Create-Printers.ps1 used
 // (a WinForms MessageBox), just via Wails' cross-platform equivalent.
 func (a *App) confirm(_ context.Context, title, message string) (bool, error) {
-	result, err := runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
-		Type:          runtime.QuestionDialog,
-		Title:         title,
-		Message:       message,
-		Buttons:       []string{"Yes", "No"},
-		DefaultButton: "Yes",
-		CancelButton:  "No",
-	})
-	if err != nil {
-		return false, err
-	}
-	return result == "Yes", nil
+	return a.ui.Confirm(title, message)
 }

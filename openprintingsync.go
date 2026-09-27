@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"PDT/internal/driver"
 	"PDT/internal/openprinting"
 )
@@ -121,14 +119,14 @@ func (a *App) SyncOpenPrintingPPDs() OpenPrintingSyncResult {
 			now := time.Now()
 			switch p.Phase {
 			case "listing":
-				runtime.EventsEmit(a.ctx, openPrintingListingEvent, OpenPrintingListing{Manufacturer: p.Manufacturer})
+				a.emit(openPrintingListingEvent, OpenPrintingListing{Manufacturer: p.Manufacturer})
 			case "plan":
 				files := make([]OpenPrintingPlanFile, len(p.Plan))
 				for i, f := range p.Plan {
 					files[i] = OpenPrintingPlanFile{Path: f.Path, Size: f.Size}
 				}
 				estStarted = false
-				runtime.EventsEmit(a.ctx, openPrintingPlanEvent, OpenPrintingPlan{Files: files, TotalBytes: p.TotalBytes})
+				a.emit(openPrintingPlanEvent, OpenPrintingPlan{Files: files, TotalBytes: p.TotalBytes})
 			case "transfer":
 				if !estStarted {
 					estStarted = true
@@ -138,7 +136,7 @@ func (a *App) SyncOpenPrintingPPDs() OpenPrintingSyncResult {
 				finalFile := p.FileTotal > 0 && p.FileDone >= p.FileTotal
 				if finalFile || now.Sub(lastFile[p.File]) >= 150*time.Millisecond {
 					lastFile[p.File] = now
-					runtime.EventsEmit(a.ctx, openPrintingFileEvent, OpenPrintingFileProgress{Path: p.File, Done: p.FileDone, Total: p.FileTotal})
+					a.emit(openPrintingFileEvent, OpenPrintingFileProgress{Path: p.File, Done: p.FileDone, Total: p.FileTotal})
 				}
 				allDone := p.DoneFiles == p.TotalFiles
 				if allDone || now.Sub(lastTotal) >= 150*time.Millisecond {
@@ -147,7 +145,7 @@ func (a *App) SyncOpenPrintingPPDs() OpenPrintingSyncResult {
 					if allDone {
 						eta, rate = 0, 0
 					}
-					runtime.EventsEmit(a.ctx, openPrintingTotalEvent, OpenPrintingTotalProgress{
+					a.emit(openPrintingTotalEvent, OpenPrintingTotalProgress{
 						DoneFiles: p.DoneFiles, TotalFiles: p.TotalFiles, DoneBytes: p.DoneBytes, TotalBytes: p.TotalBytes,
 						RateBytesPerSec: rate, EtaSeconds: eta,
 					})
@@ -183,5 +181,5 @@ func (a *App) CancelOpenPrintingSync() {
 // OpenOpenPrintingPPDPage opens the OpenPrinting PPD library in the user's
 // browser (the Settings > OpenPrinting tab's link).
 func (a *App) OpenOpenPrintingPPDPage() {
-	runtime.BrowserOpenURL(a.ctx, openprinting.DefaultBaseURL)
+	a.ui.OpenURL(openprinting.DefaultBaseURL)
 }

@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"PDT/internal/flashdrive"
 	"PDT/internal/update"
 )
@@ -211,13 +209,13 @@ func (e *flashEmitter) send(b flashBatch) {
 	e.emitMu.Lock()
 	defer e.emitMu.Unlock()
 	if b.plan != nil {
-		runtime.EventsEmit(e.a.ctx, flashFilePlanEvent, *b.plan)
+		e.a.emit(flashFilePlanEvent, *b.plan)
 	}
 	if len(b.files) > 0 {
-		runtime.EventsEmit(e.a.ctx, flashFileEvent, b.files)
+		e.a.emit(flashFileEvent, b.files)
 	}
 	if b.agg != nil {
-		runtime.EventsEmit(e.a.ctx, flashCopyProgressEvent, *b.agg)
+		e.a.emit(flashCopyProgressEvent, *b.agg)
 	}
 }
 

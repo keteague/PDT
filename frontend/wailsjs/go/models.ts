@@ -832,6 +832,8 @@ export namespace main {
 	export class SpoolerResult {
 	    state: string;
 	    error: string;
+	    dependents: string[];
+	    warnings: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new SpoolerResult(source);
@@ -841,6 +843,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.state = source["state"];
 	        this.error = source["error"];
+	        this.dependents = source["dependents"];
+	        this.warnings = source["warnings"];
 	    }
 	}
 	

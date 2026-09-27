@@ -198,6 +198,8 @@ func (a *App) SaveSettings(s Settings) (Settings, error) {
 		s.CloudSync.ConcurrentTransfers = defaultConcurrentTransfers
 	}
 	s.LogLevel = normalizeLogLevel(s.LogLevel)
+	s.PDTUpdateFrequency = normalizeUpdateFrequency(s.PDTUpdateFrequency)
+	s.SevenZipUpdateFrequency = normalizeUpdateFrequency(s.SevenZipUpdateFrequency)
 	if s.CloudSyncSecretKey != "" {
 		if err := cloudsync.SaveSecretKey(s.CloudSyncSecretKey); err != nil {
 			return Settings{}, fmt.Errorf("saving R2 secret key: %w", err)

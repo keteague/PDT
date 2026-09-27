@@ -853,6 +853,12 @@ table.grid td.checkbox-cell {
     margin-top: 4px;
 }
 
+.about-auto-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .modal-field {
     display: flex;
     flex-direction: column;

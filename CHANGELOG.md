@@ -4,6 +4,43 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-26 (v0.9.52) - Automatic update checks, Print Spooler dependents
+
+### Added
+- **PDT and the bundled 7-Zip can now check for updates on their own at startup.** Settings > About
+  has a **Check for PDT updates automatically** and a **Check for 7-Zip updates automatically**
+  checkbox (both on by default), each with a frequency combobox: On Startup, Daily, Weekly, Monthly,
+  Quarterly, Yearly (default Daily). An update found is reported in the Log, and About's status line
+  and **Update Now** button are already filled in. A check that finds nothing, or fails (offline is
+  normal in the field), stays silent unless Debug logging is on. When each check last succeeded is
+  kept in `update-check-state.json` beside `settings.json`, so a failed check is retried at the next
+  launch instead of waiting out the interval. Never runs when PDT is running from a flash drive.
+  Windows only, like the manual checks.
+
+### Fixed
+- **Spooler > Stop (and so Restart) failed on any machine with a running service that depends on the
+  Print Spooler** (Fax, printer vendors' helper services) - the Service Control Manager refuses to stop
+  a service while anything depending on it is still running. Stop now stops the spooler's running
+  dependents first, recursively and deepest first, then the spooler itself; Start brings back the
+  ones Stop took down, in reverse order, and Restart does both. Only dependents that were running
+  beforehand are ever restarted. If a dependent refuses to stop, the ones already stopped are started
+  again and the spooler is left running. A dependent that won't come back up is reported as a warning
+  instead of failing the spooler action. The services the spooler itself depends on (RPCSS, HTTP) are
+  never touched. The Log lists the dependents each action affected.
+
+## 2026-09-26 (v0.9.51) - Konica Minolta driver install fix
+
+### Fixed
+- **Deploying a Konica Minolta printer failed with "SetupCopyOEMInf(...): The system cannot find
+  the file specified"** - Konica Minolta's Universal PCL package (`KM_UPD_pcl6_win64_..._inst.exe`)
+  nests everything inside a folder named after the package itself. That redundant folder is
+  normally collapsed during extraction, but only when its name matches the extraction folder's -
+  and since v0.9.38 moved deploy-time extraction to the temp folder, that folder's name carried a
+  numeric prefix ("8-KM_UPD_..."), so the collapse silently never happened and the driver's `.inf`
+  ended up one folder deeper than the catalog expected. Each extraction now gets its own numbered
+  parent folder instead, named after the package exactly as before v0.9.38. Any other `.zip`,
+  `.msi`, or `.exe` driver package wrapped the same way is fixed by the same change.
+
 ## 2026-09-23 (v0.9.50) - Kyocera Model/Driver dropdown prefix fix
 
 ### Fixed

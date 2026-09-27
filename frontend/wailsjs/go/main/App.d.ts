@@ -9,6 +9,8 @@ export function AllManufacturers():Promise<Array<string>>;
 
 export function ApplyUpdate(arg1:string,arg2:string):Promise<main.ApplyUpdateResult>;
 
+export function AutoUpdateChecks():Promise<main.AutoUpdateResult>;
+
 export function BrowseDevModeFile(arg1:string,arg2:string):Promise<main.DevModeResult>;
 
 export function CancelCloudSync():Promise<void>;

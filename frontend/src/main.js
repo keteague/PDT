@@ -20,6 +20,11 @@ import {EventsOn} from '../wailsjs/runtime/runtime';
 const FLASH_DRIVERS_CLOUD_NOTE = 'Downloads the shared cloud repository\'s Drivers straight onto the drive - only what the drive is missing, and this computer\'s own Drivers folder isn\'t used. Warning: syncing a complete copy of the Drivers repo can take about an hour, depending on the speed of your Internet connection.';
 const FLASH_DRIVERS_WARNING = 'Writing the complete Drivers repo from this computer\'s local copy can take about an hour over USB.';
 
+// Settings > About's automatic update check frequencies - must match
+// updatefreq.go's updateFreq* values exactly (same strings, same order).
+const UPDATE_FREQUENCIES = ['On Startup', 'Daily', 'Weekly', 'Monthly', 'Quarterly', 'Yearly'];
+const UPDATE_FREQ_OPTIONS_HTML = UPDATE_FREQUENCIES.map(f => `<option value="${f}">${f}</option>`).join('');
+
 // Tooltip text, shared between the static template below and the
 // dynamically-generated per-row HTML (rowHtml/mfgSelectHtml), so every
 // control - defaults, grid headers, and each row's own fields - carries the
@@ -213,7 +218,7 @@ const state = {
     rows: [],
     deploying: false,
     logLines: [],
-    settings: {saveFileBasePath: '', driversBasePath: '', manufacturerUrls: {}, directDownloadUrls: {}, manufacturerOrder: [], verboseLoggingDisabled: false, logLevel: 'Normal'},
+    settings: {saveFileBasePath: '', driversBasePath: '', manufacturerUrls: {}, directDownloadUrls: {}, manufacturerOrder: [], verboseLoggingDisabled: false, logLevel: 'Normal', pdtUpdateCheckDisabled: false, pdtUpdateFrequency: 'Daily', sevenZipUpdateCheckDisabled: false, sevenZipUpdateFrequency: 'Daily'},
     // Set while Deploy is running: the exact rows submitted, in submission
     // order, plus how many deploy-progress events have arrived so far - since
     // events arrive in that same order, this correlates each event to its
@@ -379,6 +384,12 @@ document.querySelector('#app').innerHTML = `
           <button type="button" class="primary" id="btnApplyUpdate" hidden title="Download and install the update, then relaunch.">Update Now</button>
           <span class="modal-hint" id="updateStatus"></span>
         </div>
+        <div class="about-update platform-windows-only">
+          <label class="about-auto-check" title="Look for a newer PDT in the background when PDT starts, and say so in the Log if there is one. Never runs when PDT is running from a flash drive.">
+            <input type="checkbox" id="pdtUpdateAutoEnabled"> Check for PDT updates automatically
+          </label>
+          <select id="pdtUpdateFrequency" title="How often PDT checks for its own updates.">${UPDATE_FREQ_OPTIONS_HTML}</select>
+        </div>
         <p class="modal-hint platform-windows-only">Self-extracting driver packages (Lexmark's own) are unpacked using
           <a href="#" id="sevenZipCreditLink" title="Open 7-zip.org in your browser">7-Zip</a>, by Igor
           Pavlov, bundled with PDT under its own license.</p>
@@ -389,6 +400,12 @@ document.querySelector('#app').innerHTML = `
           <button type="button" id="btnCheckSevenZipUpdate" title="Check 7-zip.org for a newer version.">Check for 7-Zip Updates</button>
           <button type="button" class="primary" id="btnApplySevenZipUpdate" hidden title="Download and install the update.">Update 7-Zip Now</button>
           <span class="modal-hint" id="sevenZipUpdateStatus"></span>
+        </div>
+        <div class="about-update platform-windows-only">
+          <label class="about-auto-check" title="Look for a newer 7-Zip in the background when PDT starts, and say so in the Log if there is one. Never runs when PDT is running from a flash drive.">
+            <input type="checkbox" id="sevenZipUpdateAutoEnabled"> Check for 7-Zip updates automatically
+          </label>
+          <select id="sevenZipUpdateFrequency" title="How often PDT checks for a newer 7-Zip.">${UPDATE_FREQ_OPTIONS_HTML}</select>
         </div>
       </div>
       <div class="modal-actions">
@@ -1094,6 +1111,10 @@ async function init() {
         const btn = el('btnFlashDrive');
         btn.disabled = true;
         btn.title = 'Write to Flash Drive is unavailable when running PDT from a flash drive itself - use an installed copy instead.';
+    }
+
+    if (!isMac()) {
+        runAutoUpdateChecks(); // not awaited - a slow or offline network must never delay startup
     }
 
     EventsOn('deploy-progress', (result) => onDeployProgress(result));
@@ -4145,6 +4166,7 @@ async function openSettingsModal() {
         ? 'A Secret Access Key is already stored in this computer\'s keychain.'
         : 'No Secret Access Key stored yet - Cloud Sync won\'t work until one is saved here.';
     el('cloudSyncConcurrentTransfers').value = cs.concurrentTransfers || 3;
+    loadAutoUpdateControls();
     switchSettingsTab('general');
     el('settingsBackdrop').hidden = false;
 }
@@ -4348,6 +4370,76 @@ async function applySevenZipUpdate() {
     }
 }
 
+// Settings > About's "check automatically" checkbox + frequency pair for PDT
+// and for 7-Zip - each maps onto two Settings fields (see settings.go's
+// PDTUpdateCheckDisabled/PDTUpdateFrequency and their 7-Zip twins). The
+// checkbox is the inverse of the "...Disabled" field, and the frequency
+// combobox is disabled while its checkbox is off.
+const AUTO_UPDATE_CONTROLS = [
+    {checkbox: 'pdtUpdateAutoEnabled', frequency: 'pdtUpdateFrequency', disabledKey: 'pdtUpdateCheckDisabled', frequencyKey: 'pdtUpdateFrequency'},
+    {checkbox: 'sevenZipUpdateAutoEnabled', frequency: 'sevenZipUpdateFrequency', disabledKey: 'sevenZipUpdateCheckDisabled', frequencyKey: 'sevenZipUpdateFrequency'},
+];
+
+function loadAutoUpdateControls() {
+    for (const c of AUTO_UPDATE_CONTROLS) {
+        const enabled = !state.settings[c.disabledKey];
+        el(c.checkbox).checked = enabled;
+        const freq = state.settings[c.frequencyKey];
+        el(c.frequency).value = UPDATE_FREQUENCIES.includes(freq) ? freq : 'Daily';
+        el(c.frequency).disabled = !enabled;
+    }
+}
+
+function readAutoUpdateControls() {
+    const fields = {};
+    for (const c of AUTO_UPDATE_CONTROLS) {
+        fields[c.disabledKey] = !el(c.checkbox).checked;
+        fields[c.frequencyKey] = el(c.frequency).value;
+    }
+    return fields;
+}
+
+// Runs once at startup (Windows only): asks the backend for whichever
+// automatic update checks are due (see AutoUpdateChecks in
+// autoupdate_windows.go - it decides what's due, skips everything on a flash
+// drive, and records when each check last succeeded) and reports any update
+// found in the Log. It also fills in Settings > About's own status line and
+// Update Now button, so the update is one click away without re-checking by
+// hand. A check that found nothing stays silent, as does one that failed
+// (offline is normal in the field) unless Debug logging is on.
+async function runAutoUpdateChecks() {
+    let out;
+    try {
+        out = await App.AutoUpdateChecks();
+    } catch (e) {
+        return;
+    }
+    const debug = !state.settings.verboseLoggingDisabled && state.settings.logLevel === 'Debug';
+
+    const report = (name, outcome, onAvailable) => {
+        if (!outcome.checked) return;
+        const r = outcome.result;
+        if (r.available) {
+            logStatus('INFO', `${name} ${r.latestVersion} is available (you have ${r.currentVersion}). Open Settings > About to update.`);
+            onAvailable(r);
+            if (r.error) logStatus('WARN', r.error);
+        } else if (r.error && debug) {
+            logStatus('INFO', `Automatic ${name} update check failed: ${r.error}`);
+        }
+    };
+    report('PDT', out.pdt, (r) => {
+        pendingUpdateAssetUrl = r.assetUrl;
+        pendingUpdateVersion = r.latestVersion;
+        el('updateStatus').textContent = `Version ${r.latestVersion} is available (you have ${r.currentVersion}).`;
+        el('btnApplyUpdate').hidden = !r.assetUrl;
+    });
+    report('7-Zip', out.sevenZip, (r) => {
+        pendingSevenZipAssetUrl = r.assetUrl;
+        el('sevenZipUpdateStatus').textContent = `Version ${r.latestVersion} is available (you have ${r.currentVersion}).`;
+        el('btnApplySevenZipUpdate').hidden = !r.assetUrl;
+    });
+}
+
 function wireSettingsModal() {
     renderSettingsSitesPanel();
     renderAboutPanel();
@@ -4358,6 +4450,11 @@ function wireSettingsModal() {
     el('btnApplyUpdate').addEventListener('click', applyUpdate);
     el('btnCheckSevenZipUpdate').addEventListener('click', checkSevenZipUpdate);
     el('btnApplySevenZipUpdate').addEventListener('click', applySevenZipUpdate);
+    for (const c of AUTO_UPDATE_CONTROLS) {
+        el(c.checkbox).addEventListener('change', (e) => {
+            el(c.frequency).disabled = !e.target.checked;
+        });
+    }
 
     for (const btn of document.querySelectorAll('.tab-btn')) {
         btn.addEventListener('click', () => switchSettingsTab(btn.dataset.tab));
@@ -4440,6 +4537,7 @@ function wireSettingsModal() {
             // Normal.
             verboseLoggingDisabled: state.settings.verboseLoggingDisabled,
             logLevel: state.settings.logLevel,
+            ...readAutoUpdateControls(),
             cloudSync: {
                 endpoint: el('cloudSyncEndpoint').value,
                 bucket: el('cloudSyncBucket').value,

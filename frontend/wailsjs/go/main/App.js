@@ -10,6 +10,10 @@ export function ApplyUpdate(arg1, arg2) {
   return window['go']['main']['App']['ApplyUpdate'](arg1, arg2);
 }
 
+export function AutoUpdateChecks() {
+  return window['go']['main']['App']['AutoUpdateChecks']();
+}
+
 export function BrowseDevModeFile(arg1, arg2) {
   return window['go']['main']['App']['BrowseDevModeFile'](arg1, arg2);
 }

@@ -1434,6 +1434,26 @@ macOS: `wails build`, ad-hoc signed only - see the workflow's own comments on wh
 signing step can't run in CI) and creates the GitHub Release itself, with `PDT.exe` uploaded under that
 exact name (the one `CheckForUpdate` looks for), alongside the Windows installer and a zipped `PDT.app`.
 
+### Automatic update checks at startup (`autoupdate_windows.go`, About tab)
+
+Both checks above can also run on their own when PDT starts. About has a **Check for PDT updates
+automatically** and a **Check for 7-Zip updates automatically** checkbox (both on by default), each with
+a frequency combobox: **On Startup, Daily, Weekly, Monthly, Quarterly, Yearly** (default Daily -
+"On Startup" would hit GitHub and 7-zip.org on every launch). Monthly/Quarterly/Yearly are calendar
+intervals, not fixed day counts.
+
+The frontend calls `AutoUpdateChecks` once at startup; the backend runs whichever checks are enabled and
+due, and an update found is reported in the Log ("PDT 0.9.52 is available ... Open Settings > About to
+update."), with About's own status line and **Update Now** button already filled in. A check that finds
+nothing stays silent, and so does one that fails (offline is normal in the field) unless Debug logging is
+on. When each check last *succeeded* is kept in `update-check-state.json` beside `settings.json` (not in
+Settings itself, which the frontend round-trips whole on every save) - a failed check is therefore
+retried at the next launch instead of waiting out the interval.
+
+**Never runs when PDT is running from a flash drive** (`IsRunningFromRemovableDrive`): a portable copy is
+deliberately frozen, and shouldn't phone home from a customer's machine. Windows only, like the manual
+checks - macOS has no self-update to check for.
+
 ### Keeping the bundled 7-Zip up to date (`sevenzip.go`, About tab)
 
 About also credits 7-Zip (by Igor Pavlov) - the tool bundled to auto-extract self-extracting RAR/7z/Zip

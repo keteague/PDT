@@ -4,6 +4,27 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-29 (v0.9.53) - Drivers/Configs folder lookup fix
+
+### Fixed
+- **Running from a USB flash drive could keep scanning a stale, wrong-drive-letter Drivers folder**
+  (confirmed live in the field on two different PCs, both landing on a nonexistent `E:\Drivers` while
+  the flash drive was actually `F:` and `D:` respectively) - `os.Executable()` can return the path this
+  process was launched from and never re-resolve it for the rest of that process's life, even after
+  Windows finishes settling a just-inserted drive's real letter (plausible right as UAC elevation kicks
+  in), so `driversRoot()`/`configsRoot()`'s exe-relative resolution stayed wrong all session even though
+  Settings held the correct, portable, relative value the whole time. Both now fall back through a
+  freshly recomputed default first, then - new in this fix - a live search across every currently
+  attached drive (`flashdrive.EnumRemovableDrives`, built on `GetLogicalDrives`/`GetDriveType`, a
+  real-time OS query with no dependency on how this process was launched) for the folder next to a copy
+  of this exe, for the rarer case where even the recomputed default shares the same `os.Executable()`
+  staleness. A fallback is logged to the Log panel as a WARN line rather than swapped silently; an
+  absolute path that's still genuinely valid (e.g. a configured network share on an installed copy) is
+  untouched. Also fixed the related confusion this caused in the field: manually correcting Drivers Base
+  Path via Settings' Browse button and saving didn't appear to take effect - that part was already-
+  intentional, undocumented-enough behavior (Save Settings doesn't auto-refresh the already-loaded
+  driver catalog; Refresh or a restart does) rather than a bug in the fix above.
+
 ## 2026-09-26 (v0.9.52) - Automatic update checks, Print Spooler dependents
 
 ### Added

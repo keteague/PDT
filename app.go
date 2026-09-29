@@ -128,6 +128,11 @@ func (a *App) startup(ctx context.Context) {
 	currentConfigsBasePath = a.settings.SaveFileBasePath
 	currentPreinstallBasePath = a.settings.PreinstallBasePath
 
+	// Wired before platformStartup - its own ensureDriversScaffold call is
+	// the very first thing that can invoke driversRoot() this run, so the
+	// hook needs to already be live by then, not just before loadCatalog.
+	BasePathFallbackNotice = func(msg string) { a.logCatalog("WARN", msg) }
+
 	// Whatever this platform needs done once, before the driver catalog is
 	// scanned (Windows: 7-Zip extraction, stale-update cleanup, the Drivers
 	// scaffold; macOS: nothing yet - see app_windows.go/app_darwin.go).
@@ -336,16 +341,106 @@ var currentConfigsBasePath string
 // runs from.
 var currentPreinstallBasePath string
 
+// BasePathFallbackNotice, when set, is called whenever driversRoot() or
+// configsRoot() falls back to a freshly recomputed default because the
+// configured Settings value resolved to a path that doesn't actually exist
+// right now (see driversRoot's own doc comment for why that happens) - the
+// same "nil-safe hook wired up once *App exists" convention
+// internal/driver.ExtractionWarning already uses for the identical reason
+// (a low-level function with no *App of its own needs to reach PDT's Log
+// panel). Wired up in startup() to a.logCatalog("WARN", ...). Left nil in
+// tests and any build that never wires it up - every call site goes through
+// warnBasePathFallback, which no-ops when this is nil.
+var BasePathFallbackNotice func(message string)
+
+func warnBasePathFallback(format string, args ...any) {
+	if BasePathFallbackNotice == nil {
+		return
+	}
+	BasePathFallbackNotice(fmt.Sprintf(format, args...))
+}
+
+// findFolderOnAnyDrive, when set, is driversRoot/configsRoot's last-resort
+// fallback: search every currently attached drive for folderName sitting
+// next to a copy of this running exe. See app_windows.go's real
+// implementation (findFolderOnAnyRemovableDrive, built on
+// flashdrive.EnumRemovableDrives' live GetLogicalDrives/GetDriveType calls)
+// for why this needs to be a genuinely live OS query rather than anything
+// derived from os.Executable() a second time - confirmed live in the field
+// (2026-09-29, see driversRoot's own doc comment): os.Executable() can
+// return a path frozen at this process's own launch time and stay wrong for
+// its entire run even after the drive's real letter has settled, while a
+// live drive enumeration within that same already-running process correctly
+// sees the current state. Nil-safe like BasePathFallbackNotice/
+// driver.ExtractionWarning - left nil on darwin (no equivalent drive-letter
+// class of bug there - see app_darwin.go) and in any test that hasn't wired
+// it up, in which case this tier is simply skipped (never searches real
+// hardware on its own), keeping tests hermetic.
+var findFolderOnAnyDrive func(folderName string) string
+
+func callFindFolderOnAnyDrive(folderName string) string {
+	if findFolderOnAnyDrive == nil {
+		return ""
+	}
+	return findFolderOnAnyDrive(folderName)
+}
+
 // driversRoot returns the Drivers folder PDT actually uses - Settings'
 // "Drivers Base Path", defaulting to defaultDriversBasePath() if that's
 // somehow still unset (shouldn't happen; loadSettings always seeds it) -
 // resolved against this exe's own current location if it's a relative path
 // (see resolveExeRelative).
+//
+// Falls back when the configured value resolves to a path that doesn't
+// exist right now - almost always because it's an *absolute* path saved
+// from a previous run (an explicit Browse pick, or an older PDT version
+// that didn't yet have defaultDriversBasePath's own relative-for-portable-
+// copies logic) on a flash drive that doesn't keep the same letter across
+// computers, or even across relaunches on the same one. Two fallback tiers,
+// tried in order:
+//
+//  1. A freshly recomputed defaultDriversBasePath() - the common case,
+//     since that already resolves against wherever this exe currently is.
+//  2. findFolderOnAnyDrive, for the rarer case where even *that* is wrong
+//     because os.Executable() itself is stale for this whole process (see
+//     its own doc comment) - a live drive search doesn't share that
+//     weakness.
+//
+// Confirmed live in the field (2026-09-29): a technician's saved Settings
+// pointed DriversBasePath at "E:\Drivers" from an earlier session; on two
+// different target PCs the flash drive mounted as F: and D: respectively,
+// but PDT kept scanning the stale E: path (empty/nonexistent on both) with
+// no indication anything was wrong. Manually correcting it via Settings'
+// Browse button (which - unlike os.Executable() - correctly showed the
+// drive's real live letter) updated the saved value, but deployment still
+// used the old path until the driver catalog was explicitly refreshed
+// (Settings changes never auto-rescan - see main.js's own "Click Refresh...
+// for a changed Drivers Base Path to take effect" message); the tier-1
+// fallback here is what makes the *initial* scan self-correct without the
+// technician needing to notice or intervene at all. An absolute path that
+// DOES still exist - a deliberately configured network share on an
+// installed copy, for instance - is trusted exactly as before; this only
+// ever overrides a value that's already unusable as-is, so no legitimate
+// configuration is affected. See warnBasePathFallback for how a fallback
+// gets surfaced instead of silently swapped.
 func driversRoot() string {
 	if currentDriversBasePath != "" {
-		return resolveExeRelative(currentDriversBasePath)
+		if resolved := resolveExeRelative(currentDriversBasePath); dirExists(resolved) {
+			return resolved
+		}
 	}
-	return resolveExeRelative(defaultDriversBasePath())
+
+	result := resolveExeRelative(defaultDriversBasePath())
+	if !dirExists(result) {
+		if found := callFindFolderOnAnyDrive("Drivers"); found != "" {
+			result = found
+		}
+	}
+
+	if currentDriversBasePath != "" {
+		warnBasePathFallback("Configured Drivers folder '%s' not found - using '%s' instead.", currentDriversBasePath, result)
+	}
+	return result
 }
 
 func dirExists(path string) bool {
@@ -357,11 +452,31 @@ func dirExists(path string) bool {
 // "Configuration Files Base Path", defaulting to defaultSaveFileBasePath()
 // if somehow still unset - resolved against this exe's own current location
 // if it's a relative path (see resolveExeRelative).
+//
+// Falls back through the same two tiers as driversRoot (a freshly
+// recomputed defaultSaveFileBasePath(), then findFolderOnAnyDrive) when the
+// configured value doesn't exist right now - driversRoot's own sibling fix,
+// same reasoning: a stale absolute path from a previous session on a flash
+// drive that no longer has that letter shouldn't be trusted forever. See
+// driversRoot's doc comment for the field-confirmed failure this addresses.
 func configsRoot() string {
 	if currentConfigsBasePath != "" {
-		return resolveExeRelative(currentConfigsBasePath)
+		if resolved := resolveExeRelative(currentConfigsBasePath); dirExists(resolved) {
+			return resolved
+		}
 	}
-	return resolveExeRelative(defaultSaveFileBasePath())
+
+	result := resolveExeRelative(defaultSaveFileBasePath())
+	if !dirExists(result) {
+		if found := callFindFolderOnAnyDrive("Configs"); found != "" {
+			result = found
+		}
+	}
+
+	if currentConfigsBasePath != "" {
+		warnBasePathFallback("Configured Configs folder '%s' not found - using '%s' instead.", currentConfigsBasePath, result)
+	}
+	return result
 }
 
 // resolveExeRelative resolves a relative Settings base path (".\Drivers",

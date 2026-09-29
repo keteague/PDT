@@ -13,20 +13,62 @@ import (
 )
 
 // platformStartup runs once at startup before the driver catalog is scanned:
-// extracts the bundled 7-Zip tools (BuildCatalog's own auto-extraction of
-// self-extracting driver archives depends on it - see sevenzip_windows.go),
-// best-effort cleans up a previous self-update's renamed-aside .old exe (see
-// internal/update.Apply - by the time this process is running at all,
-// whatever process left that file behind has necessarily already exited),
-// and scaffolds the standard Drivers\Windows\11\<Manufacturer> folders for a
-// brand-new install (ensureDriversScaffold is already unconditional/
-// idempotent - see its own doc comment).
+// wires up findFolderOnAnyDrive (must happen before anything below, since
+// ensureDriversScaffold's own driversRoot() call a few lines down can be the
+// very first thing that needs it this run - see driversRoot's own doc
+// comment), extracts the bundled 7-Zip tools (BuildCatalog's own
+// auto-extraction of self-extracting driver archives depends on it - see
+// sevenzip_windows.go), best-effort cleans up a previous self-update's
+// renamed-aside .old exe (see internal/update.Apply - by the time this
+// process is running at all, whatever process left that file behind has
+// necessarily already exited), and scaffolds the standard
+// Drivers\Windows\11\<Manufacturer> folders for a brand-new install
+// (ensureDriversScaffold is already unconditional/idempotent - see its own
+// doc comment).
 func (a *App) platformStartup() {
+	findFolderOnAnyDrive = findFolderOnAnyRemovableDrive
 	if exe, err := os.Executable(); err == nil {
 		update.CleanupOldExe(exe)
 	}
 	ensureSevenZipExtracted()
 	_ = ensureDriversScaffold(driversRoot())
+}
+
+// findFolderOnAnyRemovableDrive is findFolderOnAnyDrive's real Windows
+// implementation (see that var's own doc comment in app.go for why this
+// needs to exist and why it has to be a live query). Uses
+// flashdrive.EnumRemovableDrives - built on GetLogicalDrives/GetDriveType,
+// genuinely live OS calls with no dependency on anything this process was
+// launched with - rather than walking A:-Z: by hand, and matches
+// EnumRemovableDrives' own DRIVE_REMOVABLE scope (real USB flash drives;
+// deliberately not fixed/network drives - a folder found there wouldn't be
+// the "which flash drive am I actually running from" answer this exists to
+// give). Requires a copy of this exact running exe (by filename) next to
+// folderName on that same drive, so an unrelated removable drive that
+// happens to also have a folder with this name is never mistaken for the
+// real one.
+func findFolderOnAnyRemovableDrive(folderName string) string {
+	exeName := "PDT.exe"
+	if exe, err := os.Executable(); err == nil {
+		exeName = filepath.Base(exe)
+	}
+
+	drives, err := flashdrive.EnumRemovableDrives()
+	if err != nil {
+		return ""
+	}
+	for _, d := range drives {
+		root := d.Letter + `\`
+		candidate := filepath.Join(root, folderName)
+		if !dirExists(candidate) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, exeName)); err != nil {
+			continue
+		}
+		return candidate
+	}
+	return ""
 }
 
 // loadCatalog scans driversRoot for Windows drivers (.inf-shaped -

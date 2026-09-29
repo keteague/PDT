@@ -28,6 +28,13 @@ import (
 // to rename itself CANON_MAC 1, and because there's no reason to leave a
 // leaked read-only mount sitting around a moment longer than it has to once
 // this run has the chance to clean it up.
+//
+// Deliberately leaves findFolderOnAnyDrive (app.go) unwired/nil - macOS
+// mounts removable media under /Volumes/<name>, a stable, live-resolved
+// path with nothing analogous to a Windows drive letter an elevated
+// process's os.Executable() could see differently than the live system
+// state (see app_windows.go's findFolderOnAnyRemovableDrive and driversRoot's
+// own doc comment for the Windows-specific bug this exists to work around).
 func (a *App) platformStartup() {
 	_ = ensureMacDriversScaffold(filepath.Join(driversRoot(), "macOS"))
 	driver.ReconcileStaleMounts(filepath.Join(driversRoot(), "macOS"))

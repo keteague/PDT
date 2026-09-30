@@ -4,6 +4,21 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-30 (v0.9.55) - Include folder: flash drives now carry both platforms' apps
+
+### Added
+- **Every flash drive now carries both `PDT.exe` and `PDT.app` at all times, refreshed with no Internet
+  needed at flash-drive time.** A new per-user `Include` folder (`%LocalAppData%\PDT\Include` on Windows,
+  `~/Library/Application Support/PDT/Include` on macOS - a sibling of Drivers/Configs) holds a ready copy
+  of the *other* platform's app. It's kept current by `CheckForUpdate` itself: every time a laptop checks
+  for (or applies) its own update, it also best-effort refreshes Include's opposing-platform app against
+  that same release, reusing the existing GitHub-download logic already built for the old flash-time
+  fetch. Write to Flash Drive and Sync no longer talk to GitHub at all - they just copy whatever Include
+  already has onto each drive, so a client site with no signal no longer blocks a Sync from carrying both
+  apps, as long as a check succeeded earlier somewhere that did have one. A missing Include (a fresh
+  install that's never had a successful check) adds a WARN note pointing the technician at Check for
+  Updates instead of failing the operation.
+
 ## 2026-09-29 (v0.9.54) - Sync now refreshes PDT itself; macOS self-update
 
 ### Added

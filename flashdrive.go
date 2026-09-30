@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"PDT/internal/flashdrive"
-	"PDT/internal/update"
 )
 
 // flashCopyProgressEvent is emitted throughout WritePortablePDT/
@@ -460,68 +459,86 @@ func (a *App) WritePortablePDT(letters []string, includeDrivers bool, driversSou
 	return result
 }
 
-// ensureReleaseAppsOnDrives is WritePortablePDT's last step: once the drives
-// are written, and only if this computer has Internet, make sure each one
-// carries a current copy of the app for the OTHER platform it'll be carried to
-// (Ken, 2026-09-20) - the release is fetched once, then:
-//   - PDT.app for Mac endpoints (macappflash.go), always; and
-//   - PDT.exe for Windows endpoints (winexeflash.go), when running on a Mac -
-//     a Windows write already copies its own PDT.exe, but a Mac has none to copy.
+// ensureReleaseAppsOnDrives is WritePortablePDT/SyncToFlashDrives' last step:
+// once the drives are written, copy the OTHER platform's app - already
+// staged in includeDir() - onto each drive's root (Ken, 2026-09-30): PDT.app
+// for Mac endpoints on a Windows write, PDT.exe for Windows endpoints on a
+// Mac write, so every portable copy carries both platforms' apps at all
+// times. Include itself is kept current elsewhere, whenever this laptop
+// checks for its own update (update_windows.go's refreshIncludeMacApp /
+// update_darwin.go's refreshIncludeWinExe) - not fetched from GitHub here -
+// so this step needs no Internet at all and uses whatever Include already
+// has, even completely offline at a client site. See includedir.go's own
+// doc comment for the full reasoning.
 //
-// Entirely best-effort: the write itself already succeeded, so every outcome
-// here - offline, GitHub unreachable, a failed download - is just a note in
-// result.Notes, never a Failed entry.
+// Entirely best-effort: the write itself already succeeded, so a missing or
+// unreadable Include (no update check has ever succeeded on this laptop) is
+// just a note in result.Notes, never a Failed entry.
 func (a *App) ensureReleaseAppsOnDrives(ctx context.Context, result *BatchDriveResult) {
 	if len(result.Succeeded) == 0 || ctx.Err() != nil {
 		return
 	}
-	onMac := goruntime.GOOS == "darwin"
-	rel, err := update.FetchLatest(repoSlug())
-	if err != nil {
-		what := "PDT.app for macOS"
-		if onMac {
-			what = "PDT.app for macOS and PDT.exe for Windows"
-		}
-		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Skipped the %s check - couldn't reach GitHub for the latest release (%v). Connect to the Internet and Write to Flash Drive again, or copy them on by hand.", what, err)})
+	dir := includeDir()
+	if dir == "" {
 		return
 	}
-
-	if src, err := macAppSourceFrom(rel); err != nil {
-		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Skipped the PDT.app for macOS check: %v", err)})
+	if goruntime.GOOS == "darwin" {
+		copyIncludeExeToDrives(ctx, dir, result, a.newFlashCopyProgressFunc)
 	} else {
-		defer src.cleanup()
-		for _, letter := range result.Succeeded {
-			if ctx.Err() != nil {
-				return
-			}
-			note, err := ensureMacAppOnDrive(ctx, letter, src, a.newFlashCopyProgressFunc(letter))
-			if err != nil {
-				result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not put a current PDT.app on %s: %v", letter, err)})
-				continue
-			}
-			result.Notes = append(result.Notes, note)
-		}
+		copyIncludeMacAppToDrives(ctx, dir, result, a.newFlashCopyProgressFunc)
 	}
+}
 
-	if !onMac {
+// copyIncludeMacAppToDrives copies includeDir/PDT.app onto every drive in
+// result.Succeeded - the Windows half of ensureReleaseAppsOnDrives. A free
+// function (not an *App method) taking newProgress as a parameter, like
+// writePortablePDTTo's own stepProgressFunc params, so it's directly
+// unit-testable without a full *App; newProgress may be nil.
+func copyIncludeMacAppToDrives(ctx context.Context, dir string, result *BatchDriveResult, newProgress func(letter string) stepProgressFunc) {
+	src := filepath.Join(dir, macAppBundleName)
+	if !dirExists(src) {
+		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: "No PDT.app found in Include yet - run Check for Updates once while online (Settings > About), then Write to Flash Drive/Sync again to put it on the drive(s)."})
 		return
 	}
-	src, err := newWinExeSource(rel)
-	if err != nil {
-		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Skipped the PDT.exe for Windows check: %v", err)})
-		return
-	}
-	defer src.cleanup()
 	for _, letter := range result.Succeeded {
 		if ctx.Err() != nil {
 			return
 		}
-		note, err := ensureWinExeOnDrive(ctx, letter, src, a.newFlashCopyProgressFunc(letter))
-		if err != nil {
-			result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not put a current PDT.exe on %s: %v", letter, err)})
+		var onProgress func(CopyProgress)
+		if newProgress != nil {
+			progress := newProgress(letter)
+			onProgress = func(p CopyProgress) { progress("PDT.app (macOS)", p) }
+		}
+		dest := filepath.Join(letter, macAppBundleName)
+		if err := copyTreeMerge(ctx, dest, src, onProgress); err != nil {
+			result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not copy PDT.app onto %s: %v", letter, err)})
 			continue
 		}
-		result.Notes = append(result.Notes, note)
+		result.Notes = append(result.Notes, FlashNote{Level: "OK", Text: fmt.Sprintf("Copied PDT.app onto %s.", letter)})
+	}
+}
+
+// copyIncludeExeToDrives copies includeDir/PDT.exe onto every drive in
+// result.Succeeded - the macOS half of ensureReleaseAppsOnDrives. See
+// copyIncludeMacAppToDrives's own doc comment for why this is a free
+// function.
+func copyIncludeExeToDrives(ctx context.Context, dir string, result *BatchDriveResult, newProgress func(letter string) stepProgressFunc) {
+	src := filepath.Join(dir, winExeName)
+	data, err := os.ReadFile(src)
+	if err != nil {
+		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: "No PDT.exe found in Include yet - run Check for Updates once while online (Settings > About), then Write to Flash Drive/Sync again to put it on the drive(s)."})
+		return
+	}
+	for _, letter := range result.Succeeded {
+		if ctx.Err() != nil {
+			return
+		}
+		dest := filepath.Join(letter, winExeName)
+		if err := os.WriteFile(dest, data, 0o755); err != nil {
+			result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not copy PDT.exe onto %s: %v", letter, err)})
+			continue
+		}
+		result.Notes = append(result.Notes, FlashNote{Level: "OK", Text: fmt.Sprintf("Copied PDT.exe onto %s.", letter)})
 	}
 }
 
@@ -538,12 +555,11 @@ func (a *App) ensureReleaseAppsOnDrives(ctx context.Context, result *BatchDriveR
 // Also always writes this laptop's own currently-running exe onto every
 // listed drive (Ken, 2026-09-29: a Sync should never leave a flash drive's
 // copy of PDT itself behind, not just its Drivers/Configs) and, via
-// ensureReleaseAppsOnDrives, ensures a current PDT.app for macOS endpoints
-// (and a current PDT.exe for Windows endpoints too, if this laptop is
-// itself a Mac) - the exact same "other platform" step WritePortablePDT
-// already ends with, best-effort over the network so a Sync still succeeds
-// offline. The 7-Zip tools folder is the one thing this still leaves alone -
-// Write to Flash Drive is what lays that down initially.
+// ensureReleaseAppsOnDrives, copies the OTHER platform's app out of
+// includeDir() onto it too - the exact same "other platform" step
+// WritePortablePDT already ends with. The 7-Zip tools folder is the one
+// thing this still leaves alone - Write to Flash Drive is what lays that
+// down initially.
 //
 // driversSource ("local" - the default, also "" - or "cloud") picks where the
 // Drivers come from: this laptop's own Drivers folder, or the shared cloud

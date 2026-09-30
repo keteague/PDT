@@ -398,3 +398,59 @@ func TestWritePortablePDTTo_UsesCloudDriversSourceInsteadOfLocalCopy(t *testing.
 		t.Errorf("the laptop's own Drivers must NOT be copied when the cloud is the source, got err=%v", err)
 	}
 }
+
+func TestCopyIncludeMacAppToDrives_MissingIncludeAddsWarnNote(t *testing.T) {
+	dir := t.TempDir() // no PDT.app inside
+	result := &BatchDriveResult{Succeeded: []string{t.TempDir()}, Failed: map[string]string{}, Notes: []FlashNote{}}
+	copyIncludeMacAppToDrives(context.Background(), dir, result, nil)
+	if len(result.Notes) != 1 || result.Notes[0].Level != "WARN" {
+		t.Fatalf("Notes = %+v, want one WARN note", result.Notes)
+	}
+}
+
+func TestCopyIncludeMacAppToDrives_CopiesBundleToEachDrive(t *testing.T) {
+	dir := t.TempDir()
+	appDir := filepath.Join(dir, macAppBundleName)
+	if err := os.MkdirAll(filepath.Join(appDir, "Contents", "MacOS"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "Contents", "MacOS", "PDT"), []byte("fake"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	drive := t.TempDir()
+	result := &BatchDriveResult{Succeeded: []string{drive}, Failed: map[string]string{}, Notes: []FlashNote{}}
+	copyIncludeMacAppToDrives(context.Background(), dir, result, nil)
+	if len(result.Notes) != 1 || result.Notes[0].Level != "OK" {
+		t.Fatalf("Notes = %+v, want one OK note", result.Notes)
+	}
+	got, err := os.ReadFile(filepath.Join(drive, macAppBundleName, "Contents", "MacOS", "PDT"))
+	if err != nil || string(got) != "fake" {
+		t.Fatalf("copied PDT binary = %q, %v, want %q, nil", got, err, "fake")
+	}
+}
+
+func TestCopyIncludeExeToDrives_MissingIncludeAddsWarnNote(t *testing.T) {
+	dir := t.TempDir() // no PDT.exe inside
+	result := &BatchDriveResult{Succeeded: []string{t.TempDir()}, Failed: map[string]string{}, Notes: []FlashNote{}}
+	copyIncludeExeToDrives(context.Background(), dir, result, nil)
+	if len(result.Notes) != 1 || result.Notes[0].Level != "WARN" {
+		t.Fatalf("Notes = %+v, want one WARN note", result.Notes)
+	}
+}
+
+func TestCopyIncludeExeToDrives_CopiesExeToEachDrive(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, winExeName), []byte("fake exe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	drive := t.TempDir()
+	result := &BatchDriveResult{Succeeded: []string{drive}, Failed: map[string]string{}, Notes: []FlashNote{}}
+	copyIncludeExeToDrives(context.Background(), dir, result, nil)
+	if len(result.Notes) != 1 || result.Notes[0].Level != "OK" {
+		t.Fatalf("Notes = %+v, want one OK note", result.Notes)
+	}
+	got, err := os.ReadFile(filepath.Join(drive, winExeName))
+	if err != nil || string(got) != "fake exe" {
+		t.Fatalf("copied exe = %q, %v, want %q, nil", got, err, "fake exe")
+	}
+}

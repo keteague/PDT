@@ -14,11 +14,13 @@ import (
 	"PDT/internal/update"
 )
 
-// The mirror image of macappflash.go (Ken, 2026-09-20): when Write to Flash
-// Drive runs on a Mac, the drive is meant to be carried to Windows endpoints
-// too, but a Mac has no PDT.exe of its own to copy. So after the write, if
-// there's Internet, the drive's PDT.exe is checked against the latest GitHub
-// release and downloaded/replaced if it's missing or older.
+// The mirror image of macappflash.go: ensureWinExeOnDrive does the actual
+// work of getting a current PDT.exe onto a destination folder from a GitHub
+// release download. Used by update_darwin.go's refreshIncludeWinExe, to keep
+// includeDir()'s own PDT.exe current whenever a Mac checks for its own
+// update (Ken, 2026-09-30) - a flash drive itself no longer fetches from
+// GitHub directly; see flashdrive.go's ensureReleaseAppsOnDrives, which just
+// copies whatever includeDir() already has.
 
 const (
 	winExeName = "PDT.exe"

@@ -44,7 +44,29 @@ func (a *App) CheckForUpdate() UpdateCheckResult {
 			result.Error = fmt.Sprintf("release %s has no macOS app zip (PDT-macOS-<version>.zip) asset", rel.TagName)
 		}
 	}
+	if !a.IsRunningFromRemovableDrive() {
+		refreshIncludeWinExe(rel)
+	}
 	return result
+}
+
+// refreshIncludeWinExe best-effort keeps includeDir()'s own PDT.exe current
+// with rel - the macOS mirror of update_windows.go's own refreshIncludeMacApp
+// (see its doc comment, and includedir.go's, for the full reasoning). Silent
+// on failure for the same reason: ensureReleaseAppsOnDrives (flashdrive.go)
+// already tells the technician, in the flash operation's own results, if
+// Include turns out to have nothing usable in it yet.
+func refreshIncludeWinExe(rel update.Release) {
+	dir := includeDir()
+	if dir == "" {
+		return
+	}
+	src, err := newWinExeSource(rel)
+	if err != nil {
+		return
+	}
+	defer src.cleanup()
+	_, _ = ensureWinExeOnDrive(context.Background(), dir, src, nil)
 }
 
 // macAppBundlePath returns this running process's own PDT.app bundle path

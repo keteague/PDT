@@ -14,12 +14,15 @@ import (
 	"PDT/internal/update"
 )
 
-// After a portable PDT is written to a flash drive, PDT tops up the macOS
-// side too (Ken, 2026-09-20): a technician's laptop is usually Windows, and
-// only its own PDT.exe gets copied to the drive - but the same drive is
-// meant to be carried to Mac endpoints, where it needs PDT.app. When the
-// laptop has Internet, the drive's PDT.app is checked against the latest
-// GitHub release and downloaded/replaced if it's missing or older.
+// extractMacAppZip does the actual work of extracting a downloaded PDT.app
+// release zip into a destination folder - used both by update_darwin.go's
+// own ApplyUpdate (replacing this Mac's own running PDT.app during a
+// self-update) and by ensureMacAppOnDrive below. ensureMacAppOnDrive itself
+// is used by update_windows.go's refreshIncludeMacApp, to keep includeDir()'s
+// own PDT.app current whenever this laptop checks for its own update
+// (Ken, 2026-09-30) - a flash drive itself no longer fetches from GitHub
+// directly; see flashdrive.go's ensureReleaseAppsOnDrives, which just copies
+// whatever includeDir() already has.
 
 const (
 	macAppBundleName = "PDT.app"

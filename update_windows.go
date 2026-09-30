@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -48,7 +49,32 @@ func (a *App) CheckForUpdate() UpdateCheckResult {
 			result.Error = fmt.Sprintf("release %s has no %s asset to download", rel.TagName, updateAssetName)
 		}
 	}
+	if !a.IsRunningFromRemovableDrive() {
+		refreshIncludeMacApp(rel)
+	}
 	return result
+}
+
+// refreshIncludeMacApp best-effort keeps includeDir()'s own PDT.app current
+// with rel - see includedir.go's own doc comment for why. CheckForUpdate
+// already has rel in hand from a real round trip to GitHub, so this rides
+// along on that same trip rather than waiting for a flash-drive write to
+// discover Include is stale. Silent on failure (offline, no macOS asset in
+// this release, a write error) - Include just keeps whatever it already
+// had, and ensureReleaseAppsOnDrives (flashdrive.go) already tells the
+// technician, in the flash operation's own results, if Include turns out to
+// have nothing usable in it yet.
+func refreshIncludeMacApp(rel update.Release) {
+	dir := includeDir()
+	if dir == "" {
+		return
+	}
+	src, err := macAppSourceFrom(rel)
+	if err != nil {
+		return
+	}
+	defer src.cleanup()
+	_, _ = ensureMacAppOnDrive(context.Background(), dir, src, nil)
 }
 
 // ApplyUpdate downloads assetURL (from a prior CheckForUpdate result),

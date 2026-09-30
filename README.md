@@ -1474,6 +1474,37 @@ retried at the next launch instead of waiting out the interval.
 **Never runs when PDT is running from a flash drive** (`IsRunningFromRemovableDrive`): a portable copy is
 deliberately frozen, and shouldn't phone home from a customer's machine.
 
+### The Include folder: carrying both platforms' apps (`includedir.go`, `flashdrive.go`,
+`macappflash.go`/`winexeflash.go`)
+
+A flash drive needs to carry **both** `PDT.exe` and `PDT.app` at all times, since a technician doesn't
+know in advance whether the next endpoint it gets plugged into is Windows or Mac. `includeDir()`
+(`includedir.go`) is where each installed copy of PDT keeps a ready copy of the *other* platform's app -
+`%LocalAppData%\PDT\Include\PDT.app` on Windows, `~/Library/Application Support/PDT/Include/PDT.exe` on
+macOS - a sibling of Drivers/Configs under the same per-user `installedAppDataDir()` each platform's
+`settings_*.go` already defines (Ken, 2026-09-30).
+
+**Kept current by `CheckForUpdate` itself**, not fetched at flash-drive time: every time a Windows copy
+checks for (or applies) its own update, `update_windows.go`'s `refreshIncludeMacApp` also makes sure
+Include's `PDT.app` is at least as new as the release just checked, reusing `ensureMacAppOnDrive`
+(`macappflash.go`) pointed at `includeDir()` instead of a drive letter. `update_darwin.go`'s
+`refreshIncludeWinExe` mirrors this for `PDT.exe`, reusing `ensureWinExeOnDrive` (`winexeflash.go`). Both
+are silent, best-effort, and skip a version already current, so a daily automatic check costs nothing
+extra beyond the metadata lookup it already does, except right after a new release actually ships. Also
+skipped when running from a flash drive (`IsRunningFromRemovableDrive`), so a portable copy never writes
+into whatever machine it's plugged into.
+
+**Copied onto every drive by Write to Flash Drive and Sync** (`ensureReleaseAppsOnDrives`,
+`flashdrive.go`'s own last step for both `WritePortablePDT` and `SyncToFlashDrives`): a Windows laptop
+copies `includeDir()\PDT.app` onto each drive's root (`copyIncludeMacAppToDrives`, a plain
+`copyTreeMerge`); a Mac copies `includeDir()\PDT.exe` (`copyIncludeExeToDrives`, a plain file write). This
+step needs **no Internet at all** - it only ever reads whatever Include already has, which is why keeping
+Include current is decoupled from flash-drive time in the first place: a client site with no signal
+shouldn't block a Sync from carrying both apps, as long as a check succeeded earlier somewhere that did
+have one. If Include has nothing yet (a fresh install that's never had a successful update check), the
+operation still succeeds - Drivers/Configs/this platform's own exe are unaffected - with a WARN note
+telling the technician to run Check for Updates once while online first.
+
 ### Keeping the bundled 7-Zip up to date (`sevenzip.go`, About tab)
 
 About also credits 7-Zip (by Igor Pavlov) - the tool bundled to auto-extract self-extracting RAR/7z/Zip

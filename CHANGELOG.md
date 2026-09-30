@@ -4,6 +4,13 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-30 (v0.9.57) - Config buttons moved to toolbar icons
+
+### Changed
+- **Open/Save/Reset Configuration and Export Configs are now icons**, matching the rest of the top
+  bar's icon-only buttons (Flash Drive, Refresh, Sync, Cloud Sync, Open Drivers Folder) instead of
+  being the only text-labeled buttons left there. The action name is still in each one's tooltip.
+
 ## 2026-09-30 (v0.9.56) - Include folder never populated on a fresh macOS install
 
 ### Fixed

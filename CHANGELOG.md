@@ -4,6 +4,26 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-29 (v0.9.54) - Sync now refreshes PDT itself; macOS self-update
+
+### Added
+- **Sync now always copies the currently-running copy of PDT.exe (and PDT.app) onto every flash drive**,
+  not just the Drivers/Configs payload - a technician who Syncs a drive can now trust the portable app
+  on it is current too, without a separate manual copy step. A drive whose exe can't be read (unlikely,
+  but the drive/exe could vanish mid-Sync) still gets its Drivers/Configs synced; a WARN note is added
+  instead of failing the whole operation.
+- **The macOS build can now check for and install its own updates**, matching the existing Windows
+  feature. Settings > About's Check for Updates/Update Now buttons and the automatic startup check now
+  work on both platforms. Unlike Windows' single-file swap, macOS updates by staging a fresh `PDT.app`
+  bundle beside the running one and atomically renaming it into place (reusing the same
+  download-and-swap mechanics already used for staging `PDT.app` onto flash drives), then relaunching.
+  Since the macOS build isn't distributed to anyone else yet (pending a paid Apple Developer ID for real
+  code signing), this ships as full auto-apply rather than a check-only prompt. If this exact machine has
+  already worked around issue #9's AMFI SIGKILL crash by locally re-signing with the self-signed "PDT
+  Local Dev" identity (`build-mac.sh`'s own workaround), a self-update re-applies that same signature
+  afterward, so updating doesn't silently reintroduce the crash on the one machine that had already fixed
+  it.
+
 ## 2026-09-29 (v0.9.53) - Drivers/Configs folder lookup fix
 
 ### Fixed

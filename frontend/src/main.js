@@ -224,10 +224,32 @@ document.querySelector('#app').innerHTML = `
   </div>
   <div class="top-bar">
     <label title="${tip('salesChainId')}">Save ID <input type="text" id="salesChainId" class="input-needs-value" size="14" title="${tip('salesChainId')}"></label>
-    <button id="btnOpenConfig" title="Load a previously saved JSON configuration (rows + Save ID).">Open Configuration</button>
-    <button id="btnSaveConfig" title="Save the current rows and Save ID to a JSON configuration file.">Save Configuration</button>
-    <button id="btnResetConfig" title="Reset PDT to its default settings - clears every row, the Save ID, and the Defaults panel.">Reset Configuration</button>
-    <button id="btnExportConfigs" title="Copy this Save ID's Configs files (saved JSON config, captured Settings/Device Settings) to its Preinstall subfolder on this computer.">Export Configs</button>
+    <button id="btnOpenConfig" class="icon-btn-inline" title="Open Configuration: load a previously saved JSON configuration (rows + Save ID).">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H3z"/>
+        <path d="M3 8l1.4 9.8a2 2 0 0 0 2 1.7h11.2a2 2 0 0 0 2-1.7L21 8"/>
+      </svg>
+    </button>
+    <button id="btnSaveConfig" class="icon-btn-inline" title="Save Configuration: save the current rows and Save ID to a JSON configuration file.">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+        <polyline points="17 21 17 13 7 13 7 21"/>
+        <polyline points="7 3 7 8 15 8"/>
+      </svg>
+    </button>
+    <button id="btnResetConfig" class="icon-btn-inline" title="Reset Configuration: reset PDT to its default settings - clears every row, the Save ID, and the Defaults panel.">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+        <polyline points="1 4 1 10 7 10"/>
+        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+      </svg>
+    </button>
+    <button id="btnExportConfigs" class="icon-btn-inline" title="Export Configs: copy this Save ID's Configs files (saved JSON config, captured Settings/Device Settings) to its Preinstall subfolder on this computer.">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+        <polyline points="15 3 21 3 21 9"/>
+        <line x1="10" y1="14" x2="21" y2="3"/>
+      </svg>
+    </button>
     <div class="dropdown platform-windows-only" id="spoolerDropdown">
       <button id="btnSpooler" title="Control the Windows Print Spooler service.">Spooler &#9662;</button>
       <div class="dropdown-menu" id="spoolerMenu" hidden>

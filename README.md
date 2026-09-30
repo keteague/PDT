@@ -40,8 +40,9 @@ UAC-prompts every time, per its own manifest.
   `printer.Deployer` implementation - installs a `.dmg`/`.pkg` driver package and creates/reuses a CUPS
   LPD print queue, verified against real vendor packages and this machine's own real queues. `package
   main` now compiles and runs as a real macOS `.app`, with a reduced frontend UI for the Windows-only
-  concepts (Spooler, SNMP/port config, APF, DEVMODE capture, app self-update) that have no CUPS/macOS
-  equivalent yet. Not yet installer-packaged. What's still genuinely open: the open question of
+  concepts (Spooler, SNMP/port config, APF, DEVMODE capture) that have no CUPS/macOS equivalent yet -
+  app self-update is no longer one of them (see "Automatic update checks at startup" below). Not yet
+  installer-packaged. What's still genuinely open: the open question of
   whether a real signed `.app` avoids the ad-hoc-signing AMFI rejection a bare test binary hit -
   see "macOS support" below and the Changelog for the current list.
 - **Not started**: Linux support.
@@ -1413,18 +1414,36 @@ upload attaches its own mtime as custom object metadata (`x-amz-meta-mtime`,
 locally via `os.Chtimes`. `copyFile` (`copytree.go`) does the same for flash-drive Sync/Write to
 Flash Drive, which had the identical gap before Cloud Sync's own version of it prompted the fix.
 
-### Checking for and applying app updates (`internal/update`, About tab)
+### Checking for and applying app updates (`internal/update`, `update_windows.go`/`update_darwin.go`, About tab)
 
 Unlike driver updates above, PDT's *own* updates genuinely can be checked and applied automatically,
-since this project's GitHub Releases are under our own control: About's **Check for Updates** queries
-`GET /repos/keteague/PDT/releases/latest` and compares the release tag against `AppVersion`
-(numerically, via `driver.CompareVersions` - a generic comparator despite living in the driver
-package). If newer, **Update Now** downloads that release's `PDT.exe` asset and installs it in place
-of the running executable, then relaunches it - see `internal/update`'s doc comment for how that works
-with **no separate installer**: Windows lets a running executable's file be renamed out of the way
-while it keeps running from the renamed file, which is enough to drop the new exe in at the original
-name; the process finishes on its own a moment later and its renamed-away `.old` file is cleaned up
-the next time the app starts.
+since this project's GitHub Releases are under our own control, on **both platforms**: About's
+**Check for Updates** queries `GET /repos/keteague/PDT/releases/latest` and compares the release tag
+against `AppVersion` (numerically, via `driver.CompareVersions` - a generic comparator despite living
+in the driver package). The two platforms then differ in what **Update Now** actually replaces, since
+one ships as a single file and the other as a bundle:
+
+- **Windows**: downloads the release's `PDT.exe` asset and installs it in place of the running
+  executable, then relaunches it - see `internal/update`'s doc comment for how that works with **no
+  separate installer**: Windows lets a running executable's file be renamed out of the way while it
+  keeps running from the renamed file, which is enough to drop the new exe in at the original name; the
+  process finishes on its own a moment later and its renamed-away `.old` file is cleaned up the next
+  time the app starts.
+- **macOS**: downloads the release's `PDT-macOS-<version>.zip` and extracts it into a fresh `PDT.app`
+  right beside the running one, then relaunches via `open` and quits - see `update_darwin.go`'s own doc
+  comment. Reuses `macappflash.go`'s existing `macAppSource`/`extractMacAppZip` (built for staging a
+  current `PDT.app` onto a flash drive from a technician's laptop) rather than a separate mechanism:
+  its stage-in-a-sibling-folder-then-atomically-rename approach already gives the same "never leaves the
+  app half-replaced" guarantee Windows' rename-aside trick does, just for a whole bundle instead of one
+  file. Also re-signs the freshly-extracted bundle with issue #9's own local "PDT Local Dev" identity
+  (`reapplyLocalDevSigningIfAvailable`) if - and only if - this exact machine already has it trusted, the
+  same conditional check `build-mac.sh` uses: without this, a self-update would silently replace a
+  technician's own locally re-signed `PDT.app` with a plain ad-hoc-signed one, reintroducing issue #9's
+  AMFI SIGKILL on the very next Deploy on the one machine that had already worked around it. **Caveat
+  while this project has no Apple Developer ID yet**: on any *other* machine (no local identity trusted),
+  the freshly-installed app is only ad-hoc signed, so privileged elevation (Deploy's own admin prompt)
+  will crash with the same AMFI error real `.app` distribution hasn't solved yet either - see "macOS
+  support" above and issue #9.
 
 **For this to find anything**, a release actually has to exist: bump `AppVersion` (`version.go`) and
 `wails.json`'s `info.productVersion` together, then push a tag `v<AppVersion>` (e.g. `v0.9.27`).
@@ -1432,15 +1451,17 @@ the next time the app starts.
 the `VERSION` file, then builds both platforms (Windows: `wails build` + the Inno Setup installer;
 macOS: `wails build`, ad-hoc signed only - see the workflow's own comments on why `build-mac.sh`'s extra
 signing step can't run in CI) and creates the GitHub Release itself, with `PDT.exe` uploaded under that
-exact name (the one `CheckForUpdate` looks for), alongside the Windows installer and a zipped `PDT.app`.
+exact name (the one Windows' `CheckForUpdate` looks for), alongside the Windows installer and a zipped
+`PDT.app` (`PDT-macOS-<version>.zip`, the one macOS' `CheckForUpdate` looks for).
 
-### Automatic update checks at startup (`autoupdate_windows.go`, About tab)
+### Automatic update checks at startup (`autoupdate_windows.go`/`autoupdate_darwin.go`, About tab)
 
-Both checks above can also run on their own when PDT starts. About has a **Check for PDT updates
-automatically** and a **Check for 7-Zip updates automatically** checkbox (both on by default), each with
-a frequency combobox: **On Startup, Daily, Weekly, Monthly, Quarterly, Yearly** (default Daily -
-"On Startup" would hit GitHub and 7-zip.org on every launch). Monthly/Quarterly/Yearly are calendar
-intervals, not fixed day counts.
+Both checks above can also run on their own when PDT starts, on both platforms - the 7-Zip check
+(Windows only - macOS has no bundled-tool equivalent) is the only part of this section that isn't
+cross-platform. About has a **Check for PDT updates automatically** and (Windows only) a **Check for
+7-Zip updates automatically** checkbox (both on by default), each with a frequency combobox: **On
+Startup, Daily, Weekly, Monthly, Quarterly, Yearly** (default Daily - "On Startup" would hit GitHub and
+7-zip.org on every launch). Monthly/Quarterly/Yearly are calendar intervals, not fixed day counts.
 
 The frontend calls `AutoUpdateChecks` once at startup; the backend runs whichever checks are enabled and
 due, and an update found is reported in the Log ("PDT 0.9.52 is available ... Open Settings > About to
@@ -1451,8 +1472,7 @@ Settings itself, which the frontend round-trips whole on every save) - a failed 
 retried at the next launch instead of waiting out the interval.
 
 **Never runs when PDT is running from a flash drive** (`IsRunningFromRemovableDrive`): a portable copy is
-deliberately frozen, and shouldn't phone home from a customer's machine. Windows only, like the manual
-checks - macOS has no self-update to check for.
+deliberately frozen, and shouldn't phone home from a customer's machine.
 
 ### Keeping the bundled 7-Zip up to date (`sevenzip.go`, About tab)
 

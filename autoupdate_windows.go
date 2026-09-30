@@ -6,23 +6,10 @@ import (
 )
 
 // Automatic update checks (Settings > About's "check automatically"
-// checkboxes) - Windows-only like the manual checks they run, since PDT's own
-// self-update and the bundled 7-Zip are both Windows-only.
-
-// AutoUpdateOutcome is one product's automatic check: Checked is false when
-// it didn't run this launch (disabled in Settings, not due yet, or running
-// from a flash drive), otherwise Result is exactly what the matching manual
-// check button would have shown.
-type AutoUpdateOutcome struct {
-	Checked bool              `json:"checked"`
-	Result  UpdateCheckResult `json:"result"`
-}
-
-// AutoUpdateResult is AutoUpdateChecks' outcome.
-type AutoUpdateResult struct {
-	PDT      AutoUpdateOutcome `json:"pdt"`
-	SevenZip AutoUpdateOutcome `json:"sevenZip"`
-}
+// checkboxes) - the Windows half: both PDT's own update and the bundled
+// 7-Zip's, since both self-update mechanisms are Windows-only here (7-Zip
+// has no bundled-tool equivalent on macOS at all). See autoupdate_darwin.go
+// for the macOS half, PDT's own update only.
 
 var autoUpdateOnce sync.Once
 

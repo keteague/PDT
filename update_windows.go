@@ -13,26 +13,15 @@ import (
 )
 
 // PDT's own self-update mechanism (About tab's Check for Updates/Update Now)
-// - Windows-only for now (see this port's own "explicitly out of scope"
-// list): replacing a running .exe in place by renaming it aside
-// (internal/update.Apply) has no macOS analog, and a real mac self-update
-// would mean replacing the whole .app bundle - its own design pass, not
-// attempted here.
+// - the Windows half, replacing a running .exe in place by renaming it aside
+// (internal/update.Apply). See update_darwin.go for the macOS half, which
+// replaces the whole .app bundle instead (a materially different mechanism -
+// see its own doc comment) but presents identically to the frontend.
 
 // updateAssetName is the exact GitHub release asset name CheckForUpdate looks
 // for - the release process for this app is to build with `wails build` and
 // upload build/bin/PDT.exe under this same name to each GitHub release.
 const updateAssetName = "PDT.exe"
-
-// UpdateCheckResult is CheckForUpdate's outcome.
-type UpdateCheckResult struct {
-	Available      bool   `json:"available"`
-	CurrentVersion string `json:"currentVersion"`
-	LatestVersion  string `json:"latestVersion"`
-	ReleaseURL     string `json:"releaseUrl"`
-	AssetURL       string `json:"assetUrl"`
-	Error          string `json:"error"`
-}
 
 // CheckForUpdate queries this project's GitHub Releases for a version newer
 // than AppVersion - Settings > About's "Check for Updates" button. Comparison
@@ -60,13 +49,6 @@ func (a *App) CheckForUpdate() UpdateCheckResult {
 		}
 	}
 	return result
-}
-
-// ApplyUpdateResult is ApplyUpdate's outcome. Error is "" on success, in
-// which case the app has already relaunched itself and this process is about
-// to quit - there is nothing further for the frontend to do either way.
-type ApplyUpdateResult struct {
-	Error string `json:"error"`
 }
 
 // ApplyUpdate downloads assetURL (from a prior CheckForUpdate result),

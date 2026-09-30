@@ -93,6 +93,34 @@ func TestEnsureWinExeOnDrive_AddsWhenMissing(t *testing.T) {
 	}
 }
 
+// TestEnsureWinExeOnDrive_CreatesDriveRootIfMissing guards the real bug
+// found live (2026-09-30): driveRoot used to be assumed to already exist (a
+// real flash drive's own root always does), but it's also includeDir() now
+// (update_darwin.go's refreshIncludeWinExe) - a folder that flat-out doesn't
+// exist yet the first time any given Mac ever populates it. Every other test
+// in this file uses t.TempDir() directly as drive, which already exists and
+// so never would have caught this.
+func TestEnsureWinExeOnDrive_CreatesDriveRootIfMissing(t *testing.T) {
+	drive := filepath.Join(t.TempDir(), "Include")
+	if _, err := os.Stat(drive); !os.IsNotExist(err) {
+		t.Fatalf("test setup: expected drive to not exist yet, got err=%v", err)
+	}
+	src, _ := fakeWinExeSource(t, "9.9.9", "new exe bytes")
+	defer src.cleanup()
+
+	note, err := ensureWinExeOnDrive(context.Background(), drive, src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(note.Text, "Added PDT.exe v9.9.9") {
+		t.Errorf("note = %q", note.Text)
+	}
+	got, err := os.ReadFile(filepath.Join(drive, "PDT.exe"))
+	if err != nil || string(got) != "new exe bytes" {
+		t.Errorf("drive PDT.exe = %q, %v", got, err)
+	}
+}
+
 // An existing PDT.exe whose version can't be read (or is older) is replaced.
 func TestEnsureWinExeOnDrive_ReplacesUnreadableOrOutdated(t *testing.T) {
 	drive := t.TempDir()

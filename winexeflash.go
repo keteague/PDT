@@ -172,6 +172,16 @@ func ensureWinExeOnDrive(ctx context.Context, driveRoot string, src *winExeSourc
 	if err != nil {
 		return FlashNote{}, err
 	}
+	// A real flash drive's own root always already exists, but driveRoot is
+	// also includeDir() now (update_darwin.go's refreshIncludeWinExe) - a
+	// brand-new-on-this-machine folder the first time it's ever populated, so
+	// this can no longer assume driveRoot is already there. Confirmed live as
+	// a real bug (2026-09-30): Include never populated on any fresh Mac at
+	// all, the staging write below failing silently every time and getting
+	// swallowed by refreshIncludeWinExe's own best-effort discard.
+	if err := os.MkdirAll(driveRoot, 0o755); err != nil {
+		return FlashNote{}, fmt.Errorf("creating %s: %w", driveRoot, err)
+	}
 	staging := filepath.Join(driveRoot, ".PDT.exe.new")
 	os.Remove(staging)
 	buf := make([]byte, copyBufferSize)

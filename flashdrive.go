@@ -528,12 +528,22 @@ func (a *App) ensureReleaseAppsOnDrives(ctx context.Context, result *BatchDriveR
 // SyncToFlashDrives copies this laptop's own Drivers folder and/or Configs
 // folder onto every listed drive letter - the toolbar's Sync button, for
 // topping up a flash drive that already has a portable PDT copy on it with
-// whatever has shown up locally since, without rewriting the exe or the
-// 7-Zip tools. The dialog's Drivers/Configs checkboxes (Ken, 2026-09-20)
-// pick which; at least one must be true. syncDriversTo already extracts
-// anything newly-copied on the destination itself (see its own doc
-// comment), so the flash drive is immediately ready to use without needing
-// to be plugged into another computer first just to trigger that.
+// whatever has shown up locally since. The dialog's Drivers/Configs
+// checkboxes (Ken, 2026-09-20) pick which; at least one must be true.
+// syncDriversTo already extracts anything newly-copied on the destination
+// itself (see its own doc comment), so the flash drive is immediately ready
+// to use without needing to be plugged into another computer first just to
+// trigger that.
+//
+// Also always writes this laptop's own currently-running exe onto every
+// listed drive (Ken, 2026-09-29: a Sync should never leave a flash drive's
+// copy of PDT itself behind, not just its Drivers/Configs) and, via
+// ensureReleaseAppsOnDrives, ensures a current PDT.app for macOS endpoints
+// (and a current PDT.exe for Windows endpoints too, if this laptop is
+// itself a Mac) - the exact same "other platform" step WritePortablePDT
+// already ends with, best-effort over the network so a Sync still succeeds
+// offline. The 7-Zip tools folder is the one thing this still leaves alone -
+// Write to Flash Drive is what lays that down initially.
 //
 // driversSource ("local" - the default, also "" - or "cloud") picks where the
 // Drivers come from: this laptop's own Drivers folder, or the shared cloud
@@ -555,6 +565,21 @@ func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs
 		}
 	}
 
+	// Read once, up front, like WritePortablePDT's own exeName/exeData - a
+	// failure here (should never happen in practice) is a WARN note, not a
+	// reason to refuse the Drivers/Configs sync that's this function's own
+	// main purpose.
+	exePath, exeErr := os.Executable()
+	var exeName string
+	var exeData []byte
+	if exeErr == nil {
+		exeName = filepath.Base(exePath)
+		exeData, exeErr = os.ReadFile(exePath)
+	}
+	if exeErr != nil {
+		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not read this copy of PDT to sync onto the drive(s): %v. Drivers/Configs will still sync.", exeErr)})
+	}
+
 	ctx, done := a.beginFlashSync()
 	defer done()
 
@@ -565,6 +590,11 @@ func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs
 		}
 		progress := a.newFlashCopyProgressFunc(letter)
 		var errs []error
+		if exeErr == nil {
+			if err := os.WriteFile(filepath.Join(letter, exeName), exeData, 0o755); err != nil {
+				errs = append(errs, fmt.Errorf("writing %s: %w", exeName, err))
+			}
+		}
 		if fromCloud {
 			conflicts, err := a.syncCloudDriversToDrive(ctx, letter, func(p CopyProgress) { progress("Drivers (cloud)", p) })
 			if err != nil {
@@ -589,6 +619,7 @@ func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs
 		}
 		result.Succeeded = append(result.Succeeded, letter)
 	}
+	a.ensureReleaseAppsOnDrives(ctx, &result)
 	return result
 }
 

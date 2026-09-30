@@ -370,12 +370,12 @@ document.querySelector('#app').innerHTML = `
             <a href="#" id="aboutRepoLink" title="Open in your browser"></a>
           </div>
         </div>
-        <div class="about-update platform-windows-only">
+        <div class="about-update">
           <button type="button" id="btnCheckUpdate" title="Check this project's GitHub Releases for a newer version.">Check for Updates</button>
           <button type="button" class="primary" id="btnApplyUpdate" hidden title="Download and install the update, then relaunch.">Update Now</button>
           <span class="modal-hint" id="updateStatus"></span>
         </div>
-        <div class="about-update platform-windows-only">
+        <div class="about-update">
           <label class="about-auto-check" title="Look for a newer PDT in the background when PDT starts, and say so in the Log if there is one. Never runs when PDT is running from a flash drive.">
             <input type="checkbox" id="pdtUpdateAutoEnabled"> Check for PDT updates automatically
           </label>
@@ -1104,9 +1104,7 @@ async function init() {
         btn.title = 'Write to Flash Drive is unavailable when running PDT from a flash drive itself - use an installed copy instead.';
     }
 
-    if (!isMac()) {
-        runAutoUpdateChecks(); // not awaited - a slow or offline network must never delay startup
-    }
+    runAutoUpdateChecks(); // not awaited - a slow or offline network must never delay startup
 
     onEvent('deploy-progress', (result) => onDeployProgress(result));
     onEvent('flashcopy-progress', (progress) => updateFlashCopyProgress(progress));
@@ -4397,11 +4395,13 @@ function readAutoUpdateControls() {
     return fields;
 }
 
-// Runs once at startup (Windows only): asks the backend for whichever
+// Runs once at startup on both platforms: asks the backend for whichever
 // automatic update checks are due (see AutoUpdateChecks in
-// autoupdate_windows.go - it decides what's due, skips everything on a flash
-// drive, and records when each check last succeeded) and reports any update
-// found in the Log. It also fills in Settings > About's own status line and
+// autoupdate_windows.go/autoupdate_darwin.go - it decides what's due, skips
+// everything on a flash drive, and records when each check last succeeded)
+// and reports any update found in the Log. sevenZip is only ever `checked`
+// on Windows - autoupdate_darwin.go's own AutoUpdateChecks never sets it.
+// It also fills in Settings > About's own status line and
 // Update Now button, so the update is one click away without re-checking by
 // hand. A check that found nothing stays silent, as does one that failed
 // (offline is normal in the field) unless Debug logging is on.

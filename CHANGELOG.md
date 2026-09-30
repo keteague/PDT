@@ -4,6 +4,17 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-30 (v0.9.56) - Include folder never populated on a fresh macOS install
+
+### Fixed
+- **`Include` (v0.9.55's new folder for the opposing platform's app) never actually populated on
+  any Mac** - `ensureWinExeOnDrive` assumed its destination folder already existed (true for a
+  real flash drive's own root, not true for `Include` the first time a given Mac ever checks for
+  updates), so the write failed silently every time and was swallowed by the best-effort refresh
+  that calls it. Confirmed live: a successful automatic update check left `update-check-state.json`
+  showing a real check, but no `Include` folder ever appeared. The destination folder is now
+  created first if it doesn't exist yet.
+
 ## 2026-09-30 (v0.9.55) - Include folder: flash drives now carry both platforms' apps
 
 ### Added

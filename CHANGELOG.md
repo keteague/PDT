@@ -4,6 +4,15 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-10-01 (v0.9.60) - Install Rosetta added to the CUPS web UI dropdown
+
+### Added
+- **The CUPS web UI dropdown's own Enable/Disable Web UI actions now have a third: Install
+  Rosetta** (`softwareupdate --install-rosetta --agree-to-license`), prompting for administrator
+  privileges the same way. Grouped into that same dropdown only because it's the one other
+  toolbar slot macOS has for an occasional, admin-facing machine-setup action - unrelated to CUPS
+  itself. Declines cleanly on an Intel Mac instead of running a pointless command.
+
 ## 2026-10-01 (v0.9.59) - CUPS web UI control icon (macOS)
 
 ### Added

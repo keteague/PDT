@@ -4,6 +4,16 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-10-01 (v0.9.59) - CUPS web UI control icon (macOS)
+
+### Added
+- **macOS now has a toolbar icon in the Spooler button's own slot** - CUPS has no serviceable
+  background process to restart/start/stop, so this controls the one comparable admin-facing
+  toggle instead: `cupsctl`'s own `WebInterface` setting (http://localhost:631). Colored
+  green/red/yellow to match its own live state, with Enable/Disable Web UI dropdown actions.
+  Setting it prompts for administrator privileges, the same way every other CUPS/lpadmin change
+  in this codebase already does; a successful enable opens the web UI in the system browser.
+
 ## 2026-09-30 (v0.9.58) - Spooler button moved to a toolbar icon
 
 ### Changed

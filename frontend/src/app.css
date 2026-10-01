@@ -181,10 +181,18 @@ button.danger:hover:not(:disabled) {
     z-index: 20;
 }
 
+/* Wider than the generic 110px (Spooler's own Restart/Start/Stop items fit
+   easily there) - "Enable Web UI"/"Disable Web UI" wrap awkwardly at that
+   width otherwise. */
+#cupsWebUIMenu {
+    min-width: 150px;
+}
+
 .dropdown-item {
     background: transparent;
     border: none;
     border-radius: 0;
+    white-space: nowrap;
     text-align: left;
     padding: 7px 12px;
 }
@@ -269,35 +277,37 @@ button.danger:hover:not(:disabled) {
     display: none;
 }
 
-/* Spooler button's own status color - independent of button.primary/danger
+/* Live on/off-state button color - independent of button.primary/danger
    (which mean "the main action"/"a destructive action" elsewhere), since
-   here the color reports live service state rather than an action's
-   importance. */
-button#btnSpooler.spooler-running {
+   here the color reports live state rather than an action's importance.
+   Shared by the Spooler button (Windows) and the CUPS web UI button
+   (macOS) - the two toolbar buttons whose own color reflects a live
+   running/enabled-vs-stopped/disabled state rather than being static. */
+button.state-btn-on {
     background: #2f6f4f;
     border-color: #3f8f66;
 }
 
-button#btnSpooler.spooler-running:hover:not(:disabled) {
+button.state-btn-on:hover:not(:disabled) {
     background: #38835d;
 }
 
-button#btnSpooler.spooler-stopped {
+button.state-btn-off {
     background: #8f2f2f;
     border-color: #b33f3f;
 }
 
-button#btnSpooler.spooler-stopped:hover:not(:disabled) {
+button.state-btn-off:hover:not(:disabled) {
     background: #a53838;
 }
 
-button#btnSpooler.spooler-pending {
+button.state-btn-pending {
     background: #a68b1f;
     border-color: #c9a72a;
     color: #1a1a1a;
 }
 
-button#btnSpooler.spooler-pending:hover:not(:disabled) {
+button.state-btn-pending:hover:not(:disabled) {
     background: #bfa025;
 }
 

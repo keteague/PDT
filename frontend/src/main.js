@@ -265,6 +265,20 @@ document.querySelector('#app').innerHTML = `
         <button type="button" class="dropdown-item" data-spooler-action="stop">Stop</button>
       </div>
     </div>
+    <div class="dropdown platform-darwin-only" id="cupsWebUIDropdown">
+      <button id="btnCupsWebUI" class="icon-btn-inline" title="Control CUPS' own web admin UI (http://localhost:631).">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="2" y1="12" x2="22" y2="12"/>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+        <span style="vertical-align: middle;">&#9662;</span>
+      </button>
+      <div class="dropdown-menu" id="cupsWebUIMenu" hidden>
+        <button type="button" class="dropdown-item" data-cupswebui-action="enable">Enable Web UI</button>
+        <button type="button" class="dropdown-item" data-cupswebui-action="disable">Disable Web UI</button>
+      </div>
+    </div>
     <button id="btnFlashDrive" class="icon-btn-inline" title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
         <line x1="12" y1="12" x2="6" y2="7"/>
@@ -942,9 +956,9 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 function applySalesChainGate() {
     const locked = !state.salesChainId;
     document.body.classList.toggle('sales-chain-locked', locked);
-    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnSyncFlashDrive', 'btnCloudSync', 'btnOpenDriversFolder', 'btnSpooler', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
+    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnSyncFlashDrive', 'btnCloudSync', 'btnOpenDriversFolder', 'btnSpooler', 'btnCupsWebUI', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
-        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop') || c.closest('#openPrintingProgressBackdrop') || c.closest('#rescanBackdrop')) continue;
+        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#cupsWebUIDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop') || c.closest('#openPrintingProgressBackdrop') || c.closest('#rescanBackdrop')) continue;
         c.disabled = locked;
     }
     updatePortPrefixTextEnabled();
@@ -1115,7 +1129,9 @@ async function init() {
     wireEvents();
     setupDefaultsComboboxes();
     if (!isMac()) {
-        refreshSpoolerButtonState(); // not awaited - shouldn't delay the rest of startup - Windows-only, no CUPS-service-restart analog (see this port's own "explicitly out of scope" notes)
+        refreshSpoolerButtonState(); // not awaited - shouldn't delay the rest of startup
+    } else {
+        refreshCupsWebUIButtonState(); // not awaited - same reasoning, macOS's own counterpart
     }
 
     // Write to Flash Drive can't overwrite the exact exe it's currently
@@ -2412,6 +2428,23 @@ function wireEvents() {
         }
     });
 
+    el('btnCupsWebUI').addEventListener('click', (e) => {
+        e.stopPropagation();
+        el('cupsWebUIMenu').hidden = !el('cupsWebUIMenu').hidden;
+    });
+    for (const item of document.querySelectorAll('#cupsWebUIMenu .dropdown-item')) {
+        item.addEventListener('click', () => {
+            el('cupsWebUIMenu').hidden = true;
+            controlCupsWebUI(item.dataset.cupswebuiAction === 'enable');
+        });
+    }
+    // Same outside-click-closes pattern as the Spooler dropdown above.
+    document.addEventListener('click', (e) => {
+        if (!el('cupsWebUIMenu').hidden && !e.target.closest('#cupsWebUIDropdown')) {
+            el('cupsWebUIMenu').hidden = true;
+        }
+    });
+
     el('btnFlashDrive').addEventListener('click', () => openFlashDriveModal('write'));
     el('btnSyncFlashDrive').addEventListener('click', () => openFlashDriveModal('sync'));
     el('btnFlashDriveCancel').addEventListener('click', closeFlashDriveModal);
@@ -2966,10 +2999,10 @@ async function exportConfigs() {
 // as "don't claim it's definitely up or definitely down").
 function applySpoolerButtonState(state) {
     const btn = el('btnSpooler');
-    btn.classList.remove('spooler-running', 'spooler-stopped', 'spooler-pending');
-    if (state === 'running') btn.classList.add('spooler-running');
-    else if (state === 'stopped') btn.classList.add('spooler-stopped');
-    else btn.classList.add('spooler-pending');
+    btn.classList.remove('state-btn-on', 'state-btn-off', 'state-btn-pending');
+    if (state === 'running') btn.classList.add('state-btn-on');
+    else if (state === 'stopped') btn.classList.add('state-btn-off');
+    else btn.classList.add('state-btn-pending');
 }
 
 async function refreshSpoolerButtonState() {
@@ -3017,6 +3050,50 @@ async function controlSpooler(action) {
     for (const w of result.warnings || []) {
         logStatus('WARN', w);
     }
+}
+
+// --- CUPS web UI (macOS - the Spooler dropdown's own counterpart, since
+// CUPS has no serviceable background process to restart/start/stop the way
+// the Windows Print Spooler does) ---
+
+// applyCupsWebUIButtonState mirrors applySpoolerButtonState above - green
+// enabled, red disabled, yellow for anything still settling (a pending
+// action, or a status query that failed and left the state simply unknown).
+function applyCupsWebUIButtonState(state) {
+    const btn = el('btnCupsWebUI');
+    btn.classList.remove('state-btn-on', 'state-btn-off', 'state-btn-pending');
+    if (state === 'enabled') btn.classList.add('state-btn-on');
+    else if (state === 'disabled') btn.classList.add('state-btn-off');
+    else btn.classList.add('state-btn-pending');
+}
+
+async function refreshCupsWebUIButtonState() {
+    const result = await App.CupsWebUIStatus();
+    applyCupsWebUIButtonState(result.error ? 'pending' : (result.enabled ? 'enabled' : 'disabled'));
+}
+
+// controlCupsWebUI: enable is true for "Enable Web UI", false for "Disable
+// Web UI" - job-independent (this is a machine-wide CUPS server setting, not
+// specific to any row), so it needs no Save ID and isn't gated by it, same
+// reasoning as controlSpooler. A successful enable opens
+// http://localhost:631 in the system browser (Go side - SetCupsWebUI).
+async function controlCupsWebUI(enable) {
+    const verb = enable ? 'enable' : 'disable';
+    applyCupsWebUIButtonState('pending');
+    let result;
+    try {
+        result = await App.SetCupsWebUI(enable);
+    } catch (err) {
+        applyCupsWebUIButtonState('pending');
+        logStatus('ERR', `Could not ${verb} the CUPS web UI: ${err}`);
+        return;
+    }
+    applyCupsWebUIButtonState(result.error ? 'pending' : (result.enabled ? 'enabled' : 'disabled'));
+    if (result.error) {
+        logStatus('ERR', `Could not ${verb} the CUPS web UI: ${result.error}`);
+        return;
+    }
+    logStatus('OK', `CUPS web UI ${enable ? 'enabled' : 'disabled'}.`);
 }
 
 // --- Write to Flash Drive ---

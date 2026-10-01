@@ -266,7 +266,7 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
     <div class="dropdown platform-darwin-only" id="cupsWebUIDropdown">
-      <button id="btnCupsWebUI" class="icon-btn-inline" title="Control CUPS' own web admin UI (http://localhost:631).">
+      <button id="btnCupsWebUI" class="icon-btn-inline" title="Control CUPS' own web admin UI (http://localhost:631), and install Rosetta.">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
           <circle cx="12" cy="12" r="10"/>
           <line x1="2" y1="12" x2="22" y2="12"/>
@@ -277,6 +277,7 @@ document.querySelector('#app').innerHTML = `
       <div class="dropdown-menu" id="cupsWebUIMenu" hidden>
         <button type="button" class="dropdown-item" data-cupswebui-action="enable">Enable Web UI</button>
         <button type="button" class="dropdown-item" data-cupswebui-action="disable">Disable Web UI</button>
+        <button type="button" class="dropdown-item" data-cupswebui-action="install-rosetta" title="softwareupdate --install-rosetta --agree-to-license">Install Rosetta</button>
       </div>
     </div>
     <button id="btnFlashDrive" class="icon-btn-inline" title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">
@@ -2435,7 +2436,12 @@ function wireEvents() {
     for (const item of document.querySelectorAll('#cupsWebUIMenu .dropdown-item')) {
         item.addEventListener('click', () => {
             el('cupsWebUIMenu').hidden = true;
-            controlCupsWebUI(item.dataset.cupswebuiAction === 'enable');
+            const action = item.dataset.cupswebuiAction;
+            if (action === 'install-rosetta') {
+                installRosetta();
+            } else {
+                controlCupsWebUI(action === 'enable');
+            }
         });
     }
     // Same outside-click-closes pattern as the Spooler dropdown above.
@@ -3094,6 +3100,32 @@ async function controlCupsWebUI(enable) {
         return;
     }
     logStatus('OK', `CUPS web UI ${enable ? 'enabled' : 'disabled'}.`);
+}
+
+// installRosetta: a one-shot action unrelated to the CUPS web UI's own on/off
+// state (grouped into this same dropdown only because it's the one other
+// toolbar slot macOS has for an occasional admin-facing machine-setup
+// action) - doesn't touch applyCupsWebUIButtonState at all, just disables
+// the button for the duration (softwareupdate's own install can take a real,
+// visible while) and logs the result.
+async function installRosetta() {
+    const btn = el('btnCupsWebUI');
+    btn.disabled = true;
+    logStatus('INFO', 'Installing Rosetta...');
+    let result;
+    try {
+        result = await App.InstallRosetta();
+    } catch (err) {
+        btn.disabled = false;
+        logStatus('ERR', `Could not install Rosetta: ${err}`);
+        return;
+    }
+    btn.disabled = false;
+    if (result.error) {
+        logStatus('ERR', `Could not install Rosetta: ${result.error}`);
+        return;
+    }
+    logStatus('OK', 'Rosetta installed.');
 }
 
 // --- Write to Flash Drive ---

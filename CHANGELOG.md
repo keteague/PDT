@@ -4,6 +4,13 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-09-30 (v0.9.58) - Spooler button moved to a toolbar icon
+
+### Changed
+- **The Spooler button is now a printer icon**, matching 0.9.57's Config buttons and the rest of the
+  top bar's icon-only buttons, instead of being the one text-labeled button left there. The dropdown
+  arrow and the button's running/stopped/pending status coloring are unchanged.
+
 ## 2026-09-30 (v0.9.57) - Config buttons moved to toolbar icons
 
 ### Changed

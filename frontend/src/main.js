@@ -251,7 +251,14 @@ document.querySelector('#app').innerHTML = `
       </svg>
     </button>
     <div class="dropdown platform-windows-only" id="spoolerDropdown">
-      <button id="btnSpooler" title="Control the Windows Print Spooler service.">Spooler &#9662;</button>
+      <button id="btnSpooler" class="icon-btn-inline" title="Control the Windows Print Spooler service.">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+          <polyline points="6 9 6 2 18 2 18 9"/>
+          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+          <rect x="6" y="14" width="12" height="8"/>
+        </svg>
+        <span style="vertical-align: middle;">&#9662;</span>
+      </button>
       <div class="dropdown-menu" id="spoolerMenu" hidden>
         <button type="button" class="dropdown-item" data-spooler-action="restart">Restart</button>
         <button type="button" class="dropdown-item" data-spooler-action="start">Start</button>

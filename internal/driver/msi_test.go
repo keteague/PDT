@@ -161,7 +161,7 @@ func TestEnsureMsiInfsExtracted_RemovesProcessedMsiFromCacheOnly(t *testing.T) {
 	if err := os.WriteFile(inf, []byte("; inf"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeSourceMarker(nestedDest, nested)
+	writeSourceMarker(dir, nestedDest, nested)
 
 	real := filepath.Join(dir, "Real.msi")
 	if err := os.WriteFile(real, []byte("not a real msi"), 0o644); err != nil {
@@ -171,7 +171,7 @@ func TestEnsureMsiInfsExtracted_RemovesProcessedMsiFromCacheOnly(t *testing.T) {
 	if err := os.MkdirAll(realDest, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeSourceMarker(realDest, real)
+	writeSourceMarker(dir, realDest, real)
 
 	ensureMsiInfsExtracted(dir)
 
@@ -197,7 +197,7 @@ func TestEnsureMsiInfsExtracted_SkipsAlreadyCached(t *testing.T) {
 	}
 
 	// A finished extraction always ends with its source marker.
-	writeSourceMarker(cacheDir, filepath.Join(dir, "Foo.msi"))
+	writeSourceMarker(dir, cacheDir, filepath.Join(dir, "Foo.msi"))
 
 	ensureMsiInfsExtracted(dir)
 	// No assertion beyond "didn't try to run msiexec against this

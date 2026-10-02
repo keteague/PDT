@@ -104,7 +104,7 @@ func TestBuildCatalog_DoesNotReExtractExistingCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A finished extraction always ends with its source marker.
-	writeSourceMarker(cacheDir, filepath.Join(canonDir, "ZippedPackage.zip"))
+	writeSourceMarker(canonDir, cacheDir, filepath.Join(canonDir, "ZippedPackage.zip"))
 
 	cat, err := BuildCatalog(root)
 	if err != nil {
@@ -176,7 +176,7 @@ func TestEnsureZipInfsExtracted_SkipsAlreadyCached(t *testing.T) {
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeSourceMarker(cacheDir, filepath.Join(canonDir, "ZippedPackage.zip"))
+	writeSourceMarker(canonDir, cacheDir, filepath.Join(canonDir, "ZippedPackage.zip"))
 
 	ensureZipInfsExtracted(canonDir)
 

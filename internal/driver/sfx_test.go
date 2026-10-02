@@ -257,7 +257,7 @@ func TestEnsureSfxArchiveInfsExtracted_SkipsAlreadyCached(t *testing.T) {
 	}
 
 	// A finished extraction always ends with its source marker.
-	writeSourceMarker(cacheDir, filepath.Join(dir, "Foo.exe"))
+	writeSourceMarker(dir, cacheDir, filepath.Join(dir, "Foo.exe"))
 
 	ensureSfxArchiveInfsExtracted(dir)
 	// No assertion needed beyond "this didn't panic/hang trying to exec a

@@ -291,6 +291,11 @@ func scanManufacturerFolders(catalog Catalog, root string, extract bool) {
 			// grandfathered manual extraction) - there's nothing to lazily
 			// re-extract for those, path is already a real, deployable
 			// .inf as-is.
+			// findSourceArchive already resolves a found marker to a real,
+			// directly-openable path on THIS machine - see
+			// resolveMarkerArchivePath's own doc comment (root-relative
+			// going forward; recovered from the marker's own live location
+			// as a fallback for an older, stale, absolute one).
 			archivePath, markerDir := findSourceArchive(filepath.Dir(path), mfgPath)
 			infRelPath := ""
 			if archivePath != "" {

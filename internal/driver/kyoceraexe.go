@@ -161,7 +161,7 @@ func ensureKyoceraExeInfsExtracted(root string) {
 			warnExtraction("%s: could not extract .inf from %s: %v", filepath.Base(root), e.Name(), err)
 			continue
 		}
-		writeSourceMarker(destDir, exePath)
+		writeSourceMarker(root, destDir, exePath)
 	}
 }
 

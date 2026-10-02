@@ -46,3 +46,35 @@ func TestResolveExeRelative_RelativePathResolvedAgainstExeDir(t *testing.T) {
 		t.Errorf(`resolveExeRelative("Drivers") = %q, want %q`, got, want)
 	}
 }
+
+// TestResolveAgainstExe_DegenerateExePathUnchanged is resolveAgainstExe's
+// own regression test for the real bug (2026-10-02, see its own doc
+// comment): a degenerate os.Executable() result - bare "E:" rather than
+// "E:\PDT.exe" - must never silently produce a joined path missing its
+// separator ("E:Drivers"). "E:" isn't an absolute path on Windows (no
+// rooted path after the volume) or on Unix (no leading "/") - the same
+// value exercises resolveAgainstExe's guard on every OS without needing
+// goruntime.GOOS branching, unlike absPathForOS's own real absolute paths.
+func TestResolveAgainstExe_DegenerateExePathUnchanged(t *testing.T) {
+	for _, exe := range []string{"E:", "E:."} {
+		if got := resolveAgainstExe(exe, "Drivers"); got != "Drivers" {
+			t.Errorf(`resolveAgainstExe(%q, "Drivers") = %q, want unchanged "Drivers"`, exe, got)
+		}
+	}
+}
+
+// TestResolveAgainstExe_SaneExePathJoined confirms the fix above didn't
+// just make resolveAgainstExe always return path unchanged - a genuine,
+// fully-qualified exe path still resolves exactly as before. Windows-only:
+// IsAbs(`E:\PDT.exe`) is false on Unix (no leading "/"), so this exact
+// input isn't a meaningful "sane path" case there.
+func TestResolveAgainstExe_SaneExePathJoined(t *testing.T) {
+	if goruntime.GOOS != "windows" {
+		t.Skip("drive-letter path syntax is Windows-specific")
+	}
+	got := resolveAgainstExe(`E:\PDT.exe`, "Drivers")
+	want := `E:\Drivers`
+	if got != want {
+		t.Errorf(`resolveAgainstExe(E:\PDT.exe, "Drivers") = %q, want %q`, got, want)
+	}
+}

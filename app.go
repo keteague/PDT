@@ -503,6 +503,36 @@ func resolveExeRelative(path string) string {
 	if err != nil {
 		return path
 	}
+	return resolveAgainstExe(exe, path)
+}
+
+// resolveAgainstExe is resolveExeRelative's own pure half, split out so the
+// one real bug here is testable without a real os.Executable() call.
+//
+// Confirmed live (2026-10-02): os.Executable() can return a degenerate
+// drive-relative value - bare "E:" rather than "E:\PDT.exe" - once the
+// drive it originally loaded from has been reassigned to a different volume
+// mid-session (the same staleness driversRoot's own doc comment already
+// documents, just a more corrupted form of it). filepath.Dir of that
+// collapses to "E:." (Windows' own "current directory on drive E" syntax),
+// and filepath.Join(dir, path) then silently joins WITHOUT a separator -
+// "E:Drivers", not "E:\Drivers" - instead of erroring or producing
+// something dirExists() would reject outright. That malformed path then
+// gets scanned (or deployed from) as if it meant something, with no
+// indication anything was wrong, until a file open fails deep inside
+// archive extraction.
+//
+// A genuine os.Executable() result is always an absolute path, so
+// filepath.IsAbs(exe) is an exact, zero-false-positive test for this
+// corruption. path is returned unchanged in that case, same as
+// resolveExeRelative's own err != nil case above - letting
+// driversRoot/configsRoot's own dirExists-and-fall-back chain (including
+// the live drive search, findFolderOnAnyRemovableDrive) take over instead
+// of silently using a malformed path.
+func resolveAgainstExe(exe, path string) string {
+	if !filepath.IsAbs(exe) {
+		return path
+	}
 	return filepath.Join(filepath.Dir(exe), path)
 }
 

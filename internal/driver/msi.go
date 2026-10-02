@@ -177,7 +177,7 @@ func ensureMsiInfsExtracted(root string) {
 			warnExtraction("%s: could not extract .inf from %s: %v", filepath.Base(root), filepath.Base(path), err)
 			return nil
 		}
-		writeSourceMarker(destDir, path)
+		writeSourceMarker(root, destDir, path)
 		if inCache {
 			removeProcessedCacheArchive(destDir, path)
 		}

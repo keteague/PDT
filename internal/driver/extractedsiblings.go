@@ -110,8 +110,26 @@ func prepareInfCacheDest(destDir string) (skip bool) {
 // under destDir (ArchEntry.ArchivePath stays ""), which only disables lazy
 // re-extraction at Deploy time for that one entry; it was never required
 // for BuildCatalog's own .inf parsing to work.
-func writeSourceMarker(destDir, archivePath string) {
-	_ = os.WriteFile(filepath.Join(destDir, pdtSourceMarkerName), []byte(archivePath), 0o644)
+//
+// root is the manufacturer folder archivePath was found under (every
+// ensure*InfsExtracted caller already has this as its own "root" parameter)
+// - archivePath is stored relative to root (relToDriversRoot, reused
+// verbatim from the identical GitHub issue #13 fix on the macOS catalog
+// side), not as the absolute string itself. Ken's own explicit design
+// (2026-10-02, GitHub issue: stale .pdt-source markers): an absolute path
+// bakes in whatever drive letter/machine happened to be true the one moment
+// this was written, and .pdt-infcache is explicitly meant to travel with
+// the rest of the Drivers folder via Sync/Cloud Sync (IsIgnoredDotEntry's
+// own doc comment) - to a different drive letter, a different computer
+// entirely, even a different OS. A root-relative value means the same real
+// file everywhere it's ever read, resolved fresh against whatever THIS
+// machine's own driversRoot()/manufacturer folder currently is (see
+// resolveMarkerArchivePath) - the identical fix this package's own
+// relToDriversRoot/absFromDriversRoot pair already shipped for
+// catalog.<mfg>.json.
+func writeSourceMarker(root, destDir, archivePath string) {
+	stored := relToDriversRoot(root, archivePath)
+	_ = os.WriteFile(filepath.Join(destDir, pdtSourceMarkerName), []byte(stored), 0o644)
 }
 
 // findSourceArchive walks up from dir (typically filepath.Dir of a
@@ -124,10 +142,14 @@ func writeSourceMarker(destDir, archivePath string) {
 // destDir) is what ArchEntry.InfRelPath gets computed relative to, so
 // EnsureArchiveExtracted's own real, fully-extracted destination can be
 // joined with that same relative path to find the real .inf once it exists.
+// The returned archivePath is always resolved to a real, directly-openable
+// path on THIS machine - see resolveMarkerArchivePath for how a marker's
+// own stored content (relative, going forward - or absolute, from an older
+// PDT version) gets there.
 func findSourceArchive(dir, stopAt string) (archivePath, markerDir string) {
 	for {
 		if data, err := os.ReadFile(filepath.Join(dir, pdtSourceMarkerName)); err == nil {
-			return string(data), dir
+			return resolveMarkerArchivePath(dir, string(data)), dir
 		}
 		if dir == stopAt {
 			return "", ""
@@ -135,6 +157,87 @@ func findSourceArchive(dir, stopAt string) (archivePath, markerDir string) {
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			return "", ""
+		}
+		dir = parent
+	}
+}
+
+// resolveMarkerArchivePath turns a .pdt-source marker's stored content
+// (found in markerDir) into a real, directly-openable path on THIS machine.
+//
+// The common, going-forward case: stored is root-relative (see
+// writeSourceMarker's own doc comment) - resolved by finding the
+// manufacturer folder markerDir is nested under (mfgPathFromCacheDir) and
+// joining it back on, via absFromDriversRoot (reused verbatim, same as
+// writeSourceMarker reuses relToDriversRoot - its own inverse is exactly
+// what's needed here too). Portable by construction: never encodes a drive
+// letter or machine-specific prefix at all, so this always resolves
+// correctly regardless of what drive letter this flash drive happens to
+// mount as on whatever machine is reading it today.
+//
+// Two backward-compatible cases for a marker an older PDT version wrote,
+// before this fix, always as an absolute path:
+//   - still resolves correctly (the common case for a technician's local,
+//     installed copy, where the absolute path never actually moves) - used
+//     as-is.
+//   - stale (GitHub issue: stale .pdt-source markers, confirmed live
+//     2026-10-02 against R.K. Black Inc's own Drivers folder: a marker
+//     baked in whatever absolute path - even a malformed one, from the
+//     degenerate-os.Executable() bug resolveAgainstExe/app.go fixes - was
+//     true wherever/whenever it was first written, carried forward
+//     verbatim by every later copy/Sync of the Drivers folder since,
+//     regardless of this machine's own current drive letter) - recovered
+//     from the marker's own current on-disk location instead (see
+//     recoverArchivePathFromMarkerLocation), since .pdt-infcache's own
+//     folder structure already mirrors the real archive's position
+//     relative to its manufacturer folder.
+//
+// "Old-format" is detected via filepath.VolumeName(stored), not
+// filepath.IsAbs - deliberately broader: the real, confirmed-live stale
+// marker this was built against ("E:Drivers\Windows\11\Sharp\...", missing
+// its separator) is itself a Windows drive-relative path, which
+// filepath.IsAbs correctly reports as NOT absolute (same reasoning as
+// resolveAgainstExe's own guard, app.go) - treating it as "new-format
+// relative" instead would join it onto the live root as a literal path
+// segment (producing a nonsense doubled-up path, confirmed by this
+// function's own test), rather than recognizing it as exactly the
+// corrupted-absolute case recoverArchivePathFromMarkerLocation exists for.
+// A genuine new-format value (always written via relToDriversRoot, always
+// forward-slash, never carrying a drive letter) never has a volume name, so
+// this never misroutes the common case.
+func resolveMarkerArchivePath(markerDir, stored string) string {
+	if filepath.VolumeName(stored) == "" {
+		if root := mfgPathFromCacheDir(markerDir); root != "" {
+			return absFromDriversRoot(root, stored)
+		}
+		return stored
+	}
+	if fileExists(stored) {
+		return stored
+	}
+	if root := mfgPathFromCacheDir(markerDir); root != "" {
+		return recoverArchivePathFromMarkerLocation(root, markerDir, stored)
+	}
+	return stored
+}
+
+// mfgPathFromCacheDir walks up from a .pdt-infcache entry's own directory -
+// markerDir, wherever writeSourceMarker's own destDir ended up, possibly
+// several levels deep for a nested/cascaded archive (ensureMsiInfsExtracted's
+// own cascade comment) - to the manufacturer folder it's nested under: the
+// parent of the nearest ancestor literally named PdtInfCacheDirName. Returns
+// "" if markerDir somehow isn't under a PdtInfCacheDirName at all (shouldn't
+// happen - every real marker is written by one of the ensure*InfsExtracted
+// helpers, always somewhere under <manufacturer folder>/PdtInfCacheDirName).
+func mfgPathFromCacheDir(markerDir string) string {
+	dir := markerDir
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		if filepath.Base(parent) == PdtInfCacheDirName {
+			return filepath.Dir(parent)
 		}
 		dir = parent
 	}
@@ -179,10 +282,66 @@ func pruneOrphanedInfCache(root string) {
 		if err != nil {
 			continue // no marker - leave it alone rather than guess
 		}
-		if _, statErr := os.Stat(string(data)); os.IsNotExist(statErr) {
+		// Resolved the same way findSourceArchive would (root-relative,
+		// going forward - see writeSourceMarker/resolveMarkerArchivePath's
+		// own doc comments) - stat'ing the marker's raw stored content
+		// directly would wrongly treat every root-relative entry as
+		// orphaned (a bare "Foo.zip" never exists relative to this
+		// process's own working directory).
+		if _, statErr := os.Stat(resolveMarkerArchivePath(entryDir, string(data))); os.IsNotExist(statErr) {
 			os.RemoveAll(entryDir)
 		}
 	}
+}
+
+// fileExists reports whether path is a real, regular (non-directory) file -
+// recoverArchivePathFromMarkerLocation's own "does this path actually exist
+// on this machine" check, package-local since the main package's own
+// identically-named helper (exportconfigs.go) isn't importable from here.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// recoverArchivePathFromMarkerLocation reconstructs an archive's real path
+// from where its own .pdt-source marker currently sits on disk, used when
+// storedArchivePath (the marker's literal, stored contents) doesn't exist
+// on this machine.
+//
+// Confirmed live (2026-10-02, GitHub issue: stale .pdt-source markers): a
+// marker is written once, by writeSourceMarker, at whatever moment its
+// .inf was first extracted - and is never revisited after that. A portable/
+// removable-drive launch always uses BuildCatalogNoExtract (see
+// scanManufacturerFolders' own extract parameter / loadCatalog's doc
+// comment), which skips ensure*InfsExtracted entirely, so a flash drive's
+// own .pdt-infcache is pure, never-locally-regenerated carried-over state -
+// exactly matching IsIgnoredDotEntry's own doc comment that it's meant to
+// "travel with the rest of the folder" via Sync. If the machine/drive-letter
+// that was true at write time was ever wrong even once (confirmed: an
+// actual historical instance of resolveAgainstExe's own degenerate-
+// os.Executable() bug - app.go - baked "E:Drivers\..." into a marker,
+// missing separator and all), that mistake now ships, verbatim, in every
+// copy of the Drivers folder made from that point on, on every machine that
+// ever reads it, forever - nothing about a normal Rescan/Refresh ever
+// revisits an already-cached marker to confirm it still resolves on
+// whatever machine is reading it today.
+//
+// The fix doesn't require parsing or guessing where the stale prefix in
+// storedArchivePath ends: markerDir's own position under
+// root/PdtInfCacheDirName mirrors the real archive's position under root,
+// extension stripped (see infCacheDestDir's non-nested case, which this
+// mirrors in reverse) - so root joined with that same relative position,
+// plus storedArchivePath's own file extension (the one part of the stored
+// string that's never machine- or drive-letter-specific), reconstructs
+// exactly where the real archive sits on THIS machine, regardless of what
+// absolute prefix the marker happened to be written with.
+func recoverArchivePathFromMarkerLocation(root, markerDir, storedArchivePath string) string {
+	cacheRoot := filepath.Join(root, PdtInfCacheDirName)
+	rel, err := filepath.Rel(cacheRoot, markerDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return storedArchivePath
+	}
+	return filepath.Join(root, rel) + filepath.Ext(storedArchivePath)
 }
 
 // inInfCache reports whether path already lives inside root/PdtInfCacheDirName

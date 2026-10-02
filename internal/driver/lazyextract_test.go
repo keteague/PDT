@@ -87,7 +87,7 @@ func TestExtractionCache_NestedArchiveInsideInfCache(t *testing.T) {
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeSourceMarker(cacheDir, outerZip)
+	writeSourceMarker(root, cacheDir, outerZip)
 
 	nestedInnerZip := filepath.Join(cacheDir, "Inner.zip")
 	if err := os.WriteFile(nestedInnerZip, innerBytes, 0o644); err != nil {
@@ -100,7 +100,7 @@ func TestExtractionCache_NestedArchiveInsideInfCache(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(nestedCacheDir, "driver.inf"), []byte(testZipInf), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeSourceMarker(nestedCacheDir, nestedInnerZip)
+	writeSourceMarker(root, nestedCacheDir, nestedInnerZip)
 
 	// This is exactly ArchEntry.ArchivePath's own real-world shape for a
 	// Lexmark driver found this way - a nested archive path already living

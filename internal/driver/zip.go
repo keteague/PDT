@@ -101,7 +101,7 @@ func ensureZipInfsExtracted(root string) {
 			return nil
 		}
 		flattenRedundantWrapperDir(destDir)
-		writeSourceMarker(destDir, path)
+		writeSourceMarker(root, destDir, path)
 		return nil
 	})
 }

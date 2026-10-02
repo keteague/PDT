@@ -49,7 +49,17 @@ func (a *App) platformStartup() {
 // real one.
 func findFolderOnAnyRemovableDrive(folderName string) string {
 	exeName := "PDT.exe"
-	if exe, err := os.Executable(); err == nil {
+	// filepath.IsAbs guard: see resolveAgainstExe's own doc comment
+	// (app.go) - os.Executable() can return a degenerate drive-relative
+	// value ("E:", not "E:\PDT.exe") once its own drive has been
+	// reassigned mid-session. filepath.Base of that degenerate form is
+	// "\\" or "." (confirmed), neither of which exists next to any real
+	// drive's own copy of PDT.exe - without this guard, this live,
+	// currently-correct drive search would itself be sabotaged by the
+	// exact staleness it exists to work around, leaving driversRoot/
+	// configsRoot's fallback chain with no tier left that actually self-
+	// corrects.
+	if exe, err := os.Executable(); err == nil && filepath.IsAbs(exe) {
 		exeName = filepath.Base(exe)
 	}
 

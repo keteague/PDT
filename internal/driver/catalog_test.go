@@ -1,6 +1,8 @@
 package driver
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -30,6 +32,70 @@ func TestBuildCatalog_CanonMergesArchesUnderOneVersion(t *testing.T) {
 			t.Errorf("expected x64 arch entry, got %v", archMap)
 		}
 	}
+}
+
+// TestBuildCatalog_RecoversStaleMarkerArchivePath is the real-world bug's
+// own end-to-end regression test (2026-10-02, GitHub issue: stale
+// .pdt-source markers - confirmed live against R.K. Black Inc's own Drivers
+// folder). The marker (written once, long ago, by whatever machine first
+// extracted this .inf) points at a drive letter that doesn't exist on this
+// machine at all; the real archive still sits right where it always has,
+// relative to the Drivers folder. BuildCatalog must resolve ArchEntry's own
+// ArchivePath to the real, existing file - see
+// recoverArchivePathFromMarkerLocation's own doc comment for the mechanism -
+// not the stale marker string verbatim, which would fail Deploy-time
+// extraction with "the system cannot find the path specified" even though
+// the driver package is sitting right there.
+func TestBuildCatalog_RecoversStaleMarkerArchivePath(t *testing.T) {
+	root := t.TempDir()
+	mfgPath := filepath.Join(root, "Canon")
+	if err := os.MkdirAll(mfgPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realArchive := filepath.Join(mfgPath, "Foo.zip")
+	writeTestZip(t, realArchive, "driver.inf", testZipInf)
+
+	cacheDir := filepath.Join(mfgPath, PdtInfCacheDirName, "Foo")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "driver.inf"), []byte(testZipInf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A stale marker from an older PDT version (before writeSourceMarker
+	// stored a root-relative path), left over from a different machine/
+	// drive letter - the exact real-world shape confirmed live, missing
+	// separator and all (see resolveAgainstExe's own doc comment, app.go).
+	// Written directly rather than via writeSourceMarker, which now always
+	// stores relative - this simulates what's still actually sitting on a
+	// real, long-lived Drivers folder today.
+	if err := os.WriteFile(filepath.Join(cacheDir, pdtSourceMarkerName), []byte(`E:Drivers\Windows\11\Canon\Foo.zip`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cat, err := BuildCatalog(root)
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+	entry, ok := findArchEntry(cat, "Canon", "Canon Zipped Test Driver")
+	if !ok {
+		t.Fatalf("expected Canon Zipped Test Driver to be cataloged, got %v", cat["Canon"])
+	}
+	if entry.ArchivePath != realArchive {
+		t.Errorf("ArchEntry.ArchivePath = %q, want the real, existing archive %q (recovered from the marker's own live location, not its stale stored string)", entry.ArchivePath, realArchive)
+	}
+}
+
+// findArchEntry digs out the one ArchEntry a test cares about from
+// Catalog's own nested map-of-maps-of-maps shape, regardless of version/arch
+// key - a thin helper so a test doesn't need to know those keys in advance.
+func findArchEntry(cat Catalog, mfg, driverName string) (ArchEntry, bool) {
+	for _, archMap := range cat[mfg][driverName] {
+		for _, entry := range archMap {
+			return entry, true
+		}
+	}
+	return ArchEntry{}, false
 }
 
 func TestBuildCatalog_SkipsEtcDuplicates(t *testing.T) {

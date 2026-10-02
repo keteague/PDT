@@ -4,6 +4,29 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-10-02 (v0.9.61) - stale .pdt-source cache markers no longer break Deploy
+
+### Fixed
+- **A driver deploy could fail with "the system cannot find the path specified"** even though the
+  driver package was sitting right there in the Drivers folder. `.pdt-infcache`'s own `.pdt-source`
+  marker files - written once, whenever a `.inf` is first extracted - used to store an absolute,
+  drive-letter-baked path, and a portable/flash-drive launch never revisits or regenerates them
+  (Rescan on removable media only re-reads `.inf` files, never re-extracts). So whatever path was
+  true wherever/whenever a marker was first written just shipped, verbatim, in every later copy or
+  Sync of the Drivers folder - including, confirmed live, one baked in from a different drive
+  letter that no longer existed on the machine actually trying to deploy. `writeSourceMarker` now
+  stores the archive's path relative to its own manufacturer folder instead (the identical fix
+  already shipped for the macOS catalog's own `catalog.<mfg>.json`, GitHub issue #13), resolved
+  fresh against wherever this machine's own Drivers folder actually is - portable by construction,
+  not just recoverable after the fact. Every marker already on disk keeps working exactly as
+  before: a still-valid absolute path is trusted as-is, and a stale one is recovered from the
+  marker's own on-disk location - no need to delete any existing `.pdt-infcache` folder.
+- **`os.Executable()` returning a degenerate value** (bare `"E:"` rather than `"E:\PDT.exe"`, which
+  can happen once a drive's own letter has been reassigned) no longer gets silently joined into a
+  malformed path missing its own separator (`"E:Drivers"`, not `"E:\Drivers"`) - the exact shape
+  that originally produced one of the stale markers above. `resolveExeRelative` and the "search
+  every removable drive" fallback both now detect and reject it instead.
+
 ## 2026-10-01 (v0.9.60) - Install Rosetta added to the CUPS web UI dropdown
 
 ### Added

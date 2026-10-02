@@ -46,13 +46,36 @@ const DSStoreFileName = ".DS_Store"
 // clutter, so it and everything under it should travel with the rest of the
 // folder rather than being silently dropped.
 //
+// pdtSourceMarkerName is the same exception, one level down: it's also
+// dot-prefixed, and it's a FILE sitting inside PdtInfCacheDirName's own
+// subfolders, not the folder name itself - the check above only ever
+// exempted PdtInfCacheDirName, so this one kept getting silently dropped on
+// every pass through this function, at every recursion depth, regardless of
+// the folder-level exemption. Confirmed live (2026-10-02, GitHub issue:
+// stale .pdt-source markers never replaced by Sync): a marker's content
+// could be fixed on a technician's own local system (writeSourceMarker's
+// own root-relative rework) and it would STILL never reach a flash drive
+// that already had one, because Sync (collectCopyJobs, copytree.go) never
+// even copied the file in the first place - not "copied but skipped as
+// unchanged" (copyTreeMerge's own size comparison, a red herring here), but
+// excluded from the copy job list entirely, on every sync, including the
+// very first one onto a brand-new drive. Whatever marker a flash drive
+// ended up with instead came only from postSyncDriversHook's own fresh
+// BuildCatalog pass running directly against the drive's own freshly-copied
+// archives - correct for an archive with no cache entry yet, but a no-op
+// (prepareInfCacheDest's own skip-if-already-finished check) for one that
+// already had ANY marker sitting there, however stale.
+//
 // An in-progress Cloud Sync download (PartialDownloadSuffix) is skipped too:
 // it is a resumable half-file, never something to upload or copy onward.
 func IsIgnoredDotEntry(name string) bool {
 	if strings.HasSuffix(name, PartialDownloadSuffix) {
 		return true
 	}
-	return name != PdtInfCacheDirName && strings.HasPrefix(name, ".")
+	if name == PdtInfCacheDirName || name == pdtSourceMarkerName {
+		return false
+	}
+	return strings.HasPrefix(name, ".")
 }
 
 // infCacheDestDir returns the .inf-only cache destination for archivePath

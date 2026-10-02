@@ -451,6 +451,16 @@ func TestCopyTreeMerge_CopiesPdtInfCacheFolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cacheDir, "driver.inf"), []byte("cached inf"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// .pdt-source: GitHub issue (2026-10-02, stale .pdt-source markers never
+	// replaced by Sync) - a dot-prefixed FILE sitting inside PdtInfCacheDirName
+	// itself, not the folder name IsIgnoredDotEntry's own exemption actually
+	// matched against. Confirmed live as a real bug: this test only ever
+	// wrote driver.inf, never a marker, so it passed while every real
+	// .pdt-source was silently excluded from every sync, on every run,
+	// including the very first onto a brand-new drive.
+	if err := os.WriteFile(filepath.Join(cacheDir, ".pdt-source"), []byte("Driver.zip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(src, "real.txt"), []byte("real file"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -467,6 +477,55 @@ func TestCopyTreeMerge_CopiesPdtInfCacheFolder(t *testing.T) {
 		t.Errorf("expected %s and its contents to be copied, got err=%v", driver.PdtInfCacheDirName, err)
 	} else if string(got) != "cached inf" {
 		t.Errorf("got %q, want %q", got, "cached inf")
+	}
+	if got, err := os.ReadFile(filepath.Join(dest, driver.PdtInfCacheDirName, "Driver", ".pdt-source")); err != nil {
+		t.Errorf("expected .pdt-source to be copied, got err=%v", err)
+	} else if string(got) != "Driver.zip" {
+		t.Errorf("got %q, want %q", got, "Driver.zip")
+	}
+}
+
+// TestCopyTreeMerge_OverwritesStaleExistingMarker is the direct, real-world
+// regression test (2026-10-02, GitHub issue: stale .pdt-source markers
+// never replaced by Sync - confirmed live against R.K. Black Inc's own
+// flash drive): a technician regenerates a .pdt-source marker locally
+// (writeSourceMarker's own root-relative rework), with genuinely different,
+// shorter content than whatever's already on the flash drive - and Sync
+// must actually carry that new content over, not silently leave the
+// destination's stale copy untouched because the file was never even
+// considered for copying in the first place (the real bug - a bad size
+// comparison would at least have copied it once content differed; this one
+// skipped the file outright, every time, regardless of content).
+func TestCopyTreeMerge_OverwritesStaleExistingMarker(t *testing.T) {
+	src := t.TempDir()
+	dest := t.TempDir()
+	srcCache := filepath.Join(src, driver.PdtInfCacheDirName, "UD3_07_PCL6_2510a")
+	destCache := filepath.Join(dest, driver.PdtInfCacheDirName, "UD3_07_PCL6_2510a")
+	if err := os.MkdirAll(srcCache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(destCache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	newContent := "UD3_07_PCL6_2510a.zip"
+	staleContent := `E:Drivers\Windows\11\Sharp\UD3_07_PCL6_2510a.zip`
+	if err := os.WriteFile(filepath.Join(srcCache, ".pdt-source"), []byte(newContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destCache, ".pdt-source"), []byte(staleContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyTreeMerge(context.Background(), dest, src, nil); err != nil {
+		t.Fatalf("copyTreeMerge failed: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(destCache, ".pdt-source"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != newContent {
+		t.Errorf("stale marker was not overwritten: got %q, want %q", got, newContent)
 	}
 }
 

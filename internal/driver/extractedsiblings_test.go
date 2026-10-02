@@ -212,6 +212,31 @@ func TestPruneOrphanedInfCache_LeavesUnmarkedEntryAlone(t *testing.T) {
 // destination can be in (Ken, 2026-09-20 - Toshiba's zip and Lexmark's
 // self-extracting package both sat in the second one, left by an older PDT
 // version, and were trusted forever because the folder merely existed).
+// TestIsIgnoredDotEntry is the direct regression test for a real bug found
+// live (2026-10-02, GitHub issue: stale .pdt-source markers never replaced
+// by Sync): the PdtInfCacheDirName exemption only ever matched the folder
+// name itself, never pdtSourceMarkerName - a dot-prefixed FILE sitting
+// inside that folder's own subfolders. Sync (collectCopyJobs, copytree.go)
+// calls this once per entry at every recursion depth, so a marker file was
+// silently excluded from every copy job, on every sync, including the very
+// first one onto a brand-new drive - not "copied but skipped as unchanged"
+// (a red herring: copyTreeMerge's own size comparison never even got the
+// chance to run), but never copied at all.
+func TestIsIgnoredDotEntry(t *testing.T) {
+	ignored := []string{".DS_Store", ".git", ".foo.pdt-partial"}
+	for _, name := range ignored {
+		if !IsIgnoredDotEntry(name) {
+			t.Errorf("IsIgnoredDotEntry(%q) = false, want true (real clutter, not PDT's own)", name)
+		}
+	}
+	kept := []string{PdtInfCacheDirName, pdtSourceMarkerName, "driver.inf", "Foo.zip"}
+	for _, name := range kept {
+		if IsIgnoredDotEntry(name) {
+			t.Errorf("IsIgnoredDotEntry(%q) = true, want false (must travel with the rest of the folder)", name)
+		}
+	}
+}
+
 // TestWriteSourceMarker_StoresRootRelativeNotAbsolute is writeSourceMarker's
 // own direct regression test for Ken's own explicit design (2026-10-02,
 // GitHub issue: stale .pdt-source markers): the marker's stored bytes must

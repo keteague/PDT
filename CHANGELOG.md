@@ -4,6 +4,20 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-10-02 (v0.9.62) - .pdt-source markers now actually travel with Sync
+
+### Fixed
+- **`.pdt-source` cache markers were never copied by Sync or Write to Flash Drive at all**,
+  regardless of content - confirmed live against R.K. Black Inc's own flash drive, where a marker
+  regenerated locally under v0.9.61's own portable-path fix still never reached the drive.
+  `IsIgnoredDotEntry`'s exemption for `.pdt-infcache` only ever matched that folder's own name, not
+  `.pdt-source` - a dot-prefixed file sitting inside its subfolders - so it was silently dropped at
+  every recursion depth, the same as `.DS_Store` or a stray `.git`, on every sync, including the
+  very first one onto a brand-new drive. Cloud Sync was never affected (its own path-exclusion
+  logic already handled this correctly). The marker now travels with the rest of `.pdt-infcache` as
+  intended, so a technician's local, freshly-extracted driver metadata actually reaches every flash
+  drive a Sync or Write to Flash Drive touches.
+
 ## 2026-10-02 (v0.9.61) - stale .pdt-source cache markers no longer break Deploy
 
 ### Fixed

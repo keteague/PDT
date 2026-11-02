@@ -4,6 +4,34 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-11-02 (v0.9.63) - stale copied driver caches pruned; WebView2 data folder for over-the-shoulder elevation
+
+### Fixed
+- **An archived driver's cached `.inf` files could survive every Rescan** - confirmed live with
+  Kyocera's `KXDriver_8.6A.1412`, whose `.pdt-infcache` entry had been copied in from an older
+  Drivers folder (`%LocalAppData%\PDT\Drivers`). Its `.pdt-source` marker, written before v0.9.61's
+  switch to folder-relative markers, still held an absolute path into that *old* folder, where the
+  archive still existed - so PDT treated the cache as current even though the archive had been
+  moved to `Archive\` in the folder actually in use. The driver stayed in the catalog, and a Deploy
+  of it would have read the archive from the other folder. Rescan's "delete .inf files" option
+  didn't help either: it only clears cache entries for archives currently in the folder. An
+  absolute marker is now only trusted when it points inside its own manufacturer folder; anything
+  else is treated as stale, so the next Rescan removes the orphaned entry.
+- **PDT failed to start when elevated with a different account's credentials** - confirmed at a
+  client site where the signed-in user wasn't a local admin and a technician typed the local
+  admin's credentials into the UAC prompt: WebView2 reported "Microsoft Edge can't read and write
+  to its data directory" (`C:\Users\<admin>\AppData\Roaming\PDT.exe\EBWebView`) and no window ever
+  opened. The same admin running PDT from his own session (Switch Account) worked fine, so the
+  profile itself was healthy - WebView2 just couldn't use it from inside another user's session.
+  PDT previously left the WebView2 data folder at go-webview2's default (`%AppData%\PDT.exe`). It
+  now sets it explicitly: when PDT is running as a different account than the one signed in to
+  the session, it uses `%ProgramData%\PDT\WebView2\<account SID>`; otherwise it keeps the old
+  folder (so saved UI state survives) and falls back through `%LocalAppData%`, `%ProgramData%`
+  and the temp folder if a write test fails. Either case is recorded in
+  `%ProgramData%\PDT\webview2-startup.log` (written even if no window opens) and in the in-app log.
+  **Not yet verified against a real over-the-shoulder elevation** - check that log at the next
+  affected site.
+
 ## 2026-10-02 (v0.9.62) - .pdt-source markers now actually travel with Sync
 
 ### Fixed

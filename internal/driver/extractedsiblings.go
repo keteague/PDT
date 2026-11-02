@@ -229,7 +229,12 @@ func findSourceArchive(dir, stopAt string) (archivePath, markerDir string) {
 // forward-slash, never carrying a drive letter) never has a volume name, so
 // this never misroutes the common case.
 func resolveMarkerArchivePath(markerDir, stored string) string {
-	if filepath.VolumeName(stored) == "" {
+	// filepath.IsAbs too: macOS paths never have a volume name, so without it
+	// an old absolute marker there ("/Volumes/...") was treated as
+	// root-relative, returned as-is by absFromDriversRoot and trusted
+	// unchecked. On Windows every absolute path has a volume, so this
+	// changes nothing there.
+	if filepath.VolumeName(stored) == "" && !filepath.IsAbs(stored) {
 		if root := mfgPathFromCacheDir(markerDir); root != "" {
 			return absFromDriversRoot(root, stored)
 		}

@@ -4,6 +4,18 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-11-02 (v0.9.65) - macOS "._" metadata files no longer break Rescan
+
+### Fixed
+- **Rescan warned "zip: not a valid zip file" for files that aren't drivers at all** - confirmed
+  live with two `._MX-xxx1_Series_PCL6.zip`-style files in the Sharp folder. They're AppleDouble
+  stubs: ~4KB metadata companions macOS writes beside every file it copies onto a flash drive or
+  network share, carrying the real file's name and extension but none of its content. Sync already
+  skips them, so they arrive via a manual copy from a drive a Mac has touched. PDT's macOS scanning
+  already ignored them; the Windows zip, msi, self-extracting `.exe` and `.inf` scans and the Rescan
+  dialog's package list now do too. They're left on disk (PDT doesn't own them) and are safe to
+  delete by hand.
+
 ## 2026-11-02 (v0.9.64) - stale-marker fix now applies on macOS too
 
 Ships everything listed under v0.9.63 below, which was tagged but never released: its macOS build

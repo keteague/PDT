@@ -235,13 +235,35 @@ func resolveMarkerArchivePath(markerDir, stored string) string {
 		}
 		return stored
 	}
-	if fileExists(stored) {
+	root := mfgPathFromCacheDir(markerDir)
+	// An absolute marker is only trusted when it points inside this same
+	// manufacturer folder. Confirmed live (2026-11-02): a .pdt-infcache entry
+	// copied from %LocalAppData%\PDT\Drivers into ...\Programs\PDT\Drivers
+	// kept its old marker naming the archive in the OLD tree, which still
+	// existed - so pruneOrphanedInfCache kept the entry forever (Rescan's
+	// "delete .inf files" doesn't reach it either: it only clears entries
+	// for archives currently in the folder), and the catalog kept offering a
+	// driver whose archive had been moved to Archive\ here. Archives always
+	// live under their own manufacturer folder, so a path anywhere else is
+	// stale by definition, however real it is on disk.
+	if fileExists(stored) && (root == "" || pathWithin(root, stored)) {
 		return stored
 	}
-	if root := mfgPathFromCacheDir(markerDir); root != "" {
+	if root != "" {
 		return recoverArchivePathFromMarkerLocation(root, markerDir, stored)
 	}
 	return stored
+}
+
+// pathWithin reports whether path is root itself or nested under it,
+// case-insensitively on Windows (drive letters and folder names there can
+// differ in case between a marker and the live path).
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return !filepath.IsAbs(rel)
 }
 
 // mfgPathFromCacheDir walks up from a .pdt-infcache entry's own directory -

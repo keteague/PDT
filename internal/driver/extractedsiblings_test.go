@@ -194,6 +194,62 @@ func TestPruneOrphanedInfCache_KeepsEntryWhoseArchiveStillExists(t *testing.T) {
 	}
 }
 
+// Regression (2026-11-02): a cache entry copied in from another Drivers
+// tree, still carrying an old-format absolute marker naming the archive in
+// THAT tree - which still exists. The archive is gone from this folder
+// (moved to Archive\), so the entry is an orphan here and must be pruned.
+func TestPruneOrphanedInfCache_RemovesEntryWhoseAbsoluteMarkerPointsAtAnotherTree(t *testing.T) {
+	otherRoot := t.TempDir()
+	otherArchive := filepath.Join(otherRoot, "KXDRIVER 8.6A.1412.exe")
+	if err := os.WriteFile(otherArchive, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "Archive"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Archive", "KXDRIVER_8.6A.1412.exe"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(root, PdtInfCacheDirName, "KXDriver_8.6A.1412")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, pdtSourceMarkerName), []byte(otherArchive), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pruneOrphanedInfCache(root)
+
+	if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+		t.Errorf("expected the cache entry pointing at another tree's archive to be pruned, got err=%v", err)
+	}
+}
+
+// An old-format absolute marker pointing inside this same folder (an
+// installed copy that never moved) is still honored.
+func TestPruneOrphanedInfCache_KeepsAbsoluteMarkerInsideSameTree(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "Foo.zip")
+	if err := os.WriteFile(archivePath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(root, PdtInfCacheDirName, "Foo")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, pdtSourceMarkerName), []byte(archivePath), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pruneOrphanedInfCache(root)
+
+	if _, err := os.Stat(cacheDir); err != nil {
+		t.Errorf("expected the in-tree absolute marker to be kept, got err=%v", err)
+	}
+}
+
 func TestPruneOrphanedInfCache_LeavesUnmarkedEntryAlone(t *testing.T) {
 	root := t.TempDir()
 	cacheDir := filepath.Join(root, PdtInfCacheDirName, "NoMarker")

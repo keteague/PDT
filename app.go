@@ -132,6 +132,9 @@ func (a *App) startup(ctx context.Context) {
 	// the very first thing that can invoke driversRoot() this run, so the
 	// hook needs to already be live by then, not just before loadCatalog.
 	BasePathFallbackNotice = func(msg string) { a.logCatalog("WARN", msg) }
+	if webviewDataNotice != "" {
+		a.logCatalog("WARN", webviewDataNotice)
+	}
 
 	// Whatever this platform needs done once, before the driver catalog is
 	// scanned (Windows: 7-Zip extraction, stale-update cleanup, the Drivers

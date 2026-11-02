@@ -116,7 +116,7 @@ func ensureSfxArchivesExtracted(root string) {
 			}
 			return nil
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".exe") {
+		if isAppleDoubleStub(d.Name()) || !strings.EqualFold(filepath.Ext(path), ".exe") {
 			return nil
 		}
 		if kyoceraExeNameRe.MatchString(d.Name()) {
@@ -187,7 +187,7 @@ func ensureSfxArchiveInfsExtracted(root string) {
 			}
 			return nil
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".exe") {
+		if isAppleDoubleStub(d.Name()) || !strings.EqualFold(filepath.Ext(path), ".exe") {
 			return nil
 		}
 		if kyoceraExeNameRe.MatchString(d.Name()) {

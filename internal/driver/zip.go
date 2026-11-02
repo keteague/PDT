@@ -33,7 +33,7 @@ func ensureZipsExtracted(root string) {
 			}
 			return nil
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".zip") {
+		if isAppleDoubleStub(d.Name()) || !strings.EqualFold(filepath.Ext(path), ".zip") {
 			return nil
 		}
 
@@ -86,7 +86,7 @@ func ensureZipInfsExtracted(root string) {
 			}
 			return nil
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".zip") {
+		if isAppleDoubleStub(d.Name()) || !strings.EqualFold(filepath.Ext(path), ".zip") {
 			return nil
 		}
 

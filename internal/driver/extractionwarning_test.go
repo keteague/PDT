@@ -40,6 +40,39 @@ func TestEnsureZipInfsExtracted_ReportsFailureViaExtractionWarning(t *testing.T)
 	}
 }
 
+// Regression (2026-11-02): macOS AppleDouble "._*.zip" stubs sitting beside
+// the real Sharp packages made every Rescan warn "zip: not a valid zip
+// file". They must be skipped by the scanners and left out of the Rescan
+// dialog, without touching the real archive next to them.
+func TestAppleDoubleStubsIgnoredByScanAndRescanList(t *testing.T) {
+	prev := ExtractionWarning
+	defer func() { ExtractionWarning = prev }()
+	var got []string
+	ExtractionWarning = func(msg string) { got = append(got, msg) }
+
+	mfgDir := filepath.Join(t.TempDir(), "Sharp")
+	if err := os.MkdirAll(mfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"._MX-xxx1_Series_PCL6.zip", "._Pkg.msi", "._Setup.exe", "._driver.inf"} {
+		if err := os.WriteFile(filepath.Join(mfgDir, name), make([]byte, 4096), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ensureZipInfsExtracted(mfgDir)
+
+	if len(got) != 0 {
+		t.Errorf("expected AppleDouble stubs to be skipped silently, got warnings %v", got)
+	}
+	if pkgs := listRescanPackages(mfgDir); len(pkgs) != 0 {
+		t.Errorf("expected no Rescan packages from AppleDouble stubs, got %v", pkgs)
+	}
+	if !isAppleDoubleStub("._Foo.zip") || isAppleDoubleStub("Foo.zip") || isAppleDoubleStub(".pdt-infcache") {
+		t.Error("isAppleDoubleStub misclassifies names")
+	}
+}
+
 // TestWarnExtraction_NilHookIsANoOp guards the zero-value-means-off
 // convention every real call site relies on (tests, and any build that
 // never wires ExtractionWarning up, must never panic).

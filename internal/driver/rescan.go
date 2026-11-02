@@ -179,6 +179,9 @@ func listRescanPackages(mfgPath string) []RescanPackage {
 			return nil
 		}
 		name := d.Name()
+		if isAppleDoubleStub(name) {
+			return nil
+		}
 		isArchive := false
 		switch strings.ToLower(filepath.Ext(name)) {
 		case ".zip", ".msi":

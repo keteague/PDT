@@ -265,7 +265,7 @@ func scanManufacturerFolders(catalog Catalog, root string, extract bool) {
 				}
 				return nil
 			}
-			if !strings.EqualFold(filepath.Ext(path), ".inf") {
+			if isAppleDoubleStub(d.Name()) || !strings.EqualFold(filepath.Ext(path), ".inf") {
 				return nil
 			}
 

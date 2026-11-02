@@ -92,6 +92,19 @@ func IsIgnoredDotEntry(name string) bool {
 // sibling right where it already sits (Foo.msi -> Foo/), not into a second,
 // wrongly-doubled PdtInfCacheDirName/PdtInfCacheDirName/... nested inside
 // the first.
+// isAppleDoubleStub reports whether name is a macOS AppleDouble companion
+// ("._Foo.zip"): a ~4KB metadata file macOS writes beside every file it
+// copies onto a volume that can't hold Mac metadata natively (exFAT/FAT32
+// flash drives, SMB shares). It carries the real file's extension but none
+// of its content, so every archive/.inf walk has to skip it by name.
+// Confirmed live (2026-11-02): two Sharp "._*.zip" stubs - copied in from a
+// Mac-touched drive outside of Sync, which already drops dot entries - made
+// every Rescan warn "zip: not a valid zip file". The macOS-side scanners
+// (maccatalog.go, macmount.go) already had the equivalent inline check.
+func isAppleDoubleStub(name string) bool {
+	return strings.HasPrefix(name, "._")
+}
+
 // pdtSourceMarkerName is a small marker file writeSourceMarker drops
 // directly inside a .inf-only cache destination, recording exactly which
 // archive produced it - findSourceArchive later walks back up from a

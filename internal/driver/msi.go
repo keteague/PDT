@@ -61,7 +61,7 @@ func ensureMsiExtracted(root string) {
 			}
 			return nil
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".msi") {
+		if isAppleDoubleStub(d.Name()) || !strings.EqualFold(filepath.Ext(path), ".msi") {
 			return nil
 		}
 
@@ -151,7 +151,7 @@ func ensureMsiInfsExtracted(root string) {
 			}
 			return nil
 		}
-		if !strings.EqualFold(filepath.Ext(path), ".msi") {
+		if isAppleDoubleStub(d.Name()) || !strings.EqualFold(filepath.Ext(path), ".msi") {
 			return nil
 		}
 

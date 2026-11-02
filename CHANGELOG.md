@@ -4,7 +4,18 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
-## 2026-11-02 (v0.9.63) - stale copied driver caches pruned; WebView2 data folder for over-the-shoulder elevation
+## 2026-11-02 (v0.9.64) - stale-marker fix now applies on macOS too
+
+Ships everything listed under v0.9.63 below, which was tagged but never released: its macOS build
+failed its own new regression test.
+
+### Fixed
+- **v0.9.63's stale-marker check never ran on macOS.** Old-format absolute markers were recognized
+  by having a drive letter, which macOS paths never have - so an absolute marker there
+  (`/Volumes/...`) was taken for a folder-relative one and trusted unchecked. Any absolute path now
+  counts as old-format, on both platforms; Windows behavior is unchanged.
+
+## 2026-11-02 (v0.9.63, not released) - stale copied driver caches pruned; WebView2 data folder for over-the-shoulder elevation
 
 ### Fixed
 - **An archived driver's cached `.inf` files could survive every Rescan** - confirmed live with

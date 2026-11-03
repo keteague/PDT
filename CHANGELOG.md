@@ -4,6 +4,24 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-11-03 (v0.9.69) - Sync to Flash only updates PDT on the drive when it's out of date
+
+### Changed
+- **Sync to Flash now checks the version of PDT already on the drive** - both this computer's own
+  copy and the other platform's app (`PDT.app` from Windows, `PDT.exe` from a Mac) - and copies it only
+  when the drive's copy is missing, unreadable or older. A drive that's already current is left alone,
+  so a Sync no longer rewrites tens of MB every time. A drive with a **newer** PDT than this computer is
+  never downgraded; the log says this computer needs updating instead.
+
+### Fixed
+- **Sync to Flash could downgrade PDT on a drive** that already had a newer version than the computer
+  doing the sync.
+- **Updating `PDT.app` on a drive merged the new version over the old**, which could leave files from
+  the older version behind. It's now replaced whole, and only swapped in once the copy is complete, so
+  a failed or cancelled Sync never leaves a broken app on the drive (the same goes for `PDT.exe`).
+- **Sync from a Mac didn't put a working Mac app on the drive** - it copied only the program file from
+  inside `PDT.app` to the drive root. It now copies the whole `PDT.app`.
+
 ## 2026-11-03 (v0.9.68) - "Who?" works; files removed from the cloud get a choice
 
 ### Fixed

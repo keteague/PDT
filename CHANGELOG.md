@@ -4,6 +4,26 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-11-03 (v0.9.68) - "Who?" works; files removed from the cloud get a choice
+
+### Fixed
+- **Cloud Sync's "Who?" always said the file was uploaded before uploaders were recorded** - every
+  file in the repository actually records who uploaded it, but PDT read that information back under
+  the wrong letter case and never found it. "Who?" now answers, on its own line under the file name
+  (it used to squeeze the name down to a single letter), and says "you" when you uploaded it.
+- **Files downloaded by Cloud Sync got the download date instead of their real date** - the same
+  bug. Downloads now keep the file's original modification date. Files already downloaded keep their
+  wrong dates until they're downloaded again.
+
+### Added
+- **Files removed from the cloud repository** now show as **Removed from cloud** when your computer
+  has the only copy - for every technician, not just those with read-only access. Each has a
+  dropdown: *Sync to cloud* (write access only) uploads it back, *Delete local copy* deletes it after a
+  confirmation, *Keep local only* keeps it and stops asking. Nothing happens until you choose - before,
+  a technician with write access would have re-uploaded it on the next sync without being asked.
+  Drivers you got elsewhere that were never in the repository aren't affected. PDT can only recognize
+  files it has seen in the repository, so anything removed before you update isn't flagged.
+
 ## 2026-11-03 (v0.9.67) - installed and portable copies keep separate settings; guest Cloud Sync on new installs
 
 ### Fixed

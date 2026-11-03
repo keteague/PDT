@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -322,17 +323,47 @@ func reconcileManufacturerOrder(saved []string) []string {
 	return out
 }
 
-// settingsFilePath is under the OS's standard per-user config directory
-// (%AppData% on Windows) rather than next to the executable - unlike the
-// Drivers folder, these are personal preferences that shouldn't get
-// clobbered by reinstalling/moving the app, and every user of a shared
-// install should get their own.
+// settingsFilePath is settings.json inside appStateDir - %LocalAppData%\PDT
+// for an installed copy, the flash drive's own Settings folder for a
+// portable one (see appStateDir).
 func settingsFilePath() (string, error) {
-	dir, err := os.UserConfigDir()
+	return appStateFilePath("settings.json")
+}
+
+// basePathCorrections lists any relative Drivers/Configs base path
+// loadSettings refused for an installed copy (see runningFromInstallDir),
+// for startup to log and persist once ("" entries never appear).
+var basePathCorrections []string
+
+func noteBasePathCorrection(folder, loaded, used string) {
+	basePathCorrections = append(basePathCorrections, fmt.Sprintf(
+		"Settings had a portable-copy %s path ('%s'), which an installed copy would resolve next to its own PDT.exe - using '%s' instead.",
+		folder, loaded, used))
+}
+
+// runningFromInstallDir reports whether this exe is running from one of
+// PDT's own installed locations (isKnownInstallDir).
+//
+// Why loadSettings needs it: settings.json lives in the per-user config
+// folder, so every copy of PDT a technician runs - installed, a flash-drive
+// copy, a dev build - shares the one file. A portable copy's default base
+// paths are deliberately relative ("Drivers"/"Configs", resolved next to its
+// own exe - see defaultDriversBasePath), and any Save from one wrote them
+// into that shared file. The installed copy then resolved "Drivers" next to
+// ITS exe: confirmed live (2026-11-03) as %LocalAppData%\Programs\PDT\Drivers.
+// It silently fell back to the default while that folder didn't exist, then
+// switched to it the moment one appeared there (2026-11-02), splitting the
+// technician's driver library across two folders. isKnownInstallDir only
+// ever guarded the *default*, never a loaded value. A relative path can only
+// come from a portable copy (Browse always yields an absolute one), so an
+// installed copy ignores it.
+// A var so tests can stand in for os.Executable's real location.
+var runningFromInstallDir = func() bool {
+	exe, err := os.Executable()
 	if err != nil {
-		return "", err
+		return false
 	}
-	return filepath.Join(dir, "PDT", "settings.json"), nil
+	return isKnownInstallDir(filepath.Dir(exe))
 }
 
 // loadSettings reads the persisted settings file, falling back to defaults
@@ -356,12 +387,16 @@ func loadSettings() Settings {
 		PDTUpdateFrequency:      defaultUpdateFrequency,
 		SevenZipUpdateFrequency: defaultUpdateFrequency,
 	}
+	hadSettings := migrateLegacyStateFiles()
 	path, err := settingsFilePath()
 	if err != nil {
 		return withCloudSyncHasSecret(s)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !hadSettings {
+			seedGuestCloudSync(&s)
+		}
 		return withCloudSyncHasSecret(s)
 	}
 	var loaded Settings
@@ -380,11 +415,20 @@ func loadSettings() Settings {
 	s.PDTUpdateFrequency = normalizeUpdateFrequency(loaded.PDTUpdateFrequency)
 	s.SevenZipUpdateCheckDisabled = loaded.SevenZipUpdateCheckDisabled
 	s.SevenZipUpdateFrequency = normalizeUpdateFrequency(loaded.SevenZipUpdateFrequency)
+	installed := runningFromInstallDir()
 	if loaded.SaveFileBasePath != "" {
-		s.SaveFileBasePath = loaded.SaveFileBasePath
+		if installed && !filepath.IsAbs(loaded.SaveFileBasePath) {
+			noteBasePathCorrection("Configs", loaded.SaveFileBasePath, s.SaveFileBasePath)
+		} else {
+			s.SaveFileBasePath = loaded.SaveFileBasePath
+		}
 	}
 	if loaded.DriversBasePath != "" {
-		s.DriversBasePath = loaded.DriversBasePath
+		if installed && !filepath.IsAbs(loaded.DriversBasePath) {
+			noteBasePathCorrection("Drivers", loaded.DriversBasePath, s.DriversBasePath)
+		} else {
+			s.DriversBasePath = loaded.DriversBasePath
+		}
 	}
 	if loaded.PreinstallBasePath != "" {
 		s.PreinstallBasePath = loaded.PreinstallBasePath

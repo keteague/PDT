@@ -26,11 +26,7 @@ type cloudSyncState struct {
 }
 
 func cloudSyncStateFilePath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "PDT", "cloudsync-state.json"), nil
+	return appStateFilePath("cloudsync-state.json")
 }
 
 // loadCloudSyncState reads the persisted state, falling back to an empty

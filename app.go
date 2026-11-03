@@ -135,6 +135,23 @@ func (a *App) startup(ctx context.Context) {
 	if webviewDataNotice != "" {
 		a.logCatalog("WARN", webviewDataNotice)
 	}
+	// Persist loadSettings' own correction right away, so the shared
+	// settings.json stops carrying the portable copy's relative paths and
+	// this is logged once rather than on every launch.
+	// Same for a brand-new install's guest Cloud Sync account (see
+	// seedGuestCloudSync): saving now is also what makes the next launch an
+	// existing installation, which is never seeded again.
+	if guestCloudSyncSeeded {
+		a.logCatalog("INFO", "Cloud Sync is preconfigured with the read-only guest account - downloads from the shared driver repository are available. Enter your own key in Settings > Cloud Sync to upload.")
+	}
+	if len(basePathCorrections) > 0 || guestCloudSyncSeeded {
+		for _, msg := range basePathCorrections {
+			a.logCatalog("WARN", msg)
+		}
+		if err := saveSettingsToDisk(a.settings); err != nil {
+			a.logCatalog("WARN", "Could not save settings: "+err.Error())
+		}
+	}
 
 	// Whatever this platform needs done once, before the driver catalog is
 	// scanned (Windows: 7-Zip extraction, stale-update cleanup, the Drivers

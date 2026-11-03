@@ -96,6 +96,7 @@ func isolateUserConfigDir(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("AppData", tmp)
+	t.Setenv("LOCALAPPDATA", tmp) // appStateDir: an installed copy's state lives in %LocalAppData%\PDT
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	dir, err := os.UserConfigDir()

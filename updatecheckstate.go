@@ -18,11 +18,7 @@ type updateCheckState struct {
 }
 
 func updateCheckStateFilePath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "PDT", "update-check-state.json"), nil
+	return appStateFilePath("update-check-state.json")
 }
 
 // loadUpdateCheckState reads the persisted state, falling back to "never

@@ -1640,6 +1640,28 @@ populated `Drivers` folder sitting next to the running executable first - true f
 `Drivers`/`Configs` already on it, false for a freshly-installed copy - before falling back to
 `%LocalAppData%\PDT`.
 
+### Where PDT keeps its settings and data
+
+| | Installed copy (Setup installer) | Portable copy (flash drive) |
+| --- | --- | --- |
+| Drivers, Configs | `%LocalAppData%\PDT\Drivers`, `\Configs` | `<drive>\Drivers`, `<drive>\Configs` |
+| `settings.json`, Cloud Sync and update-check state | `%LocalAppData%\PDT` | `<drive>\Settings` |
+| Cloud Sync secret | Windows Credential Manager (per user) | Windows Credential Manager of whichever PC it runs on |
+
+A portable copy never reads or writes the PC's own settings - including when it runs on the
+technician's own laptop - so the two can't leak into each other (`appStateDir`, `appstate.go`). Before
+v0.9.67 every copy shared `%AppData%\PDT\settings.json`: a portable copy's relative `Drivers`/`Configs`
+got saved there and the installed copy then resolved them next to its own exe
+(`%LocalAppData%\Programs\PDT\Drivers`). An installed copy now also ignores a relative Drivers/Configs
+path outright (`runningFromInstallDir`). On first launch an installed copy copies - not moves - its
+existing files over from `%AppData%\PDT`, so a not-yet-updated PDT still finds its settings there.
+
+**A brand-new install comes with Cloud Sync preconfigured** with the read-only guest account (see
+"Shared driver repository (guest access)" below) - only when there's no `settings.json` in either
+location and no secret in Credential Manager. An existing installation is never changed, whatever its
+Cloud Sync state, and a portable copy is never preconfigured, so no key is written to a client PC
+(`seedGuestCloudSync`, `cloudsync_guest.go`).
+
 The installer is unsigned (no code-signing certificate) - Windows SmartScreen will likely show an
 "unrecognized app" warning on first run ("More info" -> "Run anyway"). This is expected for a small
 internal tool without a paid signing certificate, not a build error.
@@ -1647,6 +1669,9 @@ internal tool without a paid signing certificate, not a build error.
 ## Shared driver repository (guest access)
 
 Anyone can download the shared driver repository with Cloud Sync, using a read-only guest key.
+
+**A new install of PDT already has this set up** - just click the Cloud Sync toolbar button. Existing
+installations aren't changed; to use the guest account there (or in a portable copy), enter it by hand:
 
 1. Open **Settings > Cloud Sync**. These three are filled in by default - check they match:
 

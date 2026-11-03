@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -154,7 +155,28 @@ func StatUploader(ctx context.Context, core *minio.Core, bucket, prefix, relPath
 	if err != nil {
 		return "", err
 	}
-	return info.UserMetadata[uploaderMetaKey], nil
+	return userMeta(info.UserMetadata, uploaderMetaKey), nil
+}
+
+// userMeta reads one custom metadata value from an ObjectInfo.UserMetadata
+// map, ignoring case. minio-go returns those keys in canonical HTTP header
+// form ("Uploaded-By", "Mtime" - the X-Amz-Meta- prefix stripped, the rest
+// capitalized), not as written ("uploaded-by", "mtime"). Confirmed live
+// against R2 (2026-11-03): a plain map lookup by the lowercase constant
+// always missed, so "Who?" reported every file - all 63 archives in the
+// bucket, every one actually tagged - as "uploaded before this feature
+// existed", and Download never restored a file's original modification
+// time, stamping every downloaded file with the download date instead.
+func userMeta(m map[string]string, key string) string {
+	if v, ok := m[key]; ok {
+		return v
+	}
+	for k, v := range m {
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
 }
 
 // partState is what listAndValidateParts already knows about one
@@ -410,7 +432,7 @@ func Download(ctx context.Context, gate *PauseGate, core *minio.Core, bucket, pr
 	}
 
 	mtime := time.Now()
-	if v := objInfo.UserMetadata[mtimeMetaKey]; v != "" {
+	if v := userMeta(objInfo.UserMetadata, mtimeMetaKey); v != "" {
 		if parsed, err := time.Parse(time.RFC3339Nano, v); err == nil {
 			mtime = parsed
 		}

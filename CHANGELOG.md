@@ -4,6 +4,30 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-11-03 (v0.9.66) - read-only guest access to the shared driver repository
+
+### Added
+- **A public, read-only guest key for the shared driver repository** - see the README's new "Shared
+  driver repository (guest access)" section. The endpoint, bucket (`pdt`) and folder (`Drivers/`)
+  are already PDT's defaults, so a guest only enters the Access Key ID and Secret Access Key in
+  Settings > Cloud Sync.
+- **Cloud Sync detects read-only keys and offers downloads only.** S3/R2 has no call that reports a
+  key's permissions, so each time the Cloud Sync window opens PDT tests for write access first
+  (starting an upload and cancelling it at once - nothing is ever left in the bucket). With a
+  read-only key the window says "Read-only access: showing downloads only" and drivers that exist
+  only on your computer aren't offered for upload at all. Previously every one of them was listed as
+  an upload and failed with "Access Denied" on every sync. If the test is inconclusive (a network
+  error), PDT assumes write access, so uploads are never hidden from a technician who can really
+  write; an upload refused partway through a sync skips the rest with a single warning.
+
+### Changed
+- **Cloud Sync no longer uploads `.pdt-infcache`** (or any other file or folder whose name starts
+  with a dot). The bucket now holds driver packages only; the `.inf` cache is rebuilt from them on
+  the next scan of an installed copy. Flash-drive Sync still carries `.pdt-infcache`, since a
+  flash-drive launch never re-extracts. The 107 cache objects earlier versions had uploaded were
+  removed from the bucket; a technician still on v0.9.65 or earlier will upload theirs again on
+  their next Cloud Sync until they update.
+
 ## 2026-11-02 (v0.9.65) - macOS "._" metadata files no longer break Rescan
 
 ### Fixed

@@ -78,13 +78,11 @@ type remoteObject struct {
 // cloudSyncCancelGracePeriod (cloudsync_app.go) already applies to the
 // per-file transfer join, just one level further out.
 // isIgnoredRemotePath applies the same dotfile/dotfolder exclusion
-// walkLocal enforces locally (see driver.IsIgnoredDotEntry) to a remote
-// object's own full relative key - listRemote has no per-directory walk to
-// hook a single-entry check into the way walkLocal does, so it checks every
-// path segment instead. Once a PdtInfCacheDirName segment is seen, every
-// segment under it is let through unfiltered rather than checked further -
-// the same "and its contents" exception IsIgnoredDotEntry applies to one
-// entry name, extended across the rest of a full path.
+// walkLocal enforces locally (see isCloudIgnoredName) to a remote object's
+// own full relative key - listRemote has no per-directory walk to hook a
+// single-entry check into the way walkLocal does, so it checks every path
+// segment instead: a dot-prefixed folder anywhere in the key hides
+// everything under it.
 func isIgnoredRemotePath(rel string) bool {
 	segs := strings.Split(rel, "/")
 	// A per-manufacturer catalog.<mfg>.json is excluded outright, checked
@@ -99,14 +97,28 @@ func isIgnoredRemotePath(rel string) bool {
 		return true
 	}
 	for _, seg := range segs {
-		if seg == driver.PdtInfCacheDirName {
-			return false
-		}
-		if driver.IsIgnoredDotEntry(seg) {
+		if isCloudIgnoredName(seg) {
 			return true
 		}
 	}
 	return false
+}
+
+// isCloudIgnoredName reports whether Cloud Sync skips a file or folder
+// named name: anything dot-prefixed, with no exceptions. Stricter than
+// driver.IsIgnoredDotEntry, which flash-drive Sync still uses and which
+// lets .pdt-infcache and its .pdt-source markers through. Ken's call
+// (2026-11-03): the shared bucket holds driver packages only. The .inf-only
+// cache is derived from them and rebuilt locally on the next scan of an
+// installed copy, so uploading it just multiplies the object count (and
+// every technician's listing) by a cache any machine can regenerate; a
+// flash drive, which never re-extracts, still gets its copy via Sync.
+//
+// Also skips in-progress downloads (driver.PartialDownloadSuffix), exactly
+// as IsIgnoredDotEntry does - a half-downloaded file must never be planned
+// as an upload.
+func isCloudIgnoredName(name string) bool {
+	return strings.HasPrefix(name, ".") || strings.HasSuffix(name, driver.PartialDownloadSuffix)
 }
 
 func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (map[string]remoteObject, error) {
@@ -125,14 +137,12 @@ func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (m
 			if rel == "" {
 				continue
 			}
-			// Ignore any dotfile/dotfolder (.DS_Store, a stray .git, etc.)
-			// already sitting in the bucket from before this exclusion
-			// existed - walkLocal never lists one locally anymore (see
-			// driver.IsIgnoredDotEntry), so leaving one listed here would
-			// just make it look like a "Download" instead of correctly
-			// disappearing from the tree entirely. PdtInfCacheDirName and
-			// its contents are the one exception - real content, not
-			// clutter - so isIgnoredRemotePath lets those through.
+			// Ignore any dotfile/dotfolder (.DS_Store, a stray .git, the
+			// .pdt-infcache objects earlier versions uploaded, etc.) already
+			// sitting in the bucket - walkLocal never lists one locally (see
+			// isCloudIgnoredName), so leaving one listed here would just make
+			// it look like a "Download" instead of disappearing from the tree
+			// entirely.
 			if isIgnoredRemotePath(rel) {
 				continue
 			}
@@ -165,10 +175,8 @@ func listRemote(ctx context.Context, core *minio.Core, bucket, prefix string) (m
 // both extracted siblings and the .inf-only cache kept forever, vs.
 // ~1.5GB/~25 files for just the archives). Skipping the directory outright,
 // rather than filtering its contents out after the fact, also avoids paying
-// the walk cost for whatever's inside it. Every other dotfile/dotfolder is
-// skipped the same way, except PdtInfCacheDirName itself - see
-// driver.IsIgnoredDotEntry's own doc comment for why that one's real
-// content, not clutter, and travels with the rest of the folder.
+// the walk cost for whatever's inside it. Every dotfile/dotfolder is
+// skipped the same way, .pdt-infcache included - see isCloudIgnoredName.
 func listLocal(root string) map[string]int64 {
 	out := map[string]int64{}
 	walkLocal(root, "", out)
@@ -185,7 +193,7 @@ func walkLocal(absDir, relDir string, out map[string]int64) {
 		if entry.IsDir() && extractedSiblings[entry.Name()] {
 			continue
 		}
-		if driver.IsIgnoredDotEntry(entry.Name()) {
+		if isCloudIgnoredName(entry.Name()) {
 			continue
 		}
 		// catalog.<mfg>.json is excluded from Sync entirely - see

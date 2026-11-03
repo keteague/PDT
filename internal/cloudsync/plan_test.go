@@ -115,13 +115,11 @@ func TestListLocal_SkipsExtractedSiblingFolder(t *testing.T) {
 	}
 }
 
-// TestListLocal_IncludesPdtInfCacheFolder guards PdtInfCacheDirName's own
-// exception to the general dotfile/dotfolder skip rule (see
-// TestListLocal_SkipsDotEntries) - unlike an archive's extracted sibling
-// folder, the .inf-only metadata cache the catalog rework writes into is
-// real, useful content that Cloud Sync must carry along with the rest of
-// the folder, not drop.
-func TestListLocal_IncludesPdtInfCacheFolder(t *testing.T) {
+// TestListLocal_SkipsPdtInfCacheFolder: Cloud Sync has no dot-entry
+// exceptions (isCloudIgnoredName, 2026-11-03) - the .inf-only cache and its
+// .pdt-source markers are rebuilt locally and never uploaded, unlike
+// flash-drive Sync, which still carries them.
+func TestListLocal_SkipsPdtInfCacheFolder(t *testing.T) {
 	root := t.TempDir()
 	cacheDir := filepath.Join(root, "Canon", driver.PdtInfCacheDirName, "Driver")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -138,9 +136,10 @@ func TestListLocal_IncludesPdtInfCacheFolder(t *testing.T) {
 	if _, ok := sizes["Canon/real.txt"]; !ok {
 		t.Errorf("expected the unrelated real file to still be listed, got %v", sizes)
 	}
-	wantRel := "Canon/" + driver.PdtInfCacheDirName + "/Driver/driver.inf"
-	if _, ok := sizes[wantRel]; !ok {
-		t.Errorf("expected %s and its contents to be listed, got %v", driver.PdtInfCacheDirName, sizes)
+	for rel := range sizes {
+		if strings.Contains(rel, driver.PdtInfCacheDirName) {
+			t.Errorf("expected %s and its contents to be skipped, got %s", driver.PdtInfCacheDirName, rel)
+		}
 	}
 }
 
@@ -249,12 +248,10 @@ func TestListRemote_SkipsDSStore(t *testing.T) {
 	}
 }
 
-// TestListRemote_IncludesPdtInfCacheFolder guards the remote side of
-// PdtInfCacheDirName's exception to the dotfile/dotfolder skip rule - a key
-// nested under it must survive isIgnoredRemotePath's filtering (unlike a
-// plain dotfile such as .DS_Store) so it doesn't wrongly show as a
-// perpetual, unsynced "Download".
-func TestListRemote_IncludesPdtInfCacheFolder(t *testing.T) {
+// TestListRemote_SkipsPdtInfCacheFolder: .pdt-infcache objects an earlier
+// version uploaded must disappear from the plan, not show as downloads -
+// alongside any other dot-prefixed file or folder.
+func TestListRemote_SkipsPdtInfCacheFolder(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
@@ -264,7 +261,9 @@ func TestListRemote_IncludesPdtInfCacheFolder(t *testing.T) {
   <IsTruncated>false</IsTruncated>
   <Contents><Key>Drivers/Canon/real.txt</Key><Size>10</Size></Contents>
   <Contents><Key>Drivers/Canon/%s/Driver/driver.inf</Key><Size>20</Size></Contents>
-</ListBucketResult>`, driver.PdtInfCacheDirName)
+  <Contents><Key>Drivers/Canon/%s/Driver/.pdt-source</Key><Size>5</Size></Contents>
+  <Contents><Key>Drivers/Sharp/._MX.zip</Key><Size>4096</Size></Contents>
+</ListBucketResult>`, driver.PdtInfCacheDirName, driver.PdtInfCacheDirName)
 	}))
 	defer srv.Close()
 	core := testCore(t, srv)
@@ -273,9 +272,11 @@ func TestListRemote_IncludesPdtInfCacheFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantRel := "Canon/" + driver.PdtInfCacheDirName + "/Driver/driver.inf"
-	if _, ok := remote[wantRel]; !ok {
-		t.Errorf("expected %s to be listed, got %v", wantRel, remote)
+	if len(remote) != 1 {
+		t.Errorf("expected only Canon/real.txt, got %v", remote)
+	}
+	if _, ok := remote["Canon/real.txt"]; !ok {
+		t.Errorf("expected Canon/real.txt to be listed, got %v", remote)
 	}
 }
 

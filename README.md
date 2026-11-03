@@ -1359,6 +1359,20 @@ never persisted to the plaintext `settings.json` and never echoed back to the UI
 it) - the one credential in this whole app worth that treatment, since it grants write access to
 a bucket every technician shares.
 
+**Removed from the cloud:** `cloudsync-state.json`'s `InCloud` set records every path this machine
+has seen in the bucket listing (`recordInCloud`, pruned of paths gone from both sides). A local-only
+path in `InCloud` becomes a `removed` row for every key (`cloudSyncActionRemoved`, `planTreeItems`);
+any other local-only path is an ordinary upload with write access and hidden with read-only access,
+since it may be a manufacturer download that was simply never uploaded. Removed rows carry a per-file
+dropdown instead of a checkbox, so folder checkboxes never reach them and they're never written to
+the persisted selection. *Keep local only* is saved immediately (`SetCloudSyncLocalOnly`, the
+`LocalOnly` set, pruned once the path stops being a removed file); *Sync to cloud* and *Delete local
+copy* are sent to `SyncCloud` as `removedChoices` and mapped by `decideRemoved` - only an explicit
+choice acts, a local-only file is never touched, and a read-only key's "sync" is skipped. `SyncCloud`
+re-checks each path against its own fresh plan first, so a file that's back in the bucket is never
+deleted; deletion (`deleteRemovedLocal`) refuses any path outside the Drivers folder, is reported in
+`CloudSyncResult.Deleted`, and refreshes the driver catalog.
+
 **What Cloud Sync skips:** every file or folder whose name starts with a dot - `.pdt-infcache` and
 its `.pdt-source` markers included, plus `.DS_Store`, macOS `._` files and the like - along with
 in-progress `.pdt-partial` downloads, archives' extracted sibling folders, and `catalog.<mfg>.json`
@@ -1695,6 +1709,21 @@ before showing anything. With a read-only key it shows "Read-only access: showin
 and lists downloads only - drivers that exist only on your computer aren't offered for upload at all,
 and nothing is ever attempted against the repository. If you need to contribute drivers, ask for a
 key with write access.
+
+**Drivers removed from the repository** show up as **✕ Removed from cloud**: a file this computer
+has seen in the repository before that's no longer there, so your computer holds the only copy. Each
+one has its own dropdown, starting on *Choose…* (do nothing):
+
+| Choice | What happens |
+| --- | --- |
+| Sync to cloud | Uploads your copy back to the repository on Sync Selected. Only offered with write access. |
+| Delete local copy | Deletes it from your computer on Sync Selected, after a confirmation. |
+| Keep local only | Keeps it on your computer and stops asking - saved straight away, no sync needed. It moves under "Hide files already in sync", and you can change it any time. |
+
+Drivers you got some other way (a manufacturer's website, a flash drive) and that were never in the
+repository are never shown this way - with write access they're ordinary uploads, and with read-only
+access they're not listed. PDT only knows about files it has seen in the repository, so drivers
+removed before you updated to v0.9.68 won't be flagged.
 
 ## Which drivers should I use?
 

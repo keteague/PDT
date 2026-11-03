@@ -2552,6 +2552,19 @@ function wireEvents() {
     // renderCloudSyncTree), which would otherwise mean re-wiring listeners
     // after every single click.
     el('cloudSyncTree').addEventListener('change', (e) => {
+        if (e.target.classList.contains('cst-removed-choice')) {
+            const relPath = e.target.dataset.relpath;
+            const prev = cloudSyncRemovedChoice.get(relPath) || '';
+            const next = e.target.value;
+            cloudSyncRemovedChoice.set(relPath, next);
+            if (next === 'localOnly' || prev === 'localOnly') {
+                App.SetCloudSyncLocalOnly(relPath, next === 'localOnly').catch(err => {
+                    logStatus('ERR', `Could not save Keep local only for ${relPath}: ${err && err.message ? err.message : err}`);
+                });
+            }
+            el('btnCloudSyncConfirm').disabled = !cloudSyncHasWork();
+            return;
+        }
         if (e.target.classList.contains('cst-leaf-check')) {
             cloudSyncSelection.set(e.target.dataset.relpath, e.target.checked);
             saveCloudSyncSelection();
@@ -3741,6 +3754,33 @@ function isCloudSyncActionable(item) {
     return item.action === 'download' || (item.action === 'upload' && !cloudSyncReadOnly);
 }
 
+// cloudSyncRemovedPaths: the plan's 'removed' rows - files this computer
+// has seen in the cloud that have since been removed there (see
+// GetCloudSyncPlan). Each gets its own choice dropdown rather than a
+// checkbox (cloudSyncRemovedChoice: relPath -> '' | 'sync' | 'delete' |
+// 'localOnly'), so folder checkboxes never touch them. '' (Choose...) does
+// nothing; 'localOnly' is saved the moment it's picked
+// (SetCloudSyncLocalOnly); 'sync' and 'delete' happen on Sync Selected.
+// 'sync' isn't offered to a read-only key.
+let cloudSyncRemovedPaths = new Set();
+let cloudSyncRemovedChoice = new Map();
+
+function renderRemovedChoice(item) {
+    const choice = cloudSyncRemovedChoice.get(item.relPath) || '';
+    const opt = (value, label) => `<option value="${value}"${choice === value ? ' selected' : ''}>${label}</option>`;
+    return `<select class="cst-removed-choice" data-relpath="${attr(item.relPath)}" title="This file was removed from the cloud repository - this computer has the only copy.">` +
+        opt('', 'Choose…') +
+        (cloudSyncReadOnly ? '' : opt('sync', 'Sync to cloud')) +
+        opt('delete', 'Delete local copy') +
+        opt('localOnly', 'Keep local only') +
+        '</select>';
+}
+
+function cloudSyncHasWork() {
+    if (Array.from(cloudSyncSelection.values()).some(v => v)) return true;
+    return Array.from(cloudSyncRemovedChoice.values()).some(c => c === 'sync' || c === 'delete');
+}
+
 function buildCloudSyncTree(items) {
     const root = { name: '', path: '', children: new Map(), item: null };
     for (const item of items) {
@@ -3808,6 +3848,7 @@ function cloudSyncActionLabel(action) {
     if (action === 'upload') return { text: '↑ Upload', cls: 'cst-action-upload' };
     if (action === 'download') return { text: '↓ Download', cls: 'cst-action-download' };
     if (action === 'synced') return { text: '✓ Synced', cls: 'cst-action-synced' };
+    if (action === 'removed') return { text: '✕ Removed from cloud', cls: 'cst-action-removed' };
     return { text: '⚠ Conflict', cls: 'cst-action-conflict' };
 }
 
@@ -3822,7 +3863,7 @@ function renderCloudSyncLeaf(item) {
     const { text: actionText, cls: actionCls } = cloudSyncActionLabel(item.action);
     const sizeText = item.action === 'conflict'
         ? `${formatByteSize(item.localSize)} / ${formatByteSize(item.remoteSize)}`
-        : formatByteSize(item.action === 'upload' ? item.localSize : item.remoteSize);
+        : formatByteSize(item.action === 'upload' || item.action === 'removed' ? item.localSize : item.remoteSize);
     const name = item.relPath.split('/').pop();
     // "Who uploaded this?" is on-demand only (Ken, 2026-09-22) - looking
     // this up for every row at once isn't even possible cheaply (R2/S3's
@@ -3830,7 +3871,8 @@ function renderCloudSyncLeaf(item) {
     // cloudsync.StatUploader's own doc comment), so the button only fires
     // one HEAD request when a technician actually clicks it. Hidden for a
     // plain "upload" row - the remote side has no object yet to ask about.
-    const whoHtml = item.action !== 'upload'
+    const whoHtml = item.action === 'removed' ? renderRemovedChoice(item)
+        : item.action !== 'upload'
         ? `<button type="button" class="cst-who-btn" data-relpath="${attr(item.relPath)}" title="Look up which technician uploaded this file">Who?</button>`
         : '<span class="cst-who-spacer"></span>';
     return `
@@ -3863,7 +3905,12 @@ async function lookupCloudFileUploader(btn) {
         if (result.error) {
             if (resultEl) resultEl.textContent = `Error: ${result.error}`;
         } else {
-            if (resultEl) resultEl.textContent = result.uploader ? `Uploaded by: ${result.uploader}` : 'Unknown (uploaded before this feature existed)';
+            if (resultEl) {
+                resultEl.textContent = !result.uploader ? 'Uploaded by: unknown (uploaded before PDT recorded uploaders)'
+                    : result.isYou ? 'Uploaded by: you'
+                    : `Uploaded by key ${result.uploader}`;
+                resultEl.title = result.uploader ? `R2 Access Key ID: ${result.uploader}` : '';
+            }
         }
     } catch (err) {
         if (resultEl) resultEl.textContent = `Error: ${err && err.message ? err.message : err}`;
@@ -3905,7 +3952,8 @@ function renderCloudSyncTree() {
     // disappear with them. Selection state is untouched - synced files never
     // had any.
     const hideSynced = el('cloudSyncHideSynced').checked;
-    const visibleItems = hideSynced ? cloudSyncItems.filter(i => i.action !== 'synced') : cloudSyncItems;
+    // A removed file kept local only counts as settled, like a synced one.
+    const visibleItems = hideSynced ? cloudSyncItems.filter(i => i.action !== 'synced' && !(i.action === 'removed' && i.localOnly)) : cloudSyncItems;
     cloudSyncTreeRoot = buildCloudSyncTree(visibleItems);
     const container = el('cloudSyncTree');
     if (visibleItems.length === 0) {
@@ -3926,13 +3974,13 @@ function renderCloudSyncTree() {
     for (const cb of container.querySelectorAll('.cst-folder-check')) {
         cb.indeterminate = cb.dataset.indeterminate === '1';
     }
-    el('btnCloudSyncConfirm').disabled = !Array.from(cloudSyncSelection.values()).some(v => v);
+    el('btnCloudSyncConfirm').disabled = !cloudSyncHasWork();
 }
 
 function saveCloudSyncSelection() {
     const deselected = [];
     for (const [relPath, selected] of cloudSyncSelection) {
-        if (!selected) deselected.push(relPath);
+        if (!selected && !cloudSyncRemovedPaths.has(relPath)) deselected.push(relPath);
     }
     App.SaveCloudSyncSelection(deselected).catch(err => {
         logStatus('ERR', `Could not save Cloud Sync selection: ${err && err.message ? err.message : err}`);
@@ -3952,19 +4000,25 @@ async function openCloudSyncModal() {
     }
     cloudSyncItems = result.items || [];
     cloudSyncReadOnly = !!result.readOnly;
+    cloudSyncRemovedPaths = new Set(cloudSyncItems.filter(i => i.action === 'removed').map(i => i.relPath));
+    cloudSyncRemovedChoice = new Map(cloudSyncItems.filter(i => i.action === 'removed').map(i => [i.relPath, i.localOnly ? 'localOnly' : '']));
     cloudSyncSelection = new Map();
     for (const item of cloudSyncItems) {
         if (isCloudSyncActionable(item)) {
             cloudSyncSelection.set(item.relPath, item.selected);
         }
     }
+    const removed = cloudSyncItems.filter(i => i.action === 'removed' && !i.localOnly).length;
     const actionable = cloudSyncItems.filter(isCloudSyncActionable).length;
     const conflicts = cloudSyncItems.filter(i => i.action === 'conflict').length;
     const readOnlyNote = cloudSyncReadOnly ? 'Read-only access: showing downloads only. ' : '';
+    const removedNote = removed > 0
+        ? ` ${removed} file${removed === 1 ? ' has' : 's have'} been removed from the cloud repository - this computer has the only copy. Choose what to do with ${removed === 1 ? 'it' : 'each one'}.`
+        : '';
     el('cloudSyncHint').textContent = readOnlyNote + (actionable === 0 && conflicts === 0
-        ? (cloudSyncReadOnly ? 'Nothing to download - this computer already has everything in the cloud repository.' : 'Nothing to sync - this computer and the cloud repository already match.')
+        ? (removed > 0 ? 'Nothing to download.' : cloudSyncReadOnly ? 'Nothing to download - this computer already has everything in the cloud repository.' : 'Nothing to sync - this computer and the cloud repository already match.')
         : `${actionable} file${actionable === 1 ? '' : 's'} to sync` +
-          (conflicts > 0 ? `, ${conflicts} conflict${conflicts === 1 ? '' : 's'} need manual review` : '') + '.');
+          (conflicts > 0 ? `, ${conflicts} conflict${conflicts === 1 ? '' : 's'} need manual review` : '') + '.') + removedNote;
     renderCloudSyncTree();
 }
 
@@ -4267,13 +4321,33 @@ function updateCloudSyncTotalProgress(progress) {
 // now a conflict) by the time SyncCloud actually runs is silently skipped
 // rather than acted on with stale information.
 async function confirmCloudSync() {
-    const selectedPaths = Array.from(cloudSyncSelection.entries()).filter(([, sel]) => sel).map(([p]) => p);
+    const removedChoices = {};
+    for (const [relPath, choice] of cloudSyncRemovedChoice) {
+        if (choice === 'sync' || choice === 'delete') removedChoices[relPath] = choice;
+    }
+    const selectedPaths = Array.from(cloudSyncSelection.entries()).filter(([, sel]) => sel).map(([p]) => p)
+        .concat(Object.keys(removedChoices));
     if (selectedPaths.length === 0) return;
+    // Deleting a removed-from-cloud file destroys the only copy - always
+    // confirmed first, naming how many.
+    const toDelete = Object.keys(removedChoices).filter(p => removedChoices[p] === 'delete');
+    if (toDelete.length > 0) {
+        const ok = await showConfirm({
+            title: 'Delete from this computer',
+            message: `Delete ${toDelete.length} file${toDelete.length === 1 ? '' : 's'} from this computer? ` +
+                `${toDelete.length === 1 ? 'It has' : 'They have'} been removed from the cloud repository, so this is the only copy. This can't be undone.`,
+            okLabel: 'Delete',
+        });
+        if (!ok) return;
+    }
     closeCloudSyncModal();
-    openCloudSyncProgressModal(selectedPaths);
+    // The progress dialog tracks transfers; deletions are instant and are
+    // reported in the log instead.
+    openCloudSyncProgressModal(selectedPaths.filter(p => removedChoices[p] !== 'delete'));
     try {
-        const result = await App.SyncCloud(selectedPaths);
+        const result = await App.SyncCloud(selectedPaths, removedChoices);
         for (const p of result.succeeded || []) logStatus('OK', `Synced ${p} with the cloud.`);
+        for (const p of result.deleted || []) logStatus('OK', `Deleted ${p} from this computer (removed from the cloud repository).`);
         for (const p of Object.keys(result.failed || {})) {
             const msg = result.failed[p];
             logStatus(isCanceledError(msg) ? 'WARN' : 'ERR', isCanceledError(msg) ? `Cloud sync of ${p} canceled.` : `Could not sync ${p}: ${msg}`);
@@ -4281,7 +4355,7 @@ async function confirmCloudSync() {
         if (result.skippedUploads > 0) {
             logStatus('WARN', `Read-only access to the cloud repository: skipped ${result.skippedUploads} upload${result.skippedUploads === 1 ? '' : 's'}.`);
         }
-        if ((result.succeeded || []).length > 0) {
+        if ((result.succeeded || []).length > 0 || (result.deleted || []).length > 0) {
             const status = await App.RefreshDriverCatalog();
             el('noDriversBanner').hidden = status.hasDrivers || !status.ok;
         }

@@ -1039,6 +1039,7 @@ table.grid td.checkbox-cell {
 
 .cst-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
     padding: 3px 4px;
@@ -1134,6 +1135,24 @@ table.grid td.checkbox-cell {
     border-color: #3f5978;
 }
 
+/* Amber, the same attention cue as a WARN log line - "this computer has the
+   only copy" needs a decision, but isn't an error. */
+.cst-action-removed {
+    color: #ffb454;
+    border-color: #8f6a3f;
+}
+
+/* A removed-from-cloud row's own choice, where other rows have "Who?". */
+.cst-removed-choice {
+    flex: none;
+    font-size: 11px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    border: 1px solid #8f6a3f;
+    background: #16202c;
+    color: #e6edf3;
+}
+
 .cst-who-btn {
     flex: none;
     font-size: 11px;
@@ -1154,14 +1173,23 @@ table.grid td.checkbox-cell {
     width: 34px;
 }
 
+/* Its own line under the row (flex-basis 100% in a wrapping row), not a
+   fixed-width slot beside the name - beside it, the answer squeezed the
+   file name down to a single letter. Indented to line up under the name
+   (toggle + checkbox widths), and hidden while empty so rows nobody asked
+   about keep their single-line height. */
 .cst-who-result {
-    flex: none;
+    flex-basis: 100%;
+    padding-left: 40px;
     font-size: 11px;
     color: #9fb3c8;
-    max-width: 220px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.cst-who-result:empty {
+    display: none;
 }
 
 .cst-children {

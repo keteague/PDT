@@ -234,6 +234,10 @@ export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
+export function SetCloudSyncLocalOnly(arg1, arg2) {
+  return window['go']['main']['App']['SetCloudSyncLocalOnly'](arg1, arg2);
+}
+
 export function SetCloudSyncPaused(arg1) {
   return window['go']['main']['App']['SetCloudSyncPaused'](arg1);
 }
@@ -254,8 +258,8 @@ export function StopSpooler() {
   return window['go']['main']['App']['StopSpooler']();
 }
 
-export function SyncCloud(arg1) {
-  return window['go']['main']['App']['SyncCloud'](arg1);
+export function SyncCloud(arg1, arg2) {
+  return window['go']['main']['App']['SyncCloud'](arg1, arg2);
 }
 
 export function SyncFromFlashDrive(arg1, arg2, arg3) {

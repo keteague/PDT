@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,6 +76,9 @@ type CloudSyncPlanItem struct {
 	RemoteSize int64  `json:"remoteSize"`
 	Selected   bool   `json:"selected"`
 	IsNew      bool   `json:"isNew"`
+	// LocalOnly: a removed row this technician chose to keep local only
+	// (cloudSyncState.LocalOnly).
+	LocalOnly bool `json:"localOnly"`
 }
 
 // CloudSyncPlanResult is GetCloudSyncPlan's own outcome - Error non-empty
@@ -92,11 +98,107 @@ type CloudSyncPlanResult struct {
 // bad file doesn't stop the rest of the batch from completing.
 // SkippedUploads counts uploads not attempted (or refused mid-run) because
 // the key is read-only - reported once, not as a failure per file.
+// Deleted lists local files removed because they'd been removed from the
+// cloud (cloudSyncActionRemoved) - kept apart from Succeeded, which is
+// transfers.
 type CloudSyncResult struct {
 	Succeeded      []string          `json:"succeeded"`
+	Deleted        []string          `json:"deleted"`
 	Failed         map[string]string `json:"failed"`
 	ReadOnly       bool              `json:"readOnly"`
 	SkippedUploads int               `json:"skippedUploads"`
+}
+
+// cloudSyncActionRemoved is the plan action for a local-only file that this
+// machine has seen in the cloud before (cloudSyncState.InCloud) - removed
+// from the bucket since, so this computer holds the only copy. Shown to
+// every technician with a per-file choice instead of a checkbox (Ken,
+// 2026-11-03): sync it back to the cloud (write access only), delete the
+// local copy, or keep it local only. No choice means nothing happens.
+const cloudSyncActionRemoved = "removed"
+
+// The per-file choices SyncCloud accepts for a removed row. "Keep local
+// only" isn't one - it's saved the moment it's picked
+// (SetCloudSyncLocalOnly) and needs no sync run.
+const (
+	removedChoiceSync   = "sync"
+	removedChoiceDelete = "delete"
+)
+
+// recordInCloud adds every path present in the bucket (anything but a
+// local-only upload) to state.InCloud and drops entries gone from both
+// sides, so the set only ever covers paths still on at least one side.
+func recordInCloud(state *cloudSyncState, plan []cloudsync.PlanItem) {
+	present := make(map[string]bool, len(plan))
+	for _, p := range plan {
+		present[p.RelPath] = true
+		if p.Action != cloudsync.ActionUpload {
+			state.InCloud[p.RelPath] = true
+		}
+	}
+	for rel := range state.InCloud {
+		if !present[rel] {
+			delete(state.InCloud, rel)
+		}
+	}
+	// A Local Only choice only means something while the file is still a
+	// removed one - back in the cloud, or deleted locally, it's dropped.
+	removed := map[string]bool{}
+	for _, p := range plan {
+		if isRemovedFromCloud(state, p) {
+			removed[p.RelPath] = true
+		}
+	}
+	for rel := range state.LocalOnly {
+		if !removed[rel] {
+			delete(state.LocalOnly, rel)
+		}
+	}
+}
+
+// What SyncCloud does with one requested removed-from-cloud file.
+const (
+	removedOutcomeNone = iota
+	removedOutcomeDelete
+	removedOutcomeUpload
+	removedOutcomeSkippedUpload
+)
+
+// decideRemoved maps a removed file's choice to what SyncCloud does. Only an
+// explicit choice acts; a file kept local only is never touched, whatever
+// was sent; and a read-only key can't upload, so "sync" is skipped.
+func decideRemoved(choice string, localOnly, readOnly bool) int {
+	switch {
+	case localOnly:
+		return removedOutcomeNone
+	case choice == removedChoiceDelete:
+		return removedOutcomeDelete
+	case choice == removedChoiceSync && readOnly:
+		return removedOutcomeSkippedUpload
+	case choice == removedChoiceSync:
+		return removedOutcomeUpload
+	}
+	return removedOutcomeNone
+}
+
+// isRemovedFromCloud: a local-only plan item this machine has seen in the
+// cloud before.
+func isRemovedFromCloud(state *cloudSyncState, p cloudsync.PlanItem) bool {
+	return p.Action == cloudsync.ActionUpload && state.InCloud[p.RelPath]
+}
+
+// deleteRemovedLocal deletes relPath's local copy under root, refusing any
+// path that would resolve outside it.
+func deleteRemovedLocal(root, relPath string) error {
+	full := filepath.Join(root, filepath.FromSlash(relPath))
+	rel, err := filepath.Rel(root, full)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("refusing to delete %q: outside the Drivers folder", relPath)
+	}
+	if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // cloudWriteAccess caches each key's probed write access for this session,
@@ -197,36 +299,58 @@ func (a *App) GetCloudSyncPlan() CloudSyncPlanResult {
 	readOnly := !<-canWriteCh
 
 	state := loadCloudSyncState()
+	items := planTreeItems(plan, &state, readOnly)
+	_ = saveCloudSyncState(state)
+	return CloudSyncPlanResult{Items: items, ReadOnly: readOnly}
+}
+
+// planTreeItems turns a fresh plan into the tree's rows, updating state's
+// InCloud and Seen sets along the way (the caller saves it). Split out of
+// GetCloudSyncPlan so the read-only/removed-from-cloud rules are testable
+// without a bucket.
+func planTreeItems(plan []cloudsync.PlanItem, state *cloudSyncState, readOnly bool) []CloudSyncPlanItem {
+	recordInCloud(state, plan)
 	items := make([]CloudSyncPlanItem, 0, len(plan))
 	for _, p := range plan {
-		// A read-only key never sees upload options at all (Ken,
-		// 2026-11-03): local-only files are left out of the plan entirely
-		// rather than shown disabled. Not marked Seen either, so if this
-		// technician later switches to a write key they still get the
-		// "new" highlight the first time those uploads appear.
-		if readOnly && p.Action == cloudsync.ActionUpload {
+		action := string(p.Action)
+		selected := !state.Deselected[p.RelPath]
+		// A local-only file this machine has seen in the cloud before is a
+		// removed row for everyone, with a per-file choice rather than a
+		// checkbox (see cloudSyncActionRemoved).
+		//
+		// Any other local-only file is an upload - except for a read-only
+		// key, which never sees upload options at all: left out entirely,
+		// and not marked Seen, so if this technician later switches to a
+		// write key they still get the "new" highlight the first time those
+		// uploads appear.
+		if isRemovedFromCloud(state, p) {
+			action, selected = cloudSyncActionRemoved, false
+		} else if readOnly && p.Action == cloudsync.ActionUpload {
 			continue
 		}
 		items = append(items, CloudSyncPlanItem{
 			RelPath:    p.RelPath,
-			Action:     string(p.Action),
+			Action:     action,
 			LocalSize:  p.LocalSize,
 			RemoteSize: p.RemoteSize,
-			Selected:   !state.Deselected[p.RelPath],
+			Selected:   selected,
 			IsNew:      !state.Seen[p.RelPath],
+			LocalOnly:  action == cloudSyncActionRemoved && state.LocalOnly[p.RelPath],
 		})
 		state.Seen[p.RelPath] = true
 	}
-	_ = saveCloudSyncState(state)
-	return CloudSyncPlanResult{Items: items, ReadOnly: readOnly}
+	return items
 }
 
 // CloudFileUploaderResult is GetCloudFileUploader's own outcome - Uploader
 // empty (Error also empty) means the object predates upload-attribution
 // tagging (see uploaderMetaKey/cloudsync.Upload) and genuinely has no
 // recorded uploader, not a failed lookup.
+// IsYou: Uploader is the Access Key ID this PDT is configured with, so the
+// row can say "you" instead of a 32-character key ID.
 type CloudFileUploaderResult struct {
 	Uploader string `json:"uploader"`
+	IsYou    bool   `json:"isYou"`
 	Error    string `json:"error"`
 }
 
@@ -252,13 +376,27 @@ func (a *App) GetCloudFileUploader(relPath string) CloudFileUploaderResult {
 	if err != nil {
 		return CloudFileUploaderResult{Error: err.Error()}
 	}
-	return CloudFileUploaderResult{Uploader: uploader}
+	return CloudFileUploaderResult{Uploader: uploader, IsYou: uploader != "" && uploader == cfg.AccessKeyID}
 }
 
 // SaveCloudSyncSelection persists exactly which relative paths are
 // currently unchecked in the tree view - called whenever the user toggles a
 // checkbox, so the selection survives closing and reopening the modal (and
 // PDT restarting) rather than resetting to "everything checked" every time.
+// SetCloudSyncLocalOnly records (or clears) "Keep local only" for one
+// removed-from-cloud file - saved immediately, like the checkbox selection,
+// since it needs no sync run.
+func (a *App) SetCloudSyncLocalOnly(relPath string, localOnly bool) error {
+	<-a.ready
+	state := loadCloudSyncState()
+	if localOnly {
+		state.LocalOnly[relPath] = true
+	} else {
+		delete(state.LocalOnly, relPath)
+	}
+	return saveCloudSyncState(state)
+}
+
 func (a *App) SaveCloudSyncSelection(deselected []string) error {
 	<-a.ready
 	state := loadCloudSyncState()
@@ -321,9 +459,13 @@ func (a *App) newCloudSyncProgressFunc(relPath, direction string) func(done, tot
 // transiently run a little over ConcurrentTransfers right at a handoff -
 // bounded in practice since only one file can be "in its own last 5%" at a
 // time per lane.
-func (a *App) SyncCloud(relPaths []string) CloudSyncResult {
+//
+// removedChoices carries the choice for each requested removed-from-cloud
+// file (removedChoiceSync / removedChoiceDelete); a removed file with no
+// choice, or one marked Keep local only, is left alone.
+func (a *App) SyncCloud(relPaths []string, removedChoices map[string]string) CloudSyncResult {
 	<-a.ready
-	result := CloudSyncResult{Succeeded: []string{}, Failed: map[string]string{}}
+	result := CloudSyncResult{Succeeded: []string{}, Deleted: []string{}, Failed: map[string]string{}}
 
 	cfg, err := a.cloudSyncConfig()
 	if err != nil {
@@ -400,6 +542,8 @@ func (a *App) SyncCloud(relPaths []string) CloudSyncResult {
 	// after the probe, or the probe was inconclusive): every upload not yet
 	// started is skipped instead of failing one by one.
 	var refusedMidRun atomic.Bool
+	state := loadCloudSyncState()
+	recordInCloud(&state, plan)
 	var jobs []cloudsync.PlanItem
 	var totalBytes int64
 	for _, item := range plan {
@@ -409,7 +553,27 @@ func (a *App) SyncCloud(relPaths []string) CloudSyncResult {
 		if item.Action != cloudsync.ActionUpload && item.Action != cloudsync.ActionDownload {
 			continue
 		}
-		if readOnly && item.Action == cloudsync.ActionUpload {
+		// A removed-from-cloud file acts only on its explicit choice -
+		// re-verified against this fresh plan, so a file that's back in the
+		// bucket (or was never there) is never deleted.
+		if isRemovedFromCloud(&state, item) {
+			switch decideRemoved(removedChoices[item.RelPath], state.LocalOnly[item.RelPath], readOnly) {
+			case removedOutcomeDelete:
+				if err := deleteRemovedLocal(driversRoot(), item.RelPath); err != nil {
+					result.Failed[item.RelPath] = err.Error()
+				} else {
+					result.Deleted = append(result.Deleted, item.RelPath)
+					delete(state.InCloud, item.RelPath)
+				}
+				continue
+			case removedOutcomeSkippedUpload:
+				result.SkippedUploads++
+				continue
+			case removedOutcomeNone:
+				continue
+			}
+			// removedOutcomeUpload: an ordinary upload below.
+		} else if readOnly && item.Action == cloudsync.ActionUpload {
 			result.SkippedUploads++
 			continue
 		}
@@ -420,6 +584,8 @@ func (a *App) SyncCloud(relPaths []string) CloudSyncResult {
 			totalBytes += item.RemoteSize
 		}
 	}
+
+	_ = saveCloudSyncState(state)
 
 	concurrency := a.settings.CloudSync.ConcurrentTransfers
 	if concurrency < 1 {

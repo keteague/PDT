@@ -23,6 +23,21 @@ type cloudSyncState struct {
 	// set - so the highlight shows exactly once, the very next time the
 	// tree is opened after that path first appeared.
 	Seen map[string]bool `json:"seen"`
+	// InCloud: relPath -> true once this machine has seen it in the shared
+	// bucket's listing. It's how a read-only technician's local-only file
+	// is told apart (Ken, 2026-11-03): one that WAS in the cloud and has
+	// since been removed there - offered for deletion as "Removed from
+	// cloud" - versus one this technician got some other way (a
+	// manufacturer download, a flash drive) that was simply never uploaded,
+	// which is never offered. Only knows what it has seen, so a file
+	// removed from the bucket before this field existed isn't flagged.
+	// Entries for paths gone from both sides are pruned.
+	InCloud map[string]bool `json:"inCloud"`
+	// LocalOnly: relPath -> true once this technician chose "Keep local
+	// only" for a removed-from-cloud file - it's kept on this computer,
+	// never synced, and no longer asked about (it moves under "Hide files
+	// already in sync"). Pruned once the path stops being a removed file.
+	LocalOnly map[string]bool `json:"localOnly"`
 }
 
 func cloudSyncStateFilePath() (string, error) {
@@ -33,7 +48,7 @@ func cloudSyncStateFilePath() (string, error) {
 // (everything selected, nothing yet seen) one for a missing or corrupt file
 // - this is bookkeeping, not user data worth failing startup over.
 func loadCloudSyncState() cloudSyncState {
-	s := cloudSyncState{Deselected: map[string]bool{}, Seen: map[string]bool{}}
+	s := cloudSyncState{Deselected: map[string]bool{}, Seen: map[string]bool{}, InCloud: map[string]bool{}, LocalOnly: map[string]bool{}}
 	path, err := cloudSyncStateFilePath()
 	if err != nil {
 		return s
@@ -51,6 +66,12 @@ func loadCloudSyncState() cloudSyncState {
 	}
 	if loaded.Seen != nil {
 		s.Seen = loaded.Seen
+	}
+	if loaded.InCloud != nil {
+		s.InCloud = loaded.InCloud
+	}
+	if loaded.LocalOnly != nil {
+		s.LocalOnly = loaded.LocalOnly
 	}
 	return s
 }

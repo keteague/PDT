@@ -121,6 +121,8 @@ export function SaveConfiguration(arg1:config.SavedConfig):Promise<main.PathResu
 
 export function SaveSettings(arg1:main.Settings):Promise<main.Settings>;
 
+export function SetCloudSyncLocalOnly(arg1:string,arg2:boolean):Promise<void>;
+
 export function SetCloudSyncPaused(arg1:boolean):Promise<void>;
 
 export function SpoolerStatus():Promise<main.SpoolerResult>;
@@ -131,7 +133,7 @@ export function StopDeploy():Promise<void>;
 
 export function StopSpooler():Promise<main.SpoolerResult>;
 
-export function SyncCloud(arg1:Array<string>):Promise<main.CloudSyncResult>;
+export function SyncCloud(arg1:Array<string>,arg2:Record<string, string>):Promise<main.CloudSyncResult>;
 
 export function SyncFromFlashDrive(arg1:string,arg2:boolean,arg3:boolean):Promise<void>;
 

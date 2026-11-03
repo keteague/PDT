@@ -322,6 +322,7 @@ export namespace main {
 	}
 	export class CloudFileUploaderResult {
 	    uploader: string;
+	    isYou: boolean;
 	    error: string;
 	
 	    static createFrom(source: any = {}) {
@@ -331,6 +332,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.uploader = source["uploader"];
+	        this.isYou = source["isYou"];
 	        this.error = source["error"];
 	    }
 	}
@@ -341,6 +343,7 @@ export namespace main {
 	    remoteSize: number;
 	    selected: boolean;
 	    isNew: boolean;
+	    localOnly: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CloudSyncPlanItem(source);
@@ -354,6 +357,7 @@ export namespace main {
 	        this.remoteSize = source["remoteSize"];
 	        this.selected = source["selected"];
 	        this.isNew = source["isNew"];
+	        this.localOnly = source["localOnly"];
 	    }
 	}
 	export class CloudSyncPlanResult {
@@ -392,6 +396,7 @@ export namespace main {
 	}
 	export class CloudSyncResult {
 	    succeeded: string[];
+	    deleted: string[];
 	    failed: Record<string, string>;
 	    readOnly: boolean;
 	    skippedUploads: number;
@@ -403,6 +408,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.succeeded = source["succeeded"];
+	        this.deleted = source["deleted"];
 	        this.failed = source["failed"];
 	        this.readOnly = source["readOnly"];
 	        this.skippedUploads = source["skippedUploads"];

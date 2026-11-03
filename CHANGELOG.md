@@ -4,6 +4,35 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-11-03 (v0.9.67) - installed and portable copies keep separate settings; guest Cloud Sync on new installs
+
+### Fixed
+- **An installed PDT could end up reading its Drivers library from the program folder**
+  (`%LocalAppData%\Programs\PDT\Drivers`) instead of `%LocalAppData%\PDT\Drivers` - confirmed live.
+  Every copy of PDT on a PC (installed, flash drive, development build) shared one settings file in
+  `%AppData%\PDT`. A flash-drive copy's settings use relative folder paths (`Drivers`, `Configs` - "next
+  to me"); once one was saved there, the installed copy read them as "next to the installed PDT.exe".
+  It quietly kept using the right folder until a `Drivers` folder appeared beside the program, then
+  switched to it, splitting the driver library in two. An installed copy now ignores relative folder
+  paths, logs the correction once and saves it. The reverse could happen too - a flash-drive copy on
+  the technician's laptop using the laptop's library instead of the drive's - which the change below
+  ends.
+
+### Changed
+- **Installed and portable copies keep separate settings.** An installed copy now keeps its settings,
+  Cloud Sync selections and update-check history in `%LocalAppData%\PDT`, alongside its Drivers and
+  Configs; on first launch it copies them over from `%AppData%\PDT` (leaving the originals, so an older
+  PDT still finds them). A flash-drive copy keeps its own in a `Settings` folder on the drive and never
+  reads or writes the PC's - including on the technician's own laptop. The Cloud Sync secret stays in
+  Windows Credential Manager for both.
+
+### Added
+- **New installs come with Cloud Sync preconfigured** with the read-only guest account, so the shared
+  driver repository is available for download straight away. Only a brand-new install gets it - no
+  settings file in either location and no Cloud Sync secret already saved. An existing installation is
+  never changed, whatever its Cloud Sync setup (including running the installer over it), and a
+  flash-drive copy never gets it, so no key is written to a client PC.
+
 ## 2026-11-03 (v0.9.66) - read-only guest access to the shared driver repository
 
 ### Added

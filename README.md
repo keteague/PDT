@@ -1535,14 +1535,24 @@ into whatever machine it's plugged into.
 
 **Copied onto every drive by Write to Flash Drive and Sync** (`ensureReleaseAppsOnDrives`,
 `flashdrive.go`'s own last step for both `WritePortablePDT` and `SyncToFlashDrives`): a Windows laptop
-copies `includeDir()\PDT.app` onto each drive's root (`copyIncludeMacAppToDrives`, a plain
-`copyTreeMerge`); a Mac copies `includeDir()\PDT.exe` (`copyIncludeExeToDrives`, a plain file write). This
+puts `includeDir()\PDT.app` onto each drive's root (`copyIncludeMacAppToDrives`); a Mac puts
+`includeDir()\PDT.exe` (`copyIncludeExeToDrives`). This
 step needs **no Internet at all** - it only ever reads whatever Include already has, which is why keeping
 Include current is decoupled from flash-drive time in the first place: a client site with no signal
 shouldn't block a Sync from carrying both apps, as long as a check succeeded earlier somewhere that did
 have one. If Include has nothing yet (a fresh install that's never had a successful update check), the
 operation still succeeds - Drivers/Configs/this platform's own exe are unaffected - with a WARN note
 telling the technician to run Check for Updates once while online first.
+
+**Only copied when the drive's copy is out of date** (`syncAppToDrive`, `flashapp.go` - Ken,
+2026-11-03). Sync checks the version of each app already on the drive - this laptop's own running PDT
+(`ownFlashApp`: `PDT.exe` on Windows, the whole `PDT.app` bundle on macOS) and the other platform's from
+Include - and copies it only when the drive's copy is missing, unreadable, or older. The same version is
+left alone ("is current"); a **newer** one on the drive is never downgraded, with a WARN note saying
+this laptop needs updating. Each copy is staged beside the old one and swapped in only once complete;
+a `.app` bundle is replaced whole rather than merged, so files an older version had don't linger.
+Before this, Sync rewrote `PDT.exe` and merged `PDT.app` on every run regardless of version, and on a
+Mac wrote only the bare `Contents/MacOS/PDT` binary to the drive root rather than the app.
 
 ### Keeping the bundled 7-Zip up to date (`sevenzip.go`, About tab)
 

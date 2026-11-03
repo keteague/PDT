@@ -500,21 +500,32 @@ func copyIncludeMacAppToDrives(ctx context.Context, dir string, result *BatchDri
 		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: "No PDT.app found in Include yet - run Check for Updates once while online (Settings > About), then Write to Flash Drive/Sync again to put it on the drive(s)."})
 		return
 	}
+	version, _ := macAppInstalledVersion(src)
+	syncIncludeAppToDrives(ctx, flashApp{
+		label: "PDT.app (macOS)", name: macAppBundleName, src: src, version: version, isDir: true,
+		readVersion: macAppInstalledVersion,
+	}, result, newProgress)
+}
+
+// syncIncludeAppToDrives keeps app current on every drive in
+// result.Succeeded (syncAppToDrive) - copied only when a drive's copy is
+// missing, unreadable or older. A failure is a WARN note, not a failed
+// drive: Drivers/Configs already synced.
+func syncIncludeAppToDrives(ctx context.Context, app flashApp, result *BatchDriveResult, newProgress func(letter string) stepProgressFunc) {
 	for _, letter := range result.Succeeded {
 		if ctx.Err() != nil {
 			return
 		}
-		var onProgress func(CopyProgress)
+		var progress stepProgressFunc
 		if newProgress != nil {
-			progress := newProgress(letter)
-			onProgress = func(p CopyProgress) { progress("PDT.app (macOS)", p) }
+			progress = newProgress(letter)
 		}
-		dest := filepath.Join(letter, macAppBundleName)
-		if err := copyTreeMerge(ctx, dest, src, onProgress); err != nil {
-			result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not copy PDT.app onto %s: %v", letter, err)})
+		note, err := syncAppToDrive(ctx, letter, app, progress)
+		if err != nil {
+			result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not copy %s onto %s: %v", app.name, letter, err)})
 			continue
 		}
-		result.Notes = append(result.Notes, FlashNote{Level: "OK", Text: fmt.Sprintf("Copied PDT.app onto %s.", letter)})
+		result.Notes = append(result.Notes, note)
 	}
 }
 
@@ -524,22 +535,15 @@ func copyIncludeMacAppToDrives(ctx context.Context, dir string, result *BatchDri
 // function.
 func copyIncludeExeToDrives(ctx context.Context, dir string, result *BatchDriveResult, newProgress func(letter string) stepProgressFunc) {
 	src := filepath.Join(dir, winExeName)
-	data, err := os.ReadFile(src)
-	if err != nil {
+	if !fileExists(src) {
 		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: "No PDT.exe found in Include yet - run Check for Updates once while online (Settings > About), then Write to Flash Drive/Sync again to put it on the drive(s)."})
 		return
 	}
-	for _, letter := range result.Succeeded {
-		if ctx.Err() != nil {
-			return
-		}
-		dest := filepath.Join(letter, winExeName)
-		if err := os.WriteFile(dest, data, 0o755); err != nil {
-			result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not copy PDT.exe onto %s: %v", letter, err)})
-			continue
-		}
-		result.Notes = append(result.Notes, FlashNote{Level: "OK", Text: fmt.Sprintf("Copied PDT.exe onto %s.", letter)})
-	}
+	version, _ := peInstalledVersion(src)
+	syncIncludeAppToDrives(ctx, flashApp{
+		label: "PDT.exe (Windows)", name: winExeName, src: src, version: version,
+		readVersion: peInstalledVersion,
+	}, result, newProgress)
 }
 
 // SyncToFlashDrives copies this laptop's own Drivers folder and/or Configs
@@ -552,11 +556,12 @@ func copyIncludeExeToDrives(ctx context.Context, dir string, result *BatchDriveR
 // to use without needing to be plugged into another computer first just to
 // trigger that.
 //
-// Also always writes this laptop's own currently-running exe onto every
-// listed drive (Ken, 2026-09-29: a Sync should never leave a flash drive's
-// copy of PDT itself behind, not just its Drivers/Configs) and, via
-// ensureReleaseAppsOnDrives, copies the OTHER platform's app out of
-// includeDir() onto it too - the exact same "other platform" step
+// Also keeps this laptop's own running PDT current on every listed drive
+// (Ken, 2026-09-29: a Sync should never leave a flash drive's copy of PDT
+// itself behind, not just its Drivers/Configs) - copied only when the
+// drive's copy is missing or older (syncAppToDrive, Ken 2026-11-03), never
+// downgrading a drive that's newer - and, via ensureReleaseAppsOnDrives,
+// does the same for the OTHER platform's app out of includeDir() - the exact same "other platform" step
 // WritePortablePDT already ends with. The 7-Zip tools folder is the one
 // thing this still leaves alone - Write to Flash Drive is what lays that
 // down initially.
@@ -581,19 +586,12 @@ func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs
 		}
 	}
 
-	// Read once, up front, like WritePortablePDT's own exeName/exeData - a
-	// failure here (should never happen in practice) is a WARN note, not a
-	// reason to refuse the Drivers/Configs sync that's this function's own
-	// main purpose.
-	exePath, exeErr := os.Executable()
-	var exeName string
-	var exeData []byte
-	if exeErr == nil {
-		exeName = filepath.Base(exePath)
-		exeData, exeErr = os.ReadFile(exePath)
-	}
-	if exeErr != nil {
-		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not read this copy of PDT to sync onto the drive(s): %v. Drivers/Configs will still sync.", exeErr)})
+	// Located once, up front - a failure here (should never happen in
+	// practice) is a WARN note, not a reason to refuse the Drivers/Configs
+	// sync that's this function's own main purpose.
+	ownApp, ownAppErr := ownFlashApp()
+	if ownAppErr != nil {
+		result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("Could not find this copy of PDT to sync onto the drive(s): %v. Drivers/Configs will still sync.", ownAppErr)})
 	}
 
 	ctx, done := a.beginFlashSync()
@@ -606,9 +604,12 @@ func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs
 		}
 		progress := a.newFlashCopyProgressFunc(letter)
 		var errs []error
-		if exeErr == nil {
-			if err := os.WriteFile(filepath.Join(letter, exeName), exeData, 0o755); err != nil {
-				errs = append(errs, fmt.Errorf("writing %s: %w", exeName, err))
+		if ownAppErr == nil {
+			note, err := syncAppToDrive(ctx, letter, ownApp, progress)
+			if err != nil {
+				errs = append(errs, err)
+			} else {
+				result.Notes = append(result.Notes, note)
 			}
 		}
 		if fromCloud {

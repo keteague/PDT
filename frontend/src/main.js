@@ -3731,6 +3731,15 @@ let cloudSyncItems = [];
 let cloudSyncSelection = new Map();
 let cloudSyncCollapsed = new Set();
 let cloudSyncTreeRoot = null;
+// cloudSyncReadOnly: the configured key can't upload (GetCloudSyncPlan's
+// readOnly - probed in Go before the plan is returned, see cloudCanWrite).
+// Go already leaves upload rows out of a read-only plan; the check in
+// isCloudSyncActionable is just a backstop.
+let cloudSyncReadOnly = false;
+
+function isCloudSyncActionable(item) {
+    return item.action === 'download' || (item.action === 'upload' && !cloudSyncReadOnly);
+}
 
 function buildCloudSyncTree(items) {
     const root = { name: '', path: '', children: new Map(), item: null };
@@ -3766,7 +3775,7 @@ function findCloudSyncNode(path) {
 // cloudsync.ActionConflict's own Go doc comment).
 function collectActionableRelPaths(node, out) {
     if (node.item) {
-        if (node.item.action === 'upload' || node.item.action === 'download') out.push(node.item.relPath);
+        if (isCloudSyncActionable(node.item)) out.push(node.item.relPath);
         return;
     }
     for (const child of node.children.values()) collectActionableRelPaths(child, out);
@@ -3803,7 +3812,7 @@ function cloudSyncActionLabel(action) {
 }
 
 function renderCloudSyncLeaf(item) {
-    const actionable = item.action === 'upload' || item.action === 'download';
+    const actionable = isCloudSyncActionable(item);
     const spacerTitle = item.action === 'synced'
         ? 'Already in sync on both sides - nothing to do.'
         : 'Sizes differ on each side - this needs to be looked at by hand before it can sync either direction';
@@ -3942,18 +3951,20 @@ async function openCloudSyncModal() {
         return;
     }
     cloudSyncItems = result.items || [];
+    cloudSyncReadOnly = !!result.readOnly;
     cloudSyncSelection = new Map();
     for (const item of cloudSyncItems) {
-        if (item.action === 'upload' || item.action === 'download') {
+        if (isCloudSyncActionable(item)) {
             cloudSyncSelection.set(item.relPath, item.selected);
         }
     }
-    const actionable = cloudSyncItems.filter(i => i.action === 'upload' || i.action === 'download').length;
+    const actionable = cloudSyncItems.filter(isCloudSyncActionable).length;
     const conflicts = cloudSyncItems.filter(i => i.action === 'conflict').length;
-    el('cloudSyncHint').textContent = actionable === 0 && conflicts === 0
-        ? 'Nothing to sync - this computer and the cloud repository already match.'
+    const readOnlyNote = cloudSyncReadOnly ? 'Read-only access: showing downloads only. ' : '';
+    el('cloudSyncHint').textContent = readOnlyNote + (actionable === 0 && conflicts === 0
+        ? (cloudSyncReadOnly ? 'Nothing to download - this computer already has everything in the cloud repository.' : 'Nothing to sync - this computer and the cloud repository already match.')
         : `${actionable} file${actionable === 1 ? '' : 's'} to sync` +
-          (conflicts > 0 ? `, ${conflicts} conflict${conflicts === 1 ? '' : 's'} need manual review` : '') + '.';
+          (conflicts > 0 ? `, ${conflicts} conflict${conflicts === 1 ? '' : 's'} need manual review` : '') + '.');
     renderCloudSyncTree();
 }
 
@@ -4266,6 +4277,9 @@ async function confirmCloudSync() {
         for (const p of Object.keys(result.failed || {})) {
             const msg = result.failed[p];
             logStatus(isCanceledError(msg) ? 'WARN' : 'ERR', isCanceledError(msg) ? `Cloud sync of ${p} canceled.` : `Could not sync ${p}: ${msg}`);
+        }
+        if (result.skippedUploads > 0) {
+            logStatus('WARN', `Read-only access to the cloud repository: skipped ${result.skippedUploads} upload${result.skippedUploads === 1 ? '' : 's'}.`);
         }
         if ((result.succeeded || []).length > 0) {
             const status = await App.RefreshDriverCatalog();

@@ -359,6 +359,7 @@ export namespace main {
 	export class CloudSyncPlanResult {
 	    items: CloudSyncPlanItem[];
 	    error: string;
+	    readOnly: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CloudSyncPlanResult(source);
@@ -368,6 +369,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.items = this.convertValues(source["items"], CloudSyncPlanItem);
 	        this.error = source["error"];
+	        this.readOnly = source["readOnly"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -391,6 +393,8 @@ export namespace main {
 	export class CloudSyncResult {
 	    succeeded: string[];
 	    failed: Record<string, string>;
+	    readOnly: boolean;
+	    skippedUploads: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new CloudSyncResult(source);
@@ -400,6 +404,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.succeeded = source["succeeded"];
 	        this.failed = source["failed"];
+	        this.readOnly = source["readOnly"];
+	        this.skippedUploads = source["skippedUploads"];
 	    }
 	}
 	export class CloudSyncSettings {

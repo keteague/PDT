@@ -1359,6 +1359,31 @@ never persisted to the plaintext `settings.json` and never echoed back to the UI
 it) - the one credential in this whole app worth that treatment, since it grants write access to
 a bucket every technician shares.
 
+**What Cloud Sync skips:** every file or folder whose name starts with a dot - `.pdt-infcache` and
+its `.pdt-source` markers included, plus `.DS_Store`, macOS `._` files and the like - along with
+in-progress `.pdt-partial` downloads, archives' extracted sibling folders, and `catalog.<mfg>.json`
+(`isCloudIgnoredName`/`isIgnoredRemotePath`, `internal/cloudsync/plan.go`). The bucket holds driver
+packages only; the `.inf` cache is rebuilt from them on the next scan of an installed copy.
+Flash-drive Sync is different on purpose: it still carries `.pdt-infcache`, because a flash-drive
+launch never re-extracts (see "On-launch scan skips extraction on removable media"). Dot-prefixed
+objects an earlier version already uploaded stay in the bucket but no longer appear in the tree.
+
+**Read-only keys** (the public guest key - see "Shared driver repository (guest access)") are
+detected, not configured. S3/R2 has no call that reports a key's permissions, so
+`cloudsync.ProbeWriteAccess` (`internal/cloudsync/access.go`) asks for a real write -
+`NewMultipartUpload` on `<Folder>.pdt-access-probe` - and aborts it immediately if granted; an
+aborted multipart upload never becomes an object, so nothing appears in anyone's listing. An
+`AccessDenied` answer means read-only. `GetCloudSyncPlan` runs the probe alongside its listing and
+caches the answer for the session per endpoint+bucket+key (`cloudCanWrite`), and waits for it
+before returning - a read-only plan never contains upload items at all, so the tree has nothing to
+offer. `SyncCloud` independently drops uploads before transferring
+anything and reports them as one `SkippedUploads` count instead of per-file errors. An
+inconclusive probe (network error) counts as writable and isn't cached, so it can never hide
+uploads from a technician who really can write; if an upload is then refused mid-run, the rest
+are skipped the same way. Confirmed live against the real bucket with both the guest key
+(refused) and a read-write key (allowed, nothing left behind) - see `access_live_test.go`, which
+reruns that check whenever `PDT_R2_ACCESS_KEY`/`PDT_R2_SECRET_KEY` are set.
+
 **The toolbar's Cloud Sync button** (vertical bidirectional-arrows icon) opens a tree view built
 client-side from `GetCloudSyncPlan`'s own flat list of relative paths (`internal/cloudsync/plan.go`'s
 `BuildPlan`, which diffs the local Drivers folder against the bucket by size alone - the same
@@ -1618,6 +1643,33 @@ populated `Drivers` folder sitting next to the running executable first - true f
 The installer is unsigned (no code-signing certificate) - Windows SmartScreen will likely show an
 "unrecognized app" warning on first run ("More info" -> "Run anyway"). This is expected for a small
 internal tool without a paid signing certificate, not a build error.
+
+## Shared driver repository (guest access)
+
+Anyone can download the shared driver repository with Cloud Sync, using a read-only guest key.
+
+1. Open **Settings > Cloud Sync**. These three are filled in by default - check they match:
+
+   | Setting | Value |
+   | --- | --- |
+   | R2 Endpoint | `https://60a85894a285594161353b7731fa385f.r2.cloudflarestorage.com` |
+   | Bucket | `pdt` |
+   | Folder | `Drivers/` |
+
+2. Enter the guest key and click **Save**:
+
+   | Setting | Value |
+   | --- | --- |
+   | Access Key ID | `6eb7d2aebdcb5111124420cb9f7b9957` |
+   | Secret Access Key | `2215309857a8750d38b549fb48fb4816f1dfa2fddf21d7c3f22b87eb14cd07f8` |
+
+3. Click the **Cloud Sync** toolbar button, pick what to download, and click Sync.
+
+The guest key is **read-only**. PDT checks for write access each time the Cloud Sync window opens,
+before showing anything. With a read-only key it shows "Read-only access: showing downloads only"
+and lists downloads only - drivers that exist only on your computer aren't offered for upload at all,
+and nothing is ever attempted against the repository. If you need to contribute drivers, ask for a
+key with write access.
 
 ## Which drivers should I use?
 

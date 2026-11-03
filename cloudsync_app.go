@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"PDT/internal/cloudsync"
+
+	"github.com/minio/minio-go/v7"
 )
 
 // cloudSyncEarlyReleaseFraction is how far into a file's own transfer
@@ -80,14 +82,63 @@ type CloudSyncPlanItem struct {
 type CloudSyncPlanResult struct {
 	Items []CloudSyncPlanItem `json:"items"`
 	Error string              `json:"error"`
+	// ReadOnly: the configured key can't write to the bucket (see
+	// cloudCanWrite) - Items then holds no upload rows at all.
+	ReadOnly bool `json:"readOnly"`
 }
 
 // CloudSyncResult is SyncCloud's own outcome - the same
 // succeeded/failed-by-key shape as BatchDriveResult (flashdrive.go), so one
 // bad file doesn't stop the rest of the batch from completing.
+// SkippedUploads counts uploads not attempted (or refused mid-run) because
+// the key is read-only - reported once, not as a failure per file.
 type CloudSyncResult struct {
-	Succeeded []string          `json:"succeeded"`
-	Failed    map[string]string `json:"failed"`
+	Succeeded      []string          `json:"succeeded"`
+	Failed         map[string]string `json:"failed"`
+	ReadOnly       bool              `json:"readOnly"`
+	SkippedUploads int               `json:"skippedUploads"`
+}
+
+// cloudWriteAccess caches each key's probed write access for this session,
+// keyed by endpoint+bucket+access key, so changing any of them in Settings
+// probes again. Only conclusive answers are cached.
+var (
+	cloudWriteAccessMu sync.Mutex
+	cloudWriteAccess   = map[string]bool{}
+)
+
+func cloudWriteAccessKey(cfg cloudsync.Config) string {
+	return cfg.Endpoint + "|" + cfg.Bucket + "|" + cfg.AccessKeyID
+}
+
+// cloudCanWrite reports whether cfg's key may upload, probing the bucket
+// once per session (cloudsync.ProbeWriteAccess). Read-only keys - the
+// public guest key in the README - would otherwise have every local-only
+// file planned as an upload and fail each one with AccessDenied on every
+// sync. An inconclusive probe answers true and isn't cached: never hide
+// uploads from a technician who can really write.
+func (a *App) cloudCanWrite(ctx context.Context, core *minio.Core, cfg cloudsync.Config) bool {
+	key := cloudWriteAccessKey(cfg)
+	cloudWriteAccessMu.Lock()
+	v, ok := cloudWriteAccess[key]
+	cloudWriteAccessMu.Unlock()
+	if ok {
+		return v
+	}
+	pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	canWrite, err := cloudsync.ProbeWriteAccess(pctx, core, cfg.Bucket, a.settings.CloudSync.Prefix)
+	if err != nil {
+		return true
+	}
+	setCloudWriteAccess(cfg, canWrite)
+	return canWrite
+}
+
+func setCloudWriteAccess(cfg cloudsync.Config, canWrite bool) {
+	cloudWriteAccessMu.Lock()
+	cloudWriteAccess[cloudWriteAccessKey(cfg)] = canWrite
+	cloudWriteAccessMu.Unlock()
 }
 
 // cloudSyncConfig assembles cloudsync.Config from Settings' own non-secret
@@ -135,26 +186,39 @@ func (a *App) GetCloudSyncPlan() CloudSyncPlanResult {
 
 	ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
 	defer cancel()
+	// Probe write access alongside the listing rather than after it, so a
+	// first open doesn't pay for the two round trips in sequence.
+	canWriteCh := make(chan bool, 1)
+	go func() { canWriteCh <- a.cloudCanWrite(ctx, core, cfg) }()
 	plan, err := cloudsync.BuildPlan(ctx, core, cfg.Bucket, a.settings.CloudSync.Prefix, driversRoot())
 	if err != nil {
 		return CloudSyncPlanResult{Error: err.Error()}
 	}
+	readOnly := !<-canWriteCh
 
 	state := loadCloudSyncState()
-	items := make([]CloudSyncPlanItem, len(plan))
-	for i, p := range plan {
-		items[i] = CloudSyncPlanItem{
+	items := make([]CloudSyncPlanItem, 0, len(plan))
+	for _, p := range plan {
+		// A read-only key never sees upload options at all (Ken,
+		// 2026-11-03): local-only files are left out of the plan entirely
+		// rather than shown disabled. Not marked Seen either, so if this
+		// technician later switches to a write key they still get the
+		// "new" highlight the first time those uploads appear.
+		if readOnly && p.Action == cloudsync.ActionUpload {
+			continue
+		}
+		items = append(items, CloudSyncPlanItem{
 			RelPath:    p.RelPath,
 			Action:     string(p.Action),
 			LocalSize:  p.LocalSize,
 			RemoteSize: p.RemoteSize,
 			Selected:   !state.Deselected[p.RelPath],
 			IsNew:      !state.Seen[p.RelPath],
-		}
+		})
 		state.Seen[p.RelPath] = true
 	}
 	_ = saveCloudSyncState(state)
-	return CloudSyncPlanResult{Items: items}
+	return CloudSyncPlanResult{Items: items, ReadOnly: readOnly}
 }
 
 // CloudFileUploaderResult is GetCloudFileUploader's own outcome - Uploader
@@ -327,6 +391,15 @@ func (a *App) SyncCloud(relPaths []string) CloudSyncResult {
 	for _, p := range relPaths {
 		requested[p] = true
 	}
+	// Normally already cached by GetCloudSyncPlan; uploads are dropped here
+	// regardless of what the tree sent, so a stale selection can't slip one
+	// through.
+	readOnly := !a.cloudCanWrite(ctx, core, cfg)
+	result.ReadOnly = readOnly
+	// Set when an upload is refused mid-run (the key's permissions changed
+	// after the probe, or the probe was inconclusive): every upload not yet
+	// started is skipped instead of failing one by one.
+	var refusedMidRun atomic.Bool
 	var jobs []cloudsync.PlanItem
 	var totalBytes int64
 	for _, item := range plan {
@@ -334,6 +407,10 @@ func (a *App) SyncCloud(relPaths []string) CloudSyncResult {
 			continue
 		}
 		if item.Action != cloudsync.ActionUpload && item.Action != cloudsync.ActionDownload {
+			continue
+		}
+		if readOnly && item.Action == cloudsync.ActionUpload {
+			result.SkippedUploads++
 			continue
 		}
 		jobs = append(jobs, item)
@@ -427,13 +504,24 @@ feed:
 
 			var transferErr error
 			if item.Action == cloudsync.ActionUpload {
-				transferErr = cloudsync.Upload(ctx, gate, core, cfg.Bucket, a.settings.CloudSync.Prefix, item.RelPath, localPath, cfg.AccessKeyID, progress)
+				if refusedMidRun.Load() {
+					transferErr = cloudsync.ErrReadOnly
+				} else {
+					transferErr = cloudsync.Upload(ctx, gate, core, cfg.Bucket, a.settings.CloudSync.Prefix, item.RelPath, localPath, cfg.AccessKeyID, progress)
+					if cloudsync.IsAccessDenied(transferErr) {
+						refusedMidRun.Store(true)
+						setCloudWriteAccess(cfg, false)
+					}
+				}
 			} else {
 				transferErr = cloudsync.Download(ctx, gate, core, cfg.Bucket, a.settings.CloudSync.Prefix, item.RelPath, localPath, item.RemoteSize, progress)
 			}
 
 			dataMu.Lock()
-			if transferErr != nil {
+			if item.Action == cloudsync.ActionUpload && cloudsync.IsAccessDenied(transferErr) {
+				result.SkippedUploads++
+				result.ReadOnly = true
+			} else if transferErr != nil {
 				result.Failed[item.RelPath] = transferErr.Error()
 			} else {
 				result.Succeeded = append(result.Succeeded, item.RelPath)

@@ -4,6 +4,17 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-11-04 (v0.9.71) - Sync to Flash asks about drivers only on the flash drive
+
+### Added
+- **Sync to Flash Drive keeps the drive's drivers matching this computer's.** With Drivers selected,
+  Sync used to only ever add to the flash drive, so a driver you'd deleted on your laptop - or moved
+  into an Archive folder there - stayed on the drive for good. Before syncing, PDT now lists the driver
+  packages that are on the drive but not on this computer, each set to **Keep**; switch any to
+  **Delete** (or use Delete All) and they're removed from the drive, along with what PDT cached for
+  them, as part of the sync. The confirmation says how many will be deleted, and nothing is deleted
+  unless you choose it. (When Drivers come from the cloud instead, this check doesn't apply.)
+
 ## 2026-11-04 (v0.9.70) - no "install this device software?" prompt; Driver Cleanup
 
 ### Added

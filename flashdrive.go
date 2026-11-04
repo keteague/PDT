@@ -573,7 +573,12 @@ func copyIncludeExeToDrives(ctx context.Context, dir string, result *BatchDriveR
 // driversSource ("local" - the default, also "" - or "cloud") picks where the
 // Drivers come from: this laptop's own Drivers folder, or the shared cloud
 // repository downloaded straight onto the drive (see cloudflash.go).
-func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs bool, driversSource string) BatchDriveResult {
+//
+// deleteFromDrives (letter -> Drivers-relative paths) lists the packages the
+// technician chose to delete from each drive in the review step
+// (ListFlashOnlyDrivers) - deleted, with their cached data, before that
+// drive's Drivers are copied. Only applies to Drivers from this laptop.
+func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs bool, driversSource string, deleteFromDrives map[string][]string) BatchDriveResult {
 	<-a.ready
 	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}, Notes: []FlashNote{}}
 	if !a.IsTechLaptopCopy() {
@@ -629,6 +634,7 @@ func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs
 				result.Notes = append(result.Notes, FlashNote{Level: "WARN", Text: fmt.Sprintf("%d file(s) on %s differ in size from the cloud copy and were left untouched - resolve them in Cloud Sync.", conflicts, letter)})
 			}
 		} else if includeDrivers {
+			deleteFlashOnlyDrivers(letter, deleteFromDrives[letter], &result)
 			if err := syncDriversTo(ctx, letter, func(p CopyProgress) { progress("Drivers", p) }); err != nil {
 				errs = append(errs, err)
 			}

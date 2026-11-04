@@ -1341,6 +1341,19 @@ manufacturer folder, so a manufacturer present under two `Windows\<version>` fol
 folder is refused. Each deleted package is also unchecked in Cloud Sync, so a package still in the cloud
 repository isn't quietly downloaded again on the next sync.
 
+### Sync to Flash Drive: drivers only on the drive (`flashonly.go`)
+
+With Drivers selected (from this laptop), the drive's Drivers repo should end up matching the
+laptop's - but Sync never removes anything without asking. Before the usual confirmation, PDT lists the
+driver packages each drive has that the laptop doesn't (`ListFlashOnlyDrivers`: the same packages
+Driver Cleanup lists, compared by path within the Drivers folder, ignoring case) - typically one the
+laptop has since deleted, or moved into an Archive folder. Each starts on **Keep**; any set to
+**Delete** (or all, via Delete All) is removed from the drive along with its cached data
+(`deleteFlashOnlyDrivers`, reusing `driver.DeleteDriverPackages`, so only driver archives inside a
+manufacturer folder can ever be deleted) before that drive's Drivers are copied, and the confirmation
+says how many. A package that has appeared on the laptop in the meantime is kept. Drivers synced from
+the cloud aren't compared.
+
 ### Tools only on the tech laptop (`IsTechLaptopCopy`)
 
 Write to Flash Drive, Sync to Flash Drive, Cloud Sync, Rescan Drivers and Driver Cleanup are tools for

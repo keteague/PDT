@@ -138,6 +138,10 @@ export function ListDriverCleanupPackages() {
   return window['go']['main']['App']['ListDriverCleanupPackages']();
 }
 
+export function ListFlashOnlyDrivers(arg1) {
+  return window['go']['main']['App']['ListFlashOnlyDrivers'](arg1);
+}
+
 export function ListPreinstallFolders(arg1) {
   return window['go']['main']['App']['ListPreinstallFolders'](arg1);
 }
@@ -282,8 +286,8 @@ export function SyncOpenPrintingPPDs() {
   return window['go']['main']['App']['SyncOpenPrintingPPDs']();
 }
 
-export function SyncToFlashDrives(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['SyncToFlashDrives'](arg1, arg2, arg3, arg4);
+export function SyncToFlashDrives(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SyncToFlashDrives'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function UpdateSevenZip(arg1) {

@@ -73,6 +73,8 @@ export function IsTechLaptopCopy():Promise<boolean>;
 
 export function ListDriverCleanupPackages():Promise<Array<driver.CleanupPackage>>;
 
+export function ListFlashOnlyDrivers(arg1:Array<string>):Promise<Array<main.FlashOnlyDrive>>;
+
 export function ListPreinstallFolders(arg1:string):Promise<main.PreinstallFoldersResult>;
 
 export function ListRemovableDrives():Promise<main.ListDrivesResult>;
@@ -145,7 +147,7 @@ export function SyncFromFlashDrive(arg1:string,arg2:boolean,arg3:boolean):Promis
 
 export function SyncOpenPrintingPPDs():Promise<main.OpenPrintingSyncResult>;
 
-export function SyncToFlashDrives(arg1:Array<string>,arg2:boolean,arg3:boolean,arg4:string):Promise<main.BatchDriveResult>;
+export function SyncToFlashDrives(arg1:Array<string>,arg2:boolean,arg3:boolean,arg4:string,arg5:Record<string, Array<string>>):Promise<main.BatchDriveResult>;
 
 export function UpdateSevenZip(arg1:string):Promise<main.ApplyUpdateResult>;
 

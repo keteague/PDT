@@ -684,6 +684,25 @@ document.querySelector('#app').innerHTML = `
     </div>
   </div>
 
+  <div class="modal-backdrop" id="flashOnlyBackdrop" hidden>
+    <div class="modal rescan-modal cleanup-modal">
+      <h3>Drivers only on the flash drive</h3>
+      <p class="modal-hint" id="flashOnlyHint"></p>
+      <div id="flashOnlyList" class="rescan-tree"></div>
+      <div class="modal-actions rescan-actions">
+        <span>
+          <button id="btnFlashOnlyKeepAll">Keep All</button>
+          <button id="btnFlashOnlyDeleteAll">Delete All</button>
+        </span>
+        <span class="modal-hint" id="flashOnlySummary"></span>
+      </div>
+      <div class="modal-actions">
+        <button id="btnFlashOnlyCancel">Cancel</button>
+        <button class="primary" id="btnFlashOnlyContinue">Continue</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" id="confirmBackdrop" hidden>
     <div class="modal">
       <h3 id="confirmTitle"></h3>
@@ -984,7 +1003,7 @@ function applySalesChainGate() {
     document.body.classList.toggle('sales-chain-locked', locked);
     const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnDriverCleanup', 'btnSyncFlashDrive', 'btnCloudSync', 'btnOpenDriversFolder', 'btnSpooler', 'btnCupsWebUI', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
-        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#cupsWebUIDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop') || c.closest('#openPrintingProgressBackdrop') || c.closest('#rescanBackdrop') || c.closest('#cleanupBackdrop')) continue;
+        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#cupsWebUIDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop') || c.closest('#openPrintingProgressBackdrop') || c.closest('#rescanBackdrop') || c.closest('#cleanupBackdrop') || c.closest('#flashOnlyBackdrop')) continue;
         c.disabled = locked;
     }
     updatePortPrefixTextEnabled();
@@ -3369,6 +3388,7 @@ async function confirmWriteToFlashDrive() {
     if (chosen.length === 0) return;
 
     let letters = chosen.map(d => d.letter);
+    let deleteFromDrives = {}; // letter -> Drivers-relative paths to delete (Sync review step)
 
     // Asked first, before a format's own erase confirmation, so declining
     // the long copy never costs the tech an already-formatted drive.
@@ -3394,13 +3414,24 @@ async function confirmWriteToFlashDrive() {
         letters = formatResult.succeeded || [];
         if (letters.length === 0) return;
     } else {
+        // Sync to Flash Drive with Drivers from this laptop: the drive should
+        // end up matching the laptop (Ken, 2026-11-04), so first show any
+        // packages only the drive has, each Keep (default) or Delete.
+        let deleteCount = 0;
+        if (mode === 'sync' && direction !== 'from' && syncDrivers && driversSource === 'local') {
+            const choice = await reviewFlashOnlyDrivers(letters);
+            if (choice === null) return;
+            deleteFromDrives = choice;
+            deleteCount = Object.values(choice).reduce((n, list) => n + list.length, 0);
+        }
         const ok = await showConfirm(direction === 'from' ? {
             title: 'Sync from Flash Drive',
             message: `Sync ${syncItems} from ${letters[0]} onto this computer?`,
             okLabel: 'Sync',
         } : mode === 'sync' ? {
             title: 'Sync to Flash Drive',
-            message: `Sync this computer's ${syncItems} to: ${letters.join(', ')}?`,
+            message: `Sync this computer's ${syncItems} to: ${letters.join(', ')}?` +
+                (deleteCount > 0 ? `\n\nThis also deletes ${deleteCount} driver package${deleteCount === 1 ? '' : 's'} that ${deleteCount === 1 ? 'is' : 'are'} only on the flash drive. This can't be undone.` : ''),
             okLabel: 'Sync',
         } : {
             title: 'Write to Flash Drive',
@@ -3435,7 +3466,7 @@ async function confirmWriteToFlashDrive() {
         }
 
         if (mode === 'sync') {
-            const syncResult = await App.SyncToFlashDrives(letters, syncDrivers, syncConfigs, driversSource);
+            const syncResult = await App.SyncToFlashDrives(letters, syncDrivers, syncConfigs, driversSource, deleteFromDrives);
             for (const n of syncResult.notes || []) logStatus(n.level, n.text);
             for (const l of syncResult.succeeded || []) logStatus('OK', `Synced ${syncItems} to ${l}.`);
             for (const l of Object.keys(syncResult.failed || {})) {
@@ -4602,6 +4633,97 @@ function showConfirm({title = 'Confirm', message = '', okLabel = 'OK', cancelLab
         okBtn.addEventListener('click', onOk);
         cancelBtn.addEventListener('click', onCancel);
         el('confirmBackdrop').hidden = false;
+    });
+}
+
+// reviewFlashOnlyDrivers lists, per drive, the driver packages the drive has
+// and this laptop doesn't (App.ListFlashOnlyDrivers), each with Keep
+// (default) or Delete. Resolves to { letter: [relPath, ...] } for the ones
+// marked Delete - {} when there's nothing to review or everything is kept -
+// or null if the technician cancels the sync.
+async function reviewFlashOnlyDrivers(letters) {
+    const drives = (await App.ListFlashOnlyDrivers(letters)) || [];
+    for (const d of drives) {
+        if (d.error) logStatus('WARN', `Could not compare ${d.letter}'s drivers with this computer's: ${d.error}`);
+    }
+    const withExtras = drives.filter(d => (d.packages || []).length > 0);
+    if (withExtras.length === 0) return {};
+
+    const choices = new Map(); // `${letter}|${relPath}` -> 'keep' | 'delete'
+    const rows = [];
+    for (const d of withExtras) {
+        for (const p of d.packages.slice().sort((a, b) => a.treePath.localeCompare(b.treePath))) {
+            const key = `${d.letter}|${p.relPath}`;
+            choices.set(key, 'keep');
+            rows.push({ key, letter: d.letter, pkg: p });
+        }
+    }
+    const total = rows.length;
+    el('flashOnlyHint').textContent = `${total} driver package${total === 1 ? ' is' : 's are'} on the flash drive but not on this computer. ` +
+        `Choose whether to keep or delete each one - everything PDT cached for a deleted package goes with it.`;
+
+    const render = () => {
+        const byDrive = new Map();
+        for (const r of rows) {
+            if (!byDrive.has(r.letter)) byDrive.set(r.letter, []);
+            byDrive.get(r.letter).push(r);
+        }
+        let html = '';
+        for (const [letter, list] of byDrive) {
+            if (withExtras.length > 1) html += `<div class="cst-row"><span class="cst-name"><strong>${attr(letter)}</strong></span></div>`;
+            for (const r of list) {
+                const c = choices.get(r.key);
+                html += `
+                    <div class="cst-row" title="${attr(r.pkg.relPath)}">
+                      <span class="cst-name">${attr(r.pkg.treePath)}</span>
+                      <span class="cst-size">${formatByteSize(r.pkg.size)}</span>
+                      <select class="flo-choice" data-key="${attr(r.key)}">
+                        <option value="keep"${c === 'keep' ? ' selected' : ''}>Keep</option>
+                        <option value="delete"${c === 'delete' ? ' selected' : ''}>Delete</option>
+                      </select>
+                    </div>`;
+            }
+        }
+        el('flashOnlyList').innerHTML = html;
+        const del = Array.from(choices.values()).filter(v => v === 'delete').length;
+        el('flashOnlySummary').textContent = del > 0 ? `${del} to delete` : 'Keeping all';
+    };
+    render();
+
+    return new Promise((resolve) => {
+        const list = el('flashOnlyList');
+        const onChange = (e) => {
+            if (!e.target.classList.contains('flo-choice')) return;
+            choices.set(e.target.dataset.key, e.target.value);
+            render();
+        };
+        const setAll = (v) => { for (const k of choices.keys()) choices.set(k, v); render(); };
+        const onKeepAll = () => setAll('keep');
+        const onDeleteAll = () => setAll('delete');
+        const finish = (result) => {
+            el('flashOnlyBackdrop').hidden = true;
+            list.removeEventListener('change', onChange);
+            el('btnFlashOnlyKeepAll').removeEventListener('click', onKeepAll);
+            el('btnFlashOnlyDeleteAll').removeEventListener('click', onDeleteAll);
+            el('btnFlashOnlyContinue').removeEventListener('click', onContinue);
+            el('btnFlashOnlyCancel').removeEventListener('click', onCancel);
+            resolve(result);
+        };
+        const onContinue = () => {
+            const out = {};
+            for (const r of rows) {
+                if (choices.get(r.key) !== 'delete') continue;
+                (out[r.letter] = out[r.letter] || []).push(r.pkg.relPath);
+            }
+            finish(out);
+        };
+        const onCancel = () => finish(null);
+        list.addEventListener('change', onChange);
+        el('btnFlashOnlyKeepAll').addEventListener('click', onKeepAll);
+        el('btnFlashOnlyDeleteAll').addEventListener('click', onDeleteAll);
+        el('btnFlashOnlyContinue').addEventListener('click', onContinue);
+        el('btnFlashOnlyCancel').addEventListener('click', onCancel);
+        el('flashOnlyBackdrop').hidden = false;
     });
 }
 

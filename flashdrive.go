@@ -412,6 +412,10 @@ func (a *App) CancelFlashSync() {
 func (a *App) WritePortablePDT(letters []string, includeDrivers bool, driversSource string) BatchDriveResult {
 	<-a.ready
 	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}, Notes: []FlashNote{}}
+	if !a.IsTechLaptopCopy() {
+		result.Failed["*"] = errNotTechLaptop.Error()
+		return result
+	}
 
 	var cloudDrivers func(context.Context, string, func(CopyProgress)) error
 	if includeDrivers && driversSource == driversSourceCloud {
@@ -572,6 +576,10 @@ func copyIncludeExeToDrives(ctx context.Context, dir string, result *BatchDriveR
 func (a *App) SyncToFlashDrives(letters []string, includeDrivers, includeConfigs bool, driversSource string) BatchDriveResult {
 	<-a.ready
 	result := BatchDriveResult{Succeeded: []string{}, Failed: map[string]string{}, Notes: []FlashNote{}}
+	if !a.IsTechLaptopCopy() {
+		result.Failed["*"] = errNotTechLaptop.Error()
+		return result
+	}
 	if !includeDrivers && !includeConfigs {
 		result.Failed["*"] = "nothing selected to sync - check Drivers and/or Configs"
 		return result
@@ -676,6 +684,9 @@ func syncConfigsTo(ctx context.Context, letter string, onProgress func(CopyProgr
 // running at once, and Cancel should stop whichever one that is.
 func (a *App) SyncFromFlashDrive(letter string, includeDrivers, includeConfigs bool) error {
 	<-a.ready
+	if !a.IsTechLaptopCopy() {
+		return errNotTechLaptop
+	}
 	if !includeDrivers && !includeConfigs {
 		return errors.New("nothing selected to sync - check Drivers and/or Configs")
 	}

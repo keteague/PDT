@@ -29,6 +29,8 @@ export function CheckSevenZipUpdate():Promise<main.UpdateCheckResult>;
 
 export function DefaultDriverFor(arg1:string):Promise<string>;
 
+export function DeleteDriverPackages(arg1:Array<string>):Promise<main.DriverCleanupResult>;
+
 export function Deploy(arg1:Array<printer.PrinterRow>,arg2:string,arg3:string):Promise<Array<main.DeployRowResult>>;
 
 export function DirectDownloadFamiliesFor(arg1:string,arg2:string):Promise<Array<string>>;
@@ -66,6 +68,10 @@ export function GetSevenZipVersion():Promise<string>;
 export function ImportCsv():Promise<main.ImportResult>;
 
 export function IsRunningFromRemovableDrive():Promise<boolean>;
+
+export function IsTechLaptopCopy():Promise<boolean>;
+
+export function ListDriverCleanupPackages():Promise<Array<driver.CleanupPackage>>;
 
 export function ListPreinstallFolders(arg1:string):Promise<main.PreinstallFoldersResult>;
 

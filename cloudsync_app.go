@@ -277,6 +277,9 @@ func (a *App) cloudSyncConfig() (cloudsync.Config, error) {
 // call, not the next one.
 func (a *App) GetCloudSyncPlan() CloudSyncPlanResult {
 	<-a.ready
+	if !a.IsTechLaptopCopy() {
+		return CloudSyncPlanResult{Error: errNotTechLaptop.Error()}
+	}
 	cfg, err := a.cloudSyncConfig()
 	if err != nil {
 		return CloudSyncPlanResult{Error: err.Error()}
@@ -466,6 +469,10 @@ func (a *App) newCloudSyncProgressFunc(relPath, direction string) func(done, tot
 func (a *App) SyncCloud(relPaths []string, removedChoices map[string]string) CloudSyncResult {
 	<-a.ready
 	result := CloudSyncResult{Succeeded: []string{}, Deleted: []string{}, Failed: map[string]string{}}
+	if !a.IsTechLaptopCopy() {
+		result.Failed["*"] = errNotTechLaptop.Error()
+		return result
+	}
 
 	cfg, err := a.cloudSyncConfig()
 	if err != nil {

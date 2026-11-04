@@ -50,6 +50,10 @@ export function DefaultDriverFor(arg1) {
   return window['go']['main']['App']['DefaultDriverFor'](arg1);
 }
 
+export function DeleteDriverPackages(arg1) {
+  return window['go']['main']['App']['DeleteDriverPackages'](arg1);
+}
+
 export function Deploy(arg1, arg2, arg3) {
   return window['go']['main']['App']['Deploy'](arg1, arg2, arg3);
 }
@@ -124,6 +128,14 @@ export function ImportCsv() {
 
 export function IsRunningFromRemovableDrive() {
   return window['go']['main']['App']['IsRunningFromRemovableDrive']();
+}
+
+export function IsTechLaptopCopy() {
+  return window['go']['main']['App']['IsTechLaptopCopy']();
+}
+
+export function ListDriverCleanupPackages() {
+  return window['go']['main']['App']['ListDriverCleanupPackages']();
 }
 
 export function ListPreinstallFolders(arg1) {

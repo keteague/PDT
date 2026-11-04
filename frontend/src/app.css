@@ -1214,6 +1214,11 @@ table.grid td.checkbox-cell {
     font-size: 13px;
 }
 
+/* Driver Cleanup reuses Rescan's tree box; a little wider for its size column. */
+.cleanup-modal {
+    width: 480px;
+}
+
 .rescan-actions {
     display: flex;
     align-items: center;

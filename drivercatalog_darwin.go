@@ -60,6 +60,9 @@ func (a *App) ListRescanTargets() []driver.RescanManufacturer {
 // completion signal needed.
 func (a *App) RescanDrivers(selected []string, removeInf, removeCatalog bool) CatalogStatus {
 	<-a.ready
+	if !a.IsTechLaptopCopy() {
+		return CatalogStatus{OK: false, Error: errNotTechLaptop.Error()}
+	}
 	if removeInf {
 		driver.RemoveInfCacheForSelection(driversRoot(), selected)
 	}

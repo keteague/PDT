@@ -280,7 +280,7 @@ document.querySelector('#app').innerHTML = `
         <button type="button" class="dropdown-item" data-cupswebui-action="install-rosetta" title="softwareupdate --install-rosetta --agree-to-license">Install Rosetta</button>
       </div>
     </div>
-    <button id="btnFlashDrive" class="icon-btn-inline" title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">
+    <button id="btnFlashDrive" class="icon-btn-inline tech-laptop-only" hidden title="Write a portable copy of PDT (this executable, Drivers, and Configs) to one or more USB flash drives.">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
         <line x1="12" y1="12" x2="6" y2="7"/>
         <circle cx="6" cy="6" r="1.6"/>
@@ -292,8 +292,17 @@ document.querySelector('#app').innerHTML = `
         <polyline points="9.5,16 12,19 14.5,16"/>
       </svg>
     </button>
-    <button id="btnRefreshDrivers" class="icon-btn-inline" title="Rescan the Drivers folder for newly added or extracted driver packages, without restarting PDT.">&#128260;</button>
-    <button id="btnSyncFlashDrive" class="icon-btn-inline" title="Sync this computer's Drivers folder onto a flash drive that already has a portable PDT copy on it, then extract anything newly-copied.">
+    <button id="btnRefreshDrivers" class="icon-btn-inline tech-laptop-only" hidden title="Rescan the Drivers folder for newly added or extracted driver packages, without restarting PDT.">&#128260;</button>
+    <button id="btnDriverCleanup" class="icon-btn-inline tech-laptop-only" hidden title="Driver Cleanup - delete driver packages (including archived ones) and their cached data from this computer.">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
+        <polyline points="4,6 20,6"/>
+        <path d="M9 6V4h6v2"/>
+        <path d="M6 6l1 14h10l1-14"/>
+        <line x1="10" y1="10" x2="10" y2="17"/>
+        <line x1="14" y1="10" x2="14" y2="17"/>
+      </svg>
+    </button>
+    <button id="btnSyncFlashDrive" class="icon-btn-inline tech-laptop-only" hidden title="Sync this computer's Drivers folder onto a flash drive that already has a portable PDT copy on it, then extract anything newly-copied.">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
         <line x1="3" y1="8" x2="19" y2="8"/>
         <polyline points="15,4 19,8 15,12"/>
@@ -301,7 +310,7 @@ document.querySelector('#app').innerHTML = `
         <polyline points="9,12 5,16 9,20"/>
       </svg>
     </button>
-    <button id="btnCloudSync" class="icon-btn-inline" title="Sync this computer's Drivers folder with the team's shared cloud repository - upload new local files, download new files other technicians have added.">
+    <button id="btnCloudSync" class="icon-btn-inline tech-laptop-only" hidden title="Sync this computer's Drivers folder with the team's shared cloud repository - upload new local files, download new files other technicians have added.">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;">
         <line x1="8" y1="3" x2="8" y2="19"/>
         <polyline points="4,15 8,19 12,15"/>
@@ -626,6 +635,22 @@ document.querySelector('#app').innerHTML = `
     </div>
   </div>
 
+  <div class="modal-backdrop" id="cleanupBackdrop" hidden>
+    <div class="modal rescan-modal cleanup-modal">
+      <h3>Driver Cleanup</h3>
+      <p class="modal-hint">Pick driver packages to delete from this computer. Everything PDT has cached for them is deleted with them.</p>
+      <div id="cleanupTree" class="rescan-tree"></div>
+      <div class="modal-actions rescan-actions">
+        <button id="btnCleanupSelectArchived" title="Select every package in an Archive folder.">Select Archived</button>
+        <span class="modal-hint" id="cleanupSummary"></span>
+      </div>
+      <div class="modal-actions">
+        <button id="btnCleanupClose">Close</button>
+        <button class="primary" id="btnCleanupConfirm" disabled>Delete</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop" id="openPrintingProgressBackdrop" hidden>
     <div class="modal cloud-sync-progress-modal">
       <h3>Syncing OpenPrinting PPDs...</h3>
@@ -689,7 +714,7 @@ document.querySelector('#app').innerHTML = `
   </div>
 
   <div class="no-drivers-banner" id="noDriversBanner" hidden>
-    No printer drivers are installed yet. Pick a Manufacturer below, then click <strong>Download Center</strong> to open its download page - once a driver package is downloaded into the Drivers folder, press the Refresh button (&#128260;) to make it available.
+    No printer drivers are installed yet. Pick a Manufacturer below, then click <strong>Download Center</strong> to open its download page - once a driver package is downloaded into the Drivers folder, press the Refresh button (&#128260;) - or, in a portable copy, restart PDT - to make it available.
   </div>
 
   <div class="defaults-panel">
@@ -957,9 +982,9 @@ function setSalesChainId(value, {rejectReservedAsEmpty = false} = {}) {
 function applySalesChainGate() {
     const locked = !state.salesChainId;
     document.body.classList.toggle('sales-chain-locked', locked);
-    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnSyncFlashDrive', 'btnCloudSync', 'btnOpenDriversFolder', 'btnSpooler', 'btnCupsWebUI', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
+    const exemptIds = new Set(['btnOpenConfig', 'salesChainId', 'btnSettings', 'btnFlashDrive', 'btnRefreshDrivers', 'btnDriverCleanup', 'btnSyncFlashDrive', 'btnCloudSync', 'btnOpenDriversFolder', 'btnSpooler', 'btnCupsWebUI', 'btnDeploy', 'btnStop', 'defMfg', 'btnCheckUpdates']);
     for (const c of document.querySelectorAll('#app button, #app input, #app select')) {
-        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#cupsWebUIDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop') || c.closest('#openPrintingProgressBackdrop') || c.closest('#rescanBackdrop')) continue;
+        if (exemptIds.has(c.id) || c.closest('#settingsBackdrop') || c.closest('#flashDriveBackdrop') || c.closest('#spoolerDropdown') || c.closest('#cupsWebUIDropdown') || c.closest('#confirmBackdrop') || c.closest('#cloudSyncBackdrop') || c.closest('#cloudSyncProgressBackdrop') || c.closest('#openPrintingProgressBackdrop') || c.closest('#rescanBackdrop') || c.closest('#cleanupBackdrop')) continue;
         c.disabled = locked;
     }
     updatePortPrefixTextEnabled();
@@ -1135,20 +1160,16 @@ async function init() {
         refreshCupsWebUIButtonState(); // not awaited - same reasoning, macOS's own counterpart
     }
 
-    // Write to Flash Drive can't overwrite the exact exe it's currently
-    // running from (Windows refuses outright - confirmed live; macOS allows
-    // it technically, but stamping a running copy out onto more drives still
-    // makes no sense as a workflow either way) - disabled outright when
-    // running portably from removable media itself, rather than failing at
-    // click time. Set once, directly, rather than through
-    // applySalesChainGate()'s own exemption list - that sweep skips exempt
-    // elements entirely (see its own doc comment), so this sticks regardless
-    // of Save ID state.
-    if (await App.IsRunningFromRemovableDrive()) {
-        const btn = el('btnFlashDrive');
-        btn.disabled = true;
-        btn.title = 'Write to Flash Drive is unavailable when running PDT from a flash drive itself - use an installed copy instead.';
-    }
+    // Toolbar tools for the technician's own installed PDT only - Write to
+    // Flash Drive, Sync to Flash Drive, Cloud Sync, Rescan Drivers, Driver
+    // Cleanup - are hidden, not just disabled, in a
+    // portable copy or one running from a flash drive (Ken, 2026-11-04; see
+    // App.IsTechLaptopCopy). They start hidden in the markup, so they never
+    // flash into view on a client PC before this runs. Applied directly
+    // rather than through applySalesChainGate()'s exemption list, so it
+    // sticks regardless of Save ID state.
+    const techLaptop = await App.IsTechLaptopCopy();
+    for (const btn of document.querySelectorAll('.tech-laptop-only')) btn.hidden = !techLaptop;
 
     runAutoUpdateChecks(); // not awaited - a slow or offline network must never delay startup
 
@@ -4184,6 +4205,159 @@ async function confirmRescan() {
     }
 }
 
+// ---- Driver Cleanup (toolbar trash can - Ken, 2026-11-04) ----
+//
+// Every driver archive in the Drivers folder, Archive folders included
+// (App.ListDriverCleanupPackages), as a manufacturer > folder > file tree
+// built from each package's treePath, with the same tri-state folder
+// checkboxes as Rescan. Selection is keyed by relPath - the exact file,
+// relative to the Drivers folder - which is what App.DeleteDriverPackages
+// takes. Deleting also removes the package's cached data, and asks first.
+let cleanupPackages = [];
+let cleanupSelection = new Map(); // relPath -> checked
+let cleanupCollapsed = new Set();
+let cleanupTreeRoot = null;
+
+function buildCleanupTree(packages) {
+    const root = { name: '', path: '', children: new Map(), leaf: false };
+    for (const pkg of packages) {
+        const parts = pkg.treePath.split('/');
+        let node = root;
+        let path = '';
+        for (let i = 0; i < parts.length - 1; i++) {
+            path = path ? `${path}/${parts[i]}` : parts[i];
+            if (!node.children.has(parts[i])) {
+                node.children.set(parts[i], { name: parts[i], path, children: new Map(), leaf: false });
+            }
+            node = node.children.get(parts[i]);
+        }
+        node.children.set(parts[parts.length - 1], { name: pkg.name, path: pkg.treePath, relPath: pkg.relPath, size: pkg.size, children: new Map(), leaf: true });
+    }
+    return root;
+}
+
+function findCleanupNode(path) {
+    let node = cleanupTreeRoot;
+    for (const part of path.split('/')) {
+        node = node?.children.get(part);
+        if (!node) return null;
+    }
+    return node;
+}
+
+function collectCleanupRelPaths(node, out) {
+    if (node.leaf) {
+        out.push(node.relPath);
+        return;
+    }
+    for (const child of node.children.values()) collectCleanupRelPaths(child, out);
+}
+
+function cleanupFolderCheckState(node) {
+    const paths = [];
+    collectCleanupRelPaths(node, paths);
+    if (paths.length === 0) return null;
+    const checked = paths.filter(p => cleanupSelection.get(p)).length;
+    if (checked === 0) return 'unchecked';
+    if (checked === paths.length) return 'checked';
+    return 'indeterminate';
+}
+
+function renderCleanupEntry(node) {
+    if (node.leaf) {
+        return `
+            <div class="cst-row" title="${attr(node.relPath)}">
+              <span class="cst-toggle"></span>
+              <input type="checkbox" class="clt-leaf-check" data-relpath="${attr(node.relPath)}" ${cleanupSelection.get(node.relPath) ? 'checked' : ''}>
+              <span class="cst-name">${attr(node.name)}</span>
+              <span class="cst-size">${formatByteSize(node.size)}</span>
+            </div>
+        `;
+    }
+    const state = cleanupFolderCheckState(node);
+    const checkboxHtml = state === null
+        ? '<span class="cst-checkbox-spacer"></span>'
+        : `<input type="checkbox" class="clt-folder-check" data-folder-path="${attr(node.path)}" ${state === 'checked' ? 'checked' : ''} data-indeterminate="${state === 'indeterminate' ? '1' : ''}">`;
+    const collapsed = cleanupCollapsed.has(node.path);
+    // Folders (Archive, Windows <version>) before files, each alphabetical.
+    const entries = Array.from(node.children.values()).sort((a, b) =>
+        a.leaf !== b.leaf ? (a.leaf ? 1 : -1) : a.name.localeCompare(b.name));
+    return `
+        <div class="cst-node">
+          <div class="cst-row">
+            <button type="button" class="cst-toggle" data-toggle-path="${attr(node.path)}">${collapsed ? '▸' : '▾'}</button>
+            ${checkboxHtml}
+            <span class="cst-name">${attr(node.name)}</span>
+          </div>
+          <div class="cst-children" ${collapsed ? 'hidden' : ''}>
+            ${entries.map(renderCleanupEntry).join('')}
+          </div>
+        </div>
+    `;
+}
+
+function selectedCleanupPackages() {
+    return cleanupPackages.filter(p => cleanupSelection.get(p.relPath));
+}
+
+function renderCleanupTree() {
+    cleanupTreeRoot = buildCleanupTree(cleanupPackages);
+    const container = el('cleanupTree');
+    if (cleanupPackages.length === 0) {
+        container.innerHTML = '<p class="modal-hint">No driver packages found in the Drivers folder.</p>';
+    } else {
+        const entries = Array.from(cleanupTreeRoot.children.values()).sort((a, b) => a.name.localeCompare(b.name));
+        container.innerHTML = entries.map(renderCleanupEntry).join('');
+    }
+    for (const cb of container.querySelectorAll('.clt-folder-check')) {
+        cb.indeterminate = cb.dataset.indeterminate === '1';
+    }
+    const selected = selectedCleanupPackages();
+    const bytes = selected.reduce((sum, p) => sum + p.size, 0);
+    el('cleanupSummary').textContent = selected.length > 0
+        ? `${selected.length} selected (${formatByteSize(bytes)})`
+        : '';
+    el('btnCleanupConfirm').disabled = selected.length === 0;
+}
+
+async function openCleanupModal() {
+    el('cleanupBackdrop').hidden = false;
+    el('cleanupTree').innerHTML = '<p class="modal-hint">Reading the Drivers folder…</p>';
+    el('cleanupSummary').textContent = '';
+    el('btnCleanupConfirm').disabled = true;
+    cleanupSelection = new Map();
+    cleanupPackages = (await App.ListDriverCleanupPackages()) || [];
+    renderCleanupTree();
+}
+
+function closeCleanupModal() {
+    el('cleanupBackdrop').hidden = true;
+}
+
+async function confirmCleanup() {
+    const selected = selectedCleanupPackages();
+    if (selected.length === 0) return;
+    const bytes = selected.reduce((sum, p) => sum + p.size, 0);
+    const ok = await showConfirm({
+        title: 'Delete driver packages',
+        message: `Delete ${selected.length} driver package${selected.length === 1 ? '' : 's'} (${formatByteSize(bytes)}) from this computer, ` +
+            `along with everything PDT has cached for ${selected.length === 1 ? 'it' : 'them'}? This can't be undone.`,
+        okLabel: 'Delete',
+    });
+    if (!ok) return;
+    const btn = el('btnCleanupConfirm');
+    btn.disabled = true;
+    try {
+        const result = await App.DeleteDriverPackages(selected.map(p => p.relPath));
+        for (const p of result.deleted || []) logStatus('OK', `Deleted driver package ${p} and its cached data.`);
+        for (const p of Object.keys(result.failed || {})) logStatus('ERR', `Could not delete ${p}: ${result.failed[p]}`);
+        closeCleanupModal();
+        if ((result.deleted || []).length > 0) await applyCatalogStatus(result.catalog, 'refreshed');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
 // formatRate renders a bytes-per-second number as e.g. "4.2 MB/s" (reusing
 // formatByteSize's own unit logic) - "" for a not-yet-known/zero rate,
 // rather than a misleading "0 B/s" flashing at the very start of a batch
@@ -4802,6 +4976,40 @@ function wireSettingsModal() {
     // of) since issue #3 made catalog.<mfg>.json a cross-platform concern.
     el('btnRefreshDrivers').addEventListener('click', () => {
         openRescanModal();
+    });
+    el('btnDriverCleanup').addEventListener('click', () => openCleanupModal());
+    el('btnCleanupClose').addEventListener('click', closeCleanupModal);
+    el('btnCleanupConfirm').addEventListener('click', confirmCleanup);
+    el('btnCleanupSelectArchived').addEventListener('click', () => {
+        for (const p of cleanupPackages) {
+            if (p.archived) cleanupSelection.set(p.relPath, true);
+        }
+        renderCleanupTree();
+    });
+    // Delegated, like Rescan's - the tree's innerHTML is replaced on every
+    // checkbox or toggle change.
+    el('cleanupTree').addEventListener('change', (e) => {
+        if (e.target.classList.contains('clt-leaf-check')) {
+            cleanupSelection.set(e.target.dataset.relpath, e.target.checked);
+            renderCleanupTree();
+        } else if (e.target.classList.contains('clt-folder-check')) {
+            const node = findCleanupNode(e.target.dataset.folderPath);
+            const paths = [];
+            if (node) collectCleanupRelPaths(node, paths);
+            for (const p of paths) cleanupSelection.set(p, e.target.checked);
+            renderCleanupTree();
+        }
+    });
+    el('cleanupTree').addEventListener('click', (e) => {
+        const btn = e.target.closest('.cst-toggle[data-toggle-path]');
+        if (!btn) return;
+        const path = btn.dataset.togglePath;
+        if (cleanupCollapsed.has(path)) {
+            cleanupCollapsed.delete(path);
+        } else {
+            cleanupCollapsed.add(path);
+        }
+        renderCleanupTree();
     });
 
     // Opens the current Drivers Base Path in File Explorer - the same

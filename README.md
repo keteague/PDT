@@ -1329,6 +1329,26 @@ technician pasting a log into a support ticket actually wants. Copy tries the as
 first, falling back to a hidden-textarea `execCommand('copy')` for a webview context where that API
 might be restricted.
 
+### Driver Cleanup (toolbar trash can, `drivercleanup.go`, `internal/driver/cleanup.go`)
+
+Lists every driver archive in the Drivers folder - including those moved into a manufacturer's
+`Archive` folder, which Rescan leaves out - as a manufacturer > folder > file tree with sizes and the
+same tri-state folder checkboxes as Rescan, plus **Select Archived**. Deleting (after a confirmation
+naming the count and total size) removes each archive along with everything PDT cached for it: its
+`.pdt-infcache` entry and its extracted sibling folder. Paths are relative to the Drivers folder, not the
+manufacturer folder, so a manufacturer present under two `Windows\<version>` folders is never ambiguous
+(the tree labels each version); anything that isn't a recognized driver archive inside a manufacturer
+folder is refused. Each deleted package is also unchecked in Cloud Sync, so a package still in the cloud
+repository isn't quietly downloaded again on the next sync.
+
+### Tools only on the tech laptop (`IsTechLaptopCopy`)
+
+Write to Flash Drive, Sync to Flash Drive, Cloud Sync, Rescan Drivers and Driver Cleanup are tools for
+the technician's own installed PDT. In a portable copy - running from a flash drive, or with a `Drivers`
+folder beside its exe anywhere - their toolbar buttons are hidden (class `tech-laptop-only`, hidden in
+the markup until startup confirms this is the laptop copy), and the Go side refuses them as well
+(`errNotTechLaptop`), so hiding the button is never the only thing stopping them.
+
 ### Settings (gear icon, top-right)
 
 A modal with four tabs: **General** (Save File Base Path, plus a drag-and-drop **Manufacturer sort

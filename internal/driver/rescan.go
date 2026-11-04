@@ -179,17 +179,7 @@ func listRescanPackages(mfgPath string) []RescanPackage {
 			return nil
 		}
 		name := d.Name()
-		if isAppleDoubleStub(name) {
-			return nil
-		}
-		isArchive := false
-		switch strings.ToLower(filepath.Ext(name)) {
-		case ".zip", ".msi":
-			isArchive = true
-		case ".exe":
-			isArchive = kyoceraExeNameRe.MatchString(name) || isSelfExtractingArchive(path)
-		}
-		if !isArchive {
+		if !isDriverArchive(path, name) {
 			return nil
 		}
 		rel, relErr := filepath.Rel(mfgPath, path)
@@ -200,6 +190,23 @@ func listRescanPackages(mfgPath string) []RescanPackage {
 		return nil
 	})
 	return out
+}
+
+// isDriverArchive reports whether the file at path (named name) is a driver
+// package PDT recognizes - a .zip, an .msi, Kyocera's two-stage .exe, or a
+// self-extracting .exe - and not a macOS AppleDouble stub. The single rule
+// the Rescan and Driver Cleanup lists share.
+func isDriverArchive(path, name string) bool {
+	if isAppleDoubleStub(name) {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".zip", ".msi":
+		return true
+	case ".exe":
+		return kyoceraExeNameRe.MatchString(name) || isSelfExtractingArchive(path)
+	}
+	return false
 }
 
 // RemoveInfCacheForSelection best-effort removes the .pdt-infcache entry for

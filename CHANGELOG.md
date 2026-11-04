@@ -4,6 +4,27 @@ All notable changes to this project are documented here. This is a from-scratch 
 `Create-Printers.ps1`; entries reference that original tool's own history where a decision or
 limitation carries forward from it.
 
+## 2026-11-04 (v0.9.70) - no "install this device software?" prompt; Driver Cleanup
+
+### Added
+- **Drivers install without Windows asking to confirm the publisher.** Since January 15, 2026 Microsoft
+  no longer countersigns Type 3 print drivers, so the first time a manufacturer's driver is installed on
+  a computer, Windows stops and asks "Would you like to install this device software?". Before
+  installing a driver, PDT now reads the manufacturer's signing certificate from the driver package,
+  confirms the package's signature is valid, and - only if that exact certificate isn't already
+  there - adds it to the computer's Trusted Publishers, just as the dialog's "Always trust software
+  from ..." checkbox would. The deploy log says when it does. If anything about this fails, the install
+  goes ahead and Windows asks, as before.
+- **Driver Cleanup** (new trash-can toolbar button): lists every driver package in the Drivers folder,
+  including those in Archive folders, with sizes. Check the ones you want gone - or use Select
+  Archived - and Delete removes them along with everything PDT has cached for them, after a
+  confirmation. Deleted packages are also unchecked in Cloud Sync, so they aren't downloaded again.
+
+### Changed
+- **Laptop-only tools are hidden in a portable copy.** Write to Flash Drive, Sync to Flash Drive, Cloud
+  Sync, Rescan Drivers and Driver Cleanup now only appear in the PDT installed on the technician's
+  laptop. Before, only Write to Flash Drive was greyed out on a flash drive.
+
 ## 2026-11-03 (v0.9.69) - Sync to Flash only updates PDT on the drive when it's out of date
 
 ### Changed

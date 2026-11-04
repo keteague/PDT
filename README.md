@@ -1217,6 +1217,36 @@ Every log line is timestamped and level-tagged (`internal/printer/log.go`'s `Log
 `[INFO]`/`[OK]`/`[WARN]`/`[ERR]`) so the UI can show a row's progress directly with no further
 formatting.
 
+### Trusting the driver's publisher (no "install this device software?" prompt)
+
+Since 2026-01-15 Microsoft no longer countersigns Type 3 print drivers, so a package is signed by its
+manufacturer alone. The first time a publisher's driver is installed on a computer, Windows stops and
+asks "Would you like to install this device software?" - its "Always trust software from ..." checkbox
+adds the publisher's certificate to the machine's **Trusted Publishers** store, after which that
+publisher's drivers install silently. An unattended deploy can't click that, so PDT does the same thing
+itself, right before installing (`EnsurePublishersTrusted`, `internal/printer/windows/publishertrust_windows.go`):
+
+1. Find the package's signed catalogs - the `CatalogFile=` / `CatalogFile.NTamd64=` entries in the
+   `.inf`'s `[Version]` section (`drvsign.CatalogFiles`, ANSI or UTF-16 `.inf`).
+2. Read the signer's certificate out of each `.cat` (`drvsign.SignerCertificate`, plain Go ASN.1 - the
+   certificate the PKCS#7 SignerInfo names, by issuer+serial or subject key ID).
+3. Skip Microsoft-signed (older WHQL) packages - every machine already trusts those.
+4. Confirm the catalog's signature with `WinVerifyTrust` - intact and chaining to a root the machine
+   already trusts (no revocation lookup, so an offline client site doesn't stall). A catalog that fails
+   is never trusted.
+5. Add the certificate to `LocalMachine\TrustedPublisher` if a certificate with the same SHA-1
+   thumbprint isn't already there, and log it.
+
+It's read from the package actually being installed, which the deploy has just fully extracted, so a new
+driver version with a new certificate needs no cache to keep in step, and the whole step costs
+milliseconds next to that extraction. Certificates already confirmed are remembered for the rest of the
+run, so a batch of printers on one driver checks the store once. Never fatal: if anything in it fails,
+the install still goes ahead and Windows just asks, as it did before. Confirmed against Kyocera's
+`KXDriver_8.7.0917` (`kyomita.cat`, signed by KYOCERA Document Solutions Inc. via DigiCert): added to an
+empty store, then found there on the next run; a catalog with one corrupted byte is refused.
+`publishertrust_windows_test.go` reruns that against a throwaway current-user store when `PDT_TEST_INF`
+points at a real signed `.inf`.
+
 ### Driver version handling
 
 - **Plain name** selection (the common case): silently upgrades an older installed driver to the

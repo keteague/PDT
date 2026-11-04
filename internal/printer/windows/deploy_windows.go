@@ -457,6 +457,18 @@ func (d *Deployer) ensureDriverCurrent(ctx context.Context, resolved *driver.Res
 		}
 		infPath = filepath.Join(extractedDir, resolved.InfRelPath)
 	}
+	// Trust the package's publisher first, so Windows installs it without
+	// asking (see EnsurePublishersTrusted). Never fatal: without it the
+	// install still proceeds - Windows just shows its prompt.
+	publishers, trustErr := EnsurePublishersTrusted(infPath)
+	for _, p := range publishers {
+		if p.Added {
+			log.OK("Added %s to Trusted Publishers so its driver installs without a prompt.", p.Name)
+		}
+	}
+	if trustErr != nil {
+		log.Warn("Couldn't pre-trust the driver's publisher - Windows may ask to confirm the install: %v", trustErr)
+	}
 	if err := EnsureDriverInstalled(infPath, resolved.Name); err != nil {
 		return fmt.Errorf("installing driver %q: %w", resolved.Name, err)
 	}
